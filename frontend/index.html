@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Watchtower</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <h1>Watchtower</h1>
+          <p>Repository maintenance dashboard</p>
+        </div>
+        <button id="refresh" title="Refresh dashboard">Refresh</button>
+      </section>
+      <section class="token-row">
+        <input id="token" type="password" placeholder="API token" />
+      </section>
+      <section class="metrics" id="metrics"></section>
+      <section class="panel">
+        <h2>Open Findings</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Severity</th>
+              <th>Status</th>
+              <th>Risk</th>
+              <th>Finding</th>
+            </tr>
+          </thead>
+          <tbody id="findings"></tbody>
+        </table>
+      </section>
+    </main>
+    <script src="./main.js"></script>
+  </body>
+</html>
+

@@ -1,0 +1,147 @@
+:root {
+  color-scheme: light;
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --text: #17202a;
+  --muted: #5d6b7a;
+  --line: #dbe1e8;
+  --accent: #0f766e;
+  --danger: #b42318;
+  --warn: #b54708;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 28px;
+  letter-spacing: 0;
+}
+
+h2 {
+  font-size: 18px;
+  margin-bottom: 12px;
+}
+
+p {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+button,
+input {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 6px;
+  min-height: 38px;
+}
+
+button {
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+.token-row {
+  margin-bottom: 18px;
+}
+
+.token-row input {
+  width: min(360px, 100%);
+  padding: 0 12px;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.metric {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.metric strong {
+  display: block;
+  font-size: 26px;
+  line-height: 1.1;
+}
+
+.metric span {
+  display: block;
+  color: var(--muted);
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.metric.danger strong {
+  color: var(--danger);
+}
+
+.metric.warn strong {
+  color: var(--warn);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+th,
+td {
+  text-align: left;
+  border-top: 1px solid var(--line);
+  padding: 10px 8px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
