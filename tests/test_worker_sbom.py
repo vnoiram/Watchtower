@@ -650,3 +650,102 @@ def test_run_issue_create_job_processes_close_operation(monkeypatch, tmp_path: P
         runner.run_issue_create_job(db, job)
 
         assert calls == [(db, [finding.id], runner.get_settings())]
+
+
+def test_run_repository_sync_job_syncs_owner_payload(monkeypatch) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        job = Job(job_type=JobType.repository_sync, payload={"owner": "acme"})
+        db.add(job)
+        db.flush()
+        calls = []
+
+        def fake_sync(db_arg: Session, owner: str, settings: Settings) -> list[Repository]:
+            calls.append((db_arg, owner, settings))
+            return []
+
+        monkeypatch.setattr(runner, "sync_github_repositories", fake_sync)
+        monkeypatch.setattr(runner, "get_settings", lambda: Settings(github_token="token"))
+
+        runner.run_repository_sync_job(db, job)
+
+        assert calls == [(db, "acme", runner.get_settings())]
+
+
+def test_run_repository_sync_job_extracts_owner_from_webhook_body(monkeypatch) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        job = Job(
+            job_type=JobType.repository_sync,
+            payload={"body": json.dumps({"repository": {"owner": {"login": "repo-owner"}}})},
+        )
+        db.add(job)
+        db.flush()
+        calls = []
+
+        def fake_sync(db_arg: Session, owner: str, settings: Settings) -> list[Repository]:
+            calls.append((db_arg, owner, settings))
+            return []
+
+        monkeypatch.setattr(runner, "sync_github_repositories", fake_sync)
+        monkeypatch.setattr(runner, "get_settings", lambda: Settings(github_token="token"))
+
+        runner.run_repository_sync_job(db, job)
+
+        assert calls == [(db, "repo-owner", runner.get_settings())]
+
+
+def test_run_repository_sync_job_extracts_owner_from_webhook_organization(monkeypatch) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        job = Job(
+            job_type=JobType.repository_sync,
+            payload={"body": json.dumps({"organization": {"login": "org-owner"}})},
+        )
+        db.add(job)
+        db.flush()
+        calls = []
+
+        def fake_sync(db_arg: Session, owner: str, settings: Settings) -> list[Repository]:
+            calls.append((db_arg, owner, settings))
+            return []
+
+        monkeypatch.setattr(runner, "sync_github_repositories", fake_sync)
+        monkeypatch.setattr(runner, "get_settings", lambda: Settings(github_token="token"))
+
+        runner.run_repository_sync_job(db, job)
+
+        assert calls == [(db, "org-owner", runner.get_settings())]
+
+
+def test_run_repository_sync_job_requires_owner() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        job = Job(job_type=JobType.repository_sync, payload={"body": json.dumps({"zen": "ok"})})
+        db.add(job)
+        db.flush()
+
+        try:
+            runner.run_repository_sync_job(db, job)
+        except RuntimeError as exc:
+            assert "requires owner" in str(exc)
+        else:
+            raise AssertionError("expected RuntimeError")
+
+
+def test_handle_job_dispatches_repository_sync(monkeypatch) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        job = Job(job_type=JobType.repository_sync, payload={"owner": "acme"})
+        db.add(job)
+        db.flush()
+        calls = []
+
+        def fake_run_repository_sync_job(db_arg: Session, job_arg: Job) -> None:
+            calls.append((db_arg, job_arg))
+
+        monkeypatch.setattr(runner, "run_repository_sync_job", fake_run_repository_sync_job)
+
+        runner.handle_job(db, job)
+
+        assert calls == [(db, job)]

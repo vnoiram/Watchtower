@@ -38,6 +38,7 @@ from api.app.services.remediation import (
     process_github_issue_closures,
     process_github_issue_actions,
 )
+from api.app.services.repositories import sync_github_repositories
 from api.app.services.scanner import normalize_osv_results, normalize_trivy_results
 from api.app.services.sbom import upsert_source_sbom
 from api.app.services.vulnerabilities import upsert_findings
@@ -333,6 +334,41 @@ def run_issue_create_job(db: Session, job: Job) -> None:
         )
 
 
+def repository_sync_owner_from_payload(payload: dict) -> str | None:
+    owner = payload.get("owner")
+    if owner:
+        return str(owner)
+
+    body = payload.get("body")
+    if not body:
+        return None
+    try:
+        webhook_payload = json.loads(body) if isinstance(body, str) else body
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"repository sync webhook body is invalid JSON: {exc}") from exc
+    if not isinstance(webhook_payload, dict):
+        return None
+
+    repository = webhook_payload.get("repository")
+    if isinstance(repository, dict):
+        repository_owner = repository.get("owner")
+        if isinstance(repository_owner, dict) and repository_owner.get("login"):
+            return str(repository_owner["login"])
+
+    organization = webhook_payload.get("organization")
+    if isinstance(organization, dict) and organization.get("login"):
+        return str(organization["login"])
+    return None
+
+
+def run_repository_sync_job(db: Session, job: Job) -> None:
+    owner = repository_sync_owner_from_payload(job.payload or {})
+    if not owner:
+        raise RuntimeError("repository sync job requires owner")
+    repositories = sync_github_repositories(db, owner, get_settings())
+    logger.info("repository sync completed owner=%s synced_count=%s", owner, len(repositories))
+
+
 def handle_job(db: Session, job: Job) -> None:
     if job.job_type == JobType.scan:
         run_scan_job(db, job)
@@ -341,7 +377,7 @@ def handle_job(db: Session, job: Job) -> None:
     elif job.job_type == JobType.issue_create:
         run_issue_create_job(db, job)
     elif job.job_type == JobType.repository_sync:
-        logger.info("repository sync placeholder payload=%s", json.dumps(job.payload))
+        run_repository_sync_job(db, job)
     else:
         logger.info("job type placeholder job_type=%s payload=%s", job.job_type, json.dumps(job.payload))
 
