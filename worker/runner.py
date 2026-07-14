@@ -287,12 +287,15 @@ def scan_application(
 
 
 def run_scan_job(db: Session, job: Job) -> None:
-    repo_id = job.repository_id or job.payload.get("repository_id")
+    payload = job.payload or {}
+    repo_id = job.repository_id or payload.get("repository_id")
     if not repo_id:
         raise RuntimeError("scan job requires repository_id")
+    repo_id = UUID(str(repo_id))
     repo = db.get(Repository, repo_id)
     if not repo:
         raise RuntimeError(f"repository not found: {repo_id}")
+    trigger_type = TriggerType(payload.get("trigger_type") or TriggerType.manual.value)
     with tempfile.TemporaryDirectory(prefix="watchtower-") as tmp:
         temp_root = Path(tmp)
         root = clone_repository(repo, temp_root)
@@ -300,7 +303,7 @@ def run_scan_job(db: Session, job: Job) -> None:
         store = ArtifactStore(get_settings())
         successes = 0
         for app in apps:
-            if scan_application(db, repo, app, root, store, temp_root):
+            if scan_application(db, repo, app, root, store, temp_root, trigger_type=trigger_type):
                 successes += 1
         if successes == 0:
             raise RuntimeError("all application scans failed")
