@@ -19,9 +19,11 @@ from api.app.database import SessionLocal
 from api.app.models import (
     Application,
     ApplicationType,
+    Finding,
     Job,
     JobType,
     Notification,
+    RemediationAction,
     Repository,
     Scan,
     ScanStatus,
@@ -150,11 +152,13 @@ def scan_application(
     root: Path,
     store: ArtifactStore,
     workdir: Path,
+    *,
+    trigger_type: TriggerType = TriggerType.manual,
 ) -> bool:
     started = now_utc()
     scan = Scan(
         application_id=app.id,
-        trigger_type=TriggerType.manual,
+        trigger_type=trigger_type,
         status=ScanStatus.running,
         tool="syft",
         started_at=started,
@@ -302,6 +306,136 @@ def run_scan_job(db: Session, job: Job) -> None:
             raise RuntimeError("all application scans failed")
 
 
+def latest_scan_for_application(db: Session, app: Application) -> Scan | None:
+    return db.scalar(
+        select(Scan)
+        .where(Scan.application_id == app.id)
+        .order_by(Scan.created_at.desc(), Scan.id.desc())
+        .limit(1)
+    )
+
+
+def _uuid_list_from_payload(payload: dict, *keys: str) -> list[UUID]:
+    values: list[UUID] = []
+    for key in keys:
+        raw_value = payload.get(key)
+        if not raw_value:
+            continue
+        raw_values = raw_value if isinstance(raw_value, list) else [raw_value]
+        values.extend(UUID(str(item)) for item in raw_values)
+    return values
+
+
+def resolve_remediation_validation_targets(
+    db: Session,
+    job: Job,
+) -> tuple[list[Application], list[RemediationAction]]:
+    payload = job.payload or {}
+    action_ids = _uuid_list_from_payload(payload, "remediation_action_ids", "action_ids", "remediation_action_id")
+    finding_ids = _uuid_list_from_payload(payload, "finding_ids", "finding_id")
+    application_ids = _uuid_list_from_payload(payload, "application_ids", "application_id")
+    if job.application_id:
+        application_ids.append(UUID(str(job.application_id)))
+
+    actions: list[RemediationAction] = []
+    if action_ids:
+        actions = list(db.scalars(select(RemediationAction).where(RemediationAction.id.in_(action_ids))))
+        if len(actions) != len(set(action_ids)):
+            found_ids = {action.id for action in actions}
+            missing_ids = [str(action_id) for action_id in action_ids if action_id not in found_ids]
+            raise RuntimeError(f"remediation action not found: {', '.join(missing_ids)}")
+        finding_ids.extend(action.finding_id for action in actions)
+
+    applications_by_id: dict[UUID, Application] = {}
+    if application_ids:
+        applications = list(db.scalars(select(Application).where(Application.id.in_(application_ids))))
+        if len(applications) != len(set(application_ids)):
+            found_ids = {application.id for application in applications}
+            missing_ids = [str(application_id) for application_id in application_ids if application_id not in found_ids]
+            raise RuntimeError(f"application not found: {', '.join(missing_ids)}")
+        applications_by_id.update({application.id: application for application in applications})
+
+    if finding_ids:
+        findings = list(db.scalars(select(Finding).where(Finding.id.in_(finding_ids))))
+        if len(findings) != len(set(finding_ids)):
+            found_ids = {finding.id for finding in findings}
+            missing_ids = [str(finding_id) for finding_id in finding_ids if finding_id not in found_ids]
+            raise RuntimeError(f"finding not found: {', '.join(missing_ids)}")
+        for finding in findings:
+            application = db.get(Application, finding.application_id)
+            if application:
+                applications_by_id[application.id] = application
+
+    if not applications_by_id:
+        raise RuntimeError("remediation validation job requires remediation_action_ids, finding_ids, or application_id")
+    return list(applications_by_id.values()), actions
+
+
+def record_remediation_validation_result(
+    db: Session,
+    actions: list[RemediationAction],
+    app: Application,
+    scan: Scan | None,
+    *,
+    success: bool,
+) -> None:
+    for action in actions:
+        finding = db.get(Finding, action.finding_id)
+        if not finding or finding.application_id != app.id:
+            continue
+
+        metadata = dict(action.metadata_json or {})
+        if scan:
+            metadata["validation_scan_id"] = str(scan.id)
+            metadata["validation_scan_status"] = scan.status.value
+        metadata["validation_status"] = "succeeded" if success else "failed"
+        if success:
+            metadata.pop("validation_error", None)
+        else:
+            error = scan.error_message if scan and scan.error_message else "validation scan failed"
+            metadata["validation_error"] = error
+        action.metadata_json = metadata
+
+
+def run_remediation_validation_job(db: Session, job: Job) -> None:
+    applications, actions = resolve_remediation_validation_targets(db, job)
+    successes = 0
+    failures = 0
+
+    for app in applications:
+        repo = db.get(Repository, app.repository_id)
+        if not repo:
+            raise RuntimeError(f"repository not found for application: {app.id}")
+
+        with tempfile.TemporaryDirectory(prefix="watchtower-validation-") as tmp:
+            temp_root = Path(tmp)
+            root = clone_repository(repo, temp_root)
+            success = scan_application(
+                db,
+                repo,
+                app,
+                root,
+                ArtifactStore(get_settings()),
+                temp_root,
+                trigger_type=TriggerType.remediation_validation,
+            )
+            scan = latest_scan_for_application(db, app)
+            record_remediation_validation_result(db, actions, app, scan, success=success)
+            if success:
+                successes += 1
+            else:
+                failures += 1
+
+    logger.info(
+        "remediation validation completed job_id=%s success_count=%s failure_count=%s",
+        job.id,
+        successes,
+        failures,
+    )
+    if successes == 0:
+        raise RuntimeError("all remediation validation scans failed")
+
+
 def run_notification_job(db: Session, job: Job) -> None:
     notification_ids = [UUID(str(raw_id)) for raw_id in job.payload.get("notification_ids") or []]
     if notification_ids:
@@ -372,6 +506,8 @@ def run_repository_sync_job(db: Session, job: Job) -> None:
 def handle_job(db: Session, job: Job) -> None:
     if job.job_type == JobType.scan:
         run_scan_job(db, job)
+    elif job.job_type == JobType.remediation_validation:
+        run_remediation_validation_job(db, job)
     elif job.job_type == JobType.notification:
         run_notification_job(db, job)
     elif job.job_type == JobType.issue_create:

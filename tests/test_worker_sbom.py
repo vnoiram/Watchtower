@@ -23,6 +23,7 @@ from api.app.models import (
     Severity,
     SourceClassification,
     Vulnerability,
+    TriggerType,
 )
 from api.app.services.scanner import NormalizedFinding
 from worker import runner
@@ -117,6 +118,41 @@ def test_scan_application_persists_successful_syft_sbom(monkeypatch, tmp_path: P
             f"repositories/{repo.id}/applications/{app.id}/scans/{scan.id}/trivy.json",
         ]
         assert db.scalar(select(Component).where(Component.purl == "pkg:generic/fastapi@0.111.0"))
+
+
+def test_scan_application_accepts_remediation_validation_trigger(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        disable_notifications(monkeypatch)
+        repo, app = create_repo_and_app(db, tmp_path)
+        store = FakeArtifactStore()
+
+        def fake_run_syft(_: Path, output_path: Path) -> dict:
+            payload = {
+                "bomFormat": "CycloneDX",
+                "specVersion": "1.6",
+                "components": [{"type": "library", "name": "demo", "version": "1.0.0"}],
+            }
+            output_path.write_text(json.dumps(payload), encoding="utf-8")
+            return payload
+
+        monkeypatch.setattr(runner, "run_syft", fake_run_syft)
+        monkeypatch.setattr(runner, "run_osv_scanner", lambda *_: {"results": []})
+        monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+
+        assert runner.scan_application(
+            db,
+            repo,
+            app,
+            tmp_path,
+            store,
+            tmp_path,
+            trigger_type=TriggerType.remediation_validation,
+        )
+        db.flush()
+
+        scan = db.scalar(select(Scan))
+        assert scan.trigger_type == TriggerType.remediation_validation
 
 
 def test_scan_application_persists_vulnerability_findings(monkeypatch, tmp_path: Path) -> None:
@@ -650,6 +686,201 @@ def test_run_issue_create_job_processes_close_operation(monkeypatch, tmp_path: P
         runner.run_issue_create_job(db, job)
 
         assert calls == [(db, [finding.id], runner.get_settings())]
+
+
+def test_run_remediation_validation_job_scans_action_application(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        disable_notifications(monkeypatch)
+        repo, app = create_repo_and_app(db, tmp_path, provider=RepositoryProvider.github)
+        component = Component(
+            purl="pkg:pypi/demo@1.0.0",
+            ecosystem="PyPI",
+            name="demo",
+            version="1.0.0",
+        )
+        vulnerability = Vulnerability(
+            source="osv",
+            external_id="GHSA-123",
+            severity=Severity.high,
+            references=[],
+        )
+        db.add_all([component, vulnerability])
+        db.flush()
+        finding = Finding(
+            application_id=app.id,
+            component_id=component.id,
+            vulnerability_id=vulnerability.id,
+            status=FindingStatus.open,
+            severity=Severity.high,
+            fixed_version="1.0.1",
+            risk_score=8.0,
+        )
+        db.add(finding)
+        db.flush()
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            provider_id="42",
+            metadata_json={"repository_id": str(repo.id), "validation_error": "previous"},
+        )
+        db.add(action)
+        db.flush()
+        job = Job(
+            job_type=JobType.remediation_validation,
+            repository_id=repo.id,
+            application_id=app.id,
+            payload={"remediation_action_ids": [str(action.id)]},
+        )
+        db.add(job)
+        db.flush()
+
+        def fake_run_syft(_: Path, output_path: Path) -> dict:
+            payload = {
+                "bomFormat": "CycloneDX",
+                "specVersion": "1.6",
+                "components": [{"type": "library", "name": "demo", "version": "1.0.0"}],
+            }
+            output_path.write_text(json.dumps(payload), encoding="utf-8")
+            return payload
+
+        monkeypatch.setattr(runner, "clone_repository", lambda *_: tmp_path)
+        monkeypatch.setattr(runner, "ArtifactStore", lambda *_: FakeArtifactStore())
+        monkeypatch.setattr(runner, "run_syft", fake_run_syft)
+        monkeypatch.setattr(runner, "run_osv_scanner", lambda *_: {"results": []})
+        monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+
+        runner.run_remediation_validation_job(db, job)
+        db.flush()
+
+        scan = db.scalar(select(Scan).where(Scan.trigger_type == TriggerType.remediation_validation))
+        close_job = db.scalar(
+            select(Job).where(
+                Job.job_type == JobType.issue_create,
+                Job.payload["operation"].as_string() == "close",
+            )
+        )
+        assert finding.status == FindingStatus.resolved
+        assert scan.status == ScanStatus.succeeded
+        assert action.status == "created"
+        assert action.metadata_json["validation_scan_id"] == str(scan.id)
+        assert action.metadata_json["validation_scan_status"] == "succeeded"
+        assert action.metadata_json["validation_status"] == "succeeded"
+        assert "validation_error" not in action.metadata_json
+        assert close_job.payload == {"operation": "close", "finding_ids": [str(finding.id)]}
+
+
+def test_run_remediation_validation_job_records_failed_validation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        disable_notifications(monkeypatch)
+        repo, app = create_repo_and_app(db, tmp_path, provider=RepositoryProvider.github)
+        component = Component(
+            purl="pkg:pypi/demo@1.0.0",
+            ecosystem="PyPI",
+            name="demo",
+            version="1.0.0",
+        )
+        vulnerability = Vulnerability(
+            source="osv",
+            external_id="GHSA-123",
+            severity=Severity.high,
+            references=[],
+        )
+        db.add_all([component, vulnerability])
+        db.flush()
+        finding = Finding(
+            application_id=app.id,
+            component_id=component.id,
+            vulnerability_id=vulnerability.id,
+            status=FindingStatus.open,
+            severity=Severity.high,
+            fixed_version="1.0.1",
+            risk_score=8.0,
+        )
+        db.add(finding)
+        db.flush()
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            provider_id="42",
+            metadata_json={"repository_id": str(repo.id)},
+        )
+        db.add(action)
+        db.flush()
+        job = Job(
+            job_type=JobType.remediation_validation,
+            payload={"remediation_action_ids": [str(action.id)]},
+        )
+        db.add(job)
+        db.flush()
+
+        def fake_run_syft(_: Path, __: Path) -> dict:
+            raise RuntimeError("syft missing")
+
+        monkeypatch.setattr(runner, "clone_repository", lambda *_: tmp_path)
+        monkeypatch.setattr(runner, "ArtifactStore", lambda *_: FakeArtifactStore())
+        monkeypatch.setattr(runner, "run_syft", fake_run_syft)
+
+        try:
+            runner.run_remediation_validation_job(db, job)
+        except RuntimeError as exc:
+            assert "all remediation validation scans failed" in str(exc)
+        else:
+            raise AssertionError("expected RuntimeError")
+        db.flush()
+
+        scan = db.scalar(select(Scan).where(Scan.trigger_type == TriggerType.remediation_validation))
+        assert scan.status == ScanStatus.failed
+        assert action.status == "created"
+        assert action.metadata_json["validation_scan_id"] == str(scan.id)
+        assert action.metadata_json["validation_scan_status"] == "failed"
+        assert action.metadata_json["validation_status"] == "failed"
+        assert action.metadata_json["validation_error"] == "syft missing"
+
+
+def test_run_remediation_validation_job_requires_target() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        job = Job(job_type=JobType.remediation_validation, payload={})
+        db.add(job)
+        db.flush()
+
+        try:
+            runner.run_remediation_validation_job(db, job)
+        except RuntimeError as exc:
+            assert "requires remediation_action_ids" in str(exc)
+        else:
+            raise AssertionError("expected RuntimeError")
+
+
+def test_handle_job_dispatches_remediation_validation(monkeypatch) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        job = Job(job_type=JobType.remediation_validation, payload={"application_ids": []})
+        db.add(job)
+        db.flush()
+        calls = []
+
+        def fake_run_remediation_validation_job(db_arg: Session, job_arg: Job) -> None:
+            calls.append((db_arg, job_arg))
+
+        monkeypatch.setattr(
+            runner,
+            "run_remediation_validation_job",
+            fake_run_remediation_validation_job,
+        )
+
+        runner.handle_job(db, job)
+
+        assert calls == [(db, job)]
 
 
 def test_run_repository_sync_job_syncs_owner_payload(monkeypatch) -> None:
