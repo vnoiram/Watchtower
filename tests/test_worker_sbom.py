@@ -389,7 +389,7 @@ def test_run_notification_job_delivers_queued_notifications(monkeypatch, tmp_pat
         assert notification.status == "sent"
 
 
-def test_run_issue_create_job_marks_actions_pending_provider(tmp_path: Path) -> None:
+def test_run_issue_create_job_processes_payload_action_ids(monkeypatch, tmp_path: Path) -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
         repo, app = create_repo_and_app(db, tmp_path, provider=RepositoryProvider.github)
@@ -433,9 +433,92 @@ def test_run_issue_create_job_marks_actions_pending_provider(tmp_path: Path) -> 
         db.add_all([action, job])
         db.flush()
         job.payload = {"remediation_action_ids": [str(action.id)]}
+        calls = []
+
+        def fake_process(db_arg: Session, *, action_ids: list, settings: Settings) -> list[RemediationAction]:
+            calls.append((db_arg, action_ids, settings))
+            action.status = "created"
+            return [action]
+
+        monkeypatch.setattr(runner, "process_github_issue_actions", fake_process)
+        monkeypatch.setattr(runner, "get_settings", lambda: Settings(github_token="token"))
 
         runner.run_issue_create_job(db, job)
 
-        assert action.status == "pending_provider"
-        assert action.metadata_json["dry_run"] is True
-        assert action.metadata_json["reason"] == "github issue delivery is not implemented yet"
+        assert calls == [(db, [action.id], runner.get_settings())]
+        assert action.status == "created"
+
+
+def test_run_issue_create_job_processes_all_when_payload_empty(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo, app = create_repo_and_app(db, tmp_path, provider=RepositoryProvider.github)
+        component = Component(
+            purl="pkg:pypi/demo@1.0.0",
+            ecosystem="PyPI",
+            name="demo",
+            version="1.0.0",
+        )
+        vulnerability = Vulnerability(
+            source="osv",
+            external_id="GHSA-123",
+            severity=Severity.high,
+            references=[],
+        )
+        db.add_all([component, vulnerability])
+        db.flush()
+        finding = Finding(
+            application_id=app.id,
+            component_id=component.id,
+            vulnerability_id=vulnerability.id,
+            severity=Severity.high,
+            fixed_version="1.0.1",
+            risk_score=8.0,
+        )
+        db.add(finding)
+        db.flush()
+        queued = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="queued",
+            provider="github",
+            metadata_json={"finding_id": str(finding.id), "repository_id": str(repo.id)},
+        )
+        pending = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="pending_provider",
+            provider="github",
+            metadata_json={"finding_id": str(finding.id), "repository_id": str(repo.id)},
+        )
+        created = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            metadata_json={"finding_id": str(finding.id), "repository_id": str(repo.id)},
+        )
+        job = Job(
+            job_type=JobType.issue_create,
+            repository_id=repo.id,
+            application_id=app.id,
+            payload={},
+        )
+        db.add_all([queued, pending, created, job])
+        db.flush()
+
+        def fake_process(db_arg: Session, *, action_ids: list, settings: Settings) -> list[RemediationAction]:
+            assert db_arg is db
+            assert action_ids == []
+            queued.status = "created"
+            pending.status = "failed"
+            return [queued, pending]
+
+        monkeypatch.setattr(runner, "process_github_issue_actions", fake_process)
+        monkeypatch.setattr(runner, "get_settings", lambda: Settings(github_token="token"))
+
+        runner.run_issue_create_job(db, job)
+
+        assert queued.status == "created"
+        assert pending.status == "failed"
+        assert created.status == "created"

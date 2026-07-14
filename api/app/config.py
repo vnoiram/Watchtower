@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     minio_bucket: str = Field(default="maintenance-artifacts")
     github_app_id: str | None = None
     github_private_key: str | None = None
+    github_token: str | None = None
     github_webhook_secret: str | None = None
     slack_webhook_url: str | None = None
     discord_webhook_url: str | None = None

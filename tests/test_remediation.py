@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from api.app.database import Base
+from api.app.config import Settings
 from api.app.models import (
     Application,
     ApplicationType,
@@ -19,8 +20,9 @@ from api.app.models import (
     Vulnerability,
 )
 from api.app.services.remediation import (
+    build_github_issue_payload,
     enqueue_github_issue_requests,
-    mark_issue_actions_pending_provider,
+    process_github_issue_actions,
 )
 
 
@@ -137,15 +139,159 @@ def test_enqueue_github_issue_requests_suppresses_duplicates(tmp_path: Path) -> 
         assert len(list(db.scalars(select(RemediationAction)))) == 1
 
 
-def test_mark_issue_actions_pending_provider(tmp_path: Path) -> None:
+class FakeResponse:
+    def __init__(self, status_code: int, payload: dict | None = None, text: str = "") -> None:
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = text
+
+    def json(self) -> dict:
+        return self._payload
+
+
+def test_build_github_issue_payload_uses_finding_context(tmp_path: Path) -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
         finding = create_finding(db, tmp_path)
         action = enqueue_github_issue_requests(db, finding_ids=[finding.id])[0]
 
-        updated = mark_issue_actions_pending_provider(db, action_ids=[action.id])
+        payload = build_github_issue_payload(db, action)
 
-        assert updated == [action]
-        assert action.status == "pending_provider"
-        assert action.metadata_json["dry_run"] is True
-        assert action.metadata_json["reason"] == "github issue delivery is not implemented yet"
+        assert not isinstance(payload, str)
+        assert payload["title"].startswith("[Watchtower] high vulnerability GHSA-")
+        assert "demo-" in payload["title"]
+        assert "- Application: demo" in payload["body"]
+        assert f"- Vulnerability: {action.metadata_json['vulnerability_external_id']}" in payload["body"]
+        assert "- Fixed version: 1.0.1" in payload["body"]
+        assert "- Risk score: 8.0" in payload["body"]
+        assert f"- Finding ID: {finding.id}" in payload["body"]
+        assert f"- Remediation action ID: {action.id}" in payload["body"]
+
+
+def test_process_github_issue_actions_creates_issue(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path)
+        action = enqueue_github_issue_requests(db, finding_ids=[finding.id])[0]
+        calls = []
+
+        def fake_post(url: str, **kwargs) -> FakeResponse:
+            calls.append((url, kwargs))
+            return FakeResponse(
+                201,
+                {
+                    "number": 42,
+                    "html_url": "https://github.com/local/demo/issues/42",
+                    "url": "https://api.github.com/repos/local/demo/issues/42",
+                },
+            )
+
+        monkeypatch.setattr("api.app.services.remediation.httpx.post", fake_post)
+
+        processed = process_github_issue_actions(
+            db,
+            action_ids=[action.id],
+            settings=Settings(github_token="token"),
+        )
+
+        assert processed == [action]
+        assert action.status == "created"
+        assert action.provider_id == "42"
+        assert action.url == "https://github.com/local/demo/issues/42"
+        assert action.metadata_json["github_issue_url"] == "https://github.com/local/demo/issues/42"
+        assert action.metadata_json["html_url"] == "https://github.com/local/demo/issues/42"
+        assert action.metadata_json["api_url"] == "https://api.github.com/repos/local/demo/issues/42"
+        assert calls[0][0].startswith("https://api.github.com/repos/local/demo-")
+        assert calls[0][1]["headers"]["Authorization"] == "Bearer token"
+        assert calls[0][1]["json"]["title"].startswith("[Watchtower] high vulnerability")
+
+
+def test_process_github_issue_actions_fails_without_token(tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path)
+        action = enqueue_github_issue_requests(db, finding_ids=[finding.id])[0]
+
+        processed = process_github_issue_actions(db, action_ids=[action.id], settings=Settings())
+
+        assert processed == [action]
+        assert action.status == "failed"
+        assert action.metadata_json["error"] == "github_token is not configured"
+
+
+def test_process_github_issue_actions_records_http_failure(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path)
+        action = enqueue_github_issue_requests(db, finding_ids=[finding.id])[0]
+
+        def fake_post(*args, **kwargs) -> FakeResponse:
+            return FakeResponse(422, text="bad request")
+
+        monkeypatch.setattr("api.app.services.remediation.httpx.post", fake_post)
+
+        processed = process_github_issue_actions(
+            db,
+            action_ids=[action.id],
+            settings=Settings(github_token="token"),
+        )
+
+        assert processed == [action]
+        assert action.status == "failed"
+        assert action.metadata_json["error"] == "github issue create failed with status 422: bad request"
+
+
+def test_process_github_issue_actions_records_exception(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path)
+        action = enqueue_github_issue_requests(db, finding_ids=[finding.id])[0]
+
+        def fake_post(*args, **kwargs) -> FakeResponse:
+            raise RuntimeError("network down")
+
+        monkeypatch.setattr("api.app.services.remediation.httpx.post", fake_post)
+
+        processed = process_github_issue_actions(
+            db,
+            action_ids=[action.id],
+            settings=Settings(github_token="token"),
+        )
+
+        assert processed == [action]
+        assert action.status == "failed"
+        assert action.metadata_json["error"] == "github issue create failed: network down"
+
+
+def test_process_github_issue_actions_skips_duplicate_created_action(tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path)
+        created = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            provider_id="42",
+            url="https://github.com/local/demo/issues/42",
+            metadata_json={"repository_id": str(finding.application.repository_id)},
+        )
+        queued = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="queued",
+            provider="github",
+            metadata_json={"repository_id": str(finding.application.repository_id)},
+        )
+        db.add_all([created, queued])
+        db.flush()
+
+        processed = process_github_issue_actions(
+            db,
+            action_ids=[queued.id],
+            settings=Settings(github_token="token"),
+        )
+
+        assert processed == [queued]
+        assert queued.status == "skipped_duplicate"
+        assert queued.metadata_json["skipped_reason"] == "github issue already created"
