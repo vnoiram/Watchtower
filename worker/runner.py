@@ -29,7 +29,9 @@ from api.app.models import (
 from api.app.services.artifacts import ArtifactStore, artifact_key
 from api.app.services.jobs import lock_next_job, mark_job_failed, mark_job_succeeded
 from api.app.services.registry import detect_applications
+from api.app.services.scanner import normalize_osv_results, normalize_trivy_results
 from api.app.services.sbom import upsert_source_sbom
+from api.app.services.vulnerabilities import upsert_findings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("watchtower.worker")
@@ -99,6 +101,38 @@ def run_syft(target: Path, output_path: Path) -> dict:
     return payload
 
 
+def run_json_scanner(tool: str, args: list[str], output_path: Path) -> dict:
+    result = run_command(args)
+    if result.returncode != 0:
+        raise RuntimeError(f"{tool} failed: {result.stderr.strip() or result.stdout.strip()}")
+    if not result.stdout.strip():
+        raise RuntimeError(f"{tool} produced empty output")
+    output_path.write_text(result.stdout, encoding="utf-8")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{tool} produced invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{tool} output must be a JSON object")
+    return payload
+
+
+def run_osv_scanner(target: Path, output_path: Path) -> dict:
+    return run_json_scanner(
+        "osv-scanner",
+        ["osv-scanner", "--format", "json", "--recursive", str(target)],
+        output_path,
+    )
+
+
+def run_trivy(target: Path, output_path: Path) -> dict:
+    return run_json_scanner(
+        "trivy",
+        ["trivy", "fs", "--format", "json", str(target)],
+        output_path,
+    )
+
+
 def scan_application(
     db: Session,
     repo: Repository,
@@ -133,12 +167,60 @@ def scan_application(
             sbom_digest=digest,
             commit_sha=scan.commit_sha,
         )
-        scan.status = ScanStatus.succeeded
+        artifacts = {
+            "source_sbom": {
+                "storage_key": key,
+                "digest": digest,
+            }
+        }
+        scanner_failures: list[dict[str, str]] = []
+        normalized_findings = []
+        successful_sources: set[str] = set()
+
+        scanner_steps = (
+            ("osv", "osv.json", run_osv_scanner, normalize_osv_results),
+            ("trivy", "trivy.json", run_trivy, normalize_trivy_results),
+        )
+        for source, filename, runner, normalizer in scanner_steps:
+            scanner_output_path = workdir / f"{scan.id}-{filename}"
+            try:
+                scanner_payload = runner(target, scanner_output_path)
+                if not scanner_output_path.exists():
+                    scanner_output_path.write_text(json.dumps(scanner_payload), encoding="utf-8")
+                scanner_key = artifact_key(str(repo.id), str(app.id), str(scan.id), filename)
+                scanner_digest = store.put_file(scanner_key, scanner_output_path)
+                artifacts[source] = {
+                    "storage_key": scanner_key,
+                    "digest": scanner_digest,
+                }
+                normalized_findings.extend(normalizer(scanner_payload))
+                successful_sources.add(source)
+            except Exception as exc:  # noqa: BLE001
+                scanner_failures.append({"tool": source, "error": str(exc)})
+                logger.warning(
+                    "vulnerability scanner failed app_id=%s tool=%s error=%s",
+                    app.id,
+                    source,
+                    exc,
+                )
+
+        persistence = upsert_findings(
+            db,
+            app,
+            scan,
+            normalized_findings,
+            resolved_sources=successful_sources,
+        )
+        scan.status = ScanStatus.partially_succeeded if scanner_failures else ScanStatus.succeeded
         scan.completed_at = now_utc()
         scan.result_summary = {
-            "scanner_failure": False,
+            "scanner_failure": bool(scanner_failures),
             "sbom_stored": True,
             "component_count": component_count,
+            "finding_count": persistence.finding_count,
+            "resolved_count": persistence.resolved_count,
+            "scanner_failures": scanner_failures,
+            "artifacts": artifacts,
         }
         return True
     except Exception as exc:  # noqa: BLE001
