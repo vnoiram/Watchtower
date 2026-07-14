@@ -9,7 +9,9 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.app.config import get_settings
@@ -19,6 +21,7 @@ from api.app.models import (
     ApplicationType,
     Job,
     JobType,
+    Notification,
     Repository,
     Scan,
     ScanStatus,
@@ -27,7 +30,8 @@ from api.app.models import (
     now_utc,
 )
 from api.app.services.artifacts import ArtifactStore, artifact_key
-from api.app.services.jobs import lock_next_job, mark_job_failed, mark_job_succeeded
+from api.app.services.jobs import enqueue_job, lock_next_job, mark_job_failed, mark_job_succeeded
+from api.app.services.notifications import deliver_notification, enqueue_finding_notifications
 from api.app.services.registry import detect_applications
 from api.app.services.scanner import normalize_osv_results, normalize_trivy_results
 from api.app.services.sbom import upsert_source_sbom
@@ -211,6 +215,20 @@ def scan_application(
             normalized_findings,
             resolved_sources=successful_sources,
         )
+        notifications = enqueue_finding_notifications(
+            db,
+            finding_ids=persistence.notification_finding_ids,
+            scan_id=scan.id,
+            settings=get_settings(),
+        )
+        if notifications:
+            enqueue_job(
+                db,
+                JobType.notification,
+                repository_id=repo.id,
+                application_id=app.id,
+                payload={"notification_ids": [str(notification.id) for notification in notifications]},
+            )
         scan.status = ScanStatus.partially_succeeded if scanner_failures else ScanStatus.succeeded
         scan.completed_at = now_utc()
         scan.result_summary = {
@@ -219,6 +237,7 @@ def scan_application(
             "component_count": component_count,
             "finding_count": persistence.finding_count,
             "resolved_count": persistence.resolved_count,
+            "notification_count": len(notifications),
             "scanner_failures": scanner_failures,
             "artifacts": artifacts,
         }
@@ -252,9 +271,26 @@ def run_scan_job(db: Session, job: Job) -> None:
             raise RuntimeError("all application scans failed")
 
 
+def run_notification_job(db: Session, job: Job) -> None:
+    notification_ids = [UUID(str(raw_id)) for raw_id in job.payload.get("notification_ids") or []]
+    if notification_ids:
+        stmt = select(Notification).where(
+            Notification.id.in_(notification_ids),
+            Notification.status == "queued",
+        )
+    else:
+        stmt = select(Notification).where(Notification.status == "queued")
+
+    settings = get_settings()
+    for notification in db.scalars(stmt):
+        deliver_notification(notification, settings=settings)
+
+
 def handle_job(db: Session, job: Job) -> None:
     if job.job_type == JobType.scan:
         run_scan_job(db, job)
+    elif job.job_type == JobType.notification:
+        run_notification_job(db, job)
     elif job.job_type == JobType.repository_sync:
         logger.info("repository sync placeholder payload=%s", json.dumps(job.payload))
     else:
