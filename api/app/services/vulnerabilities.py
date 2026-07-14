@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from api.app.services.sbom import split_purl_namespace
 class FindingPersistenceResult:
     finding_count: int
     resolved_count: int
+    notification_finding_ids: list[UUID]
 
 
 def upsert_component(db: Session, finding: NormalizedFinding) -> Component:
@@ -80,6 +82,7 @@ def upsert_findings(
 ) -> FindingPersistenceResult:
     seen_keys: set[tuple[str, str, str]] = set()
     seen_finding_ids: set[object] = set()
+    notification_finding_ids: list[UUID] = []
 
     for normalized in findings:
         key = (normalized.source, normalized.vulnerability_id, normalized.purl)
@@ -102,12 +105,15 @@ def upsert_findings(
             )
         )
         if finding:
+            was_resolved = finding.status == FindingStatus.resolved
             finding.status = FindingStatus.open
             finding.last_seen_scan_id = scan.id
             finding.severity = normalized.severity
             finding.fixed_version = normalized.fixed_version
             finding.risk_score = risk_score
             finding.resolved_at = None
+            if was_resolved:
+                notification_finding_ids.append(finding.id)
         else:
             finding = Finding(
                 application_id=application.id,
@@ -122,6 +128,7 @@ def upsert_findings(
             )
             db.add(finding)
             db.flush()
+            notification_finding_ids.append(finding.id)
         seen_finding_ids.add(finding.id)
 
     resolved_count = resolve_missing_findings(
@@ -130,7 +137,11 @@ def upsert_findings(
         seen_finding_ids=seen_finding_ids,
         resolved_sources=resolved_sources,
     )
-    return FindingPersistenceResult(finding_count=len(seen_keys), resolved_count=resolved_count)
+    return FindingPersistenceResult(
+        finding_count=len(seen_keys),
+        resolved_count=resolved_count,
+        notification_finding_ids=notification_finding_ids,
+    )
 
 
 def resolve_missing_findings(

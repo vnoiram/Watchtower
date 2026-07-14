@@ -91,6 +91,7 @@ def test_upsert_findings_creates_component_vulnerability_and_finding(tmp_path: P
         assert db.scalar(select(Component).where(Component.purl == "pkg:pypi/demo@1.0.0"))
         assert db.scalar(select(Vulnerability).where(Vulnerability.external_id == "GHSA-123"))
         finding = db.scalar(select(Finding))
+        assert result.notification_finding_ids == [finding.id]
         assert finding.status == FindingStatus.open
         assert finding.first_seen_scan_id == scan.id
         assert finding.last_seen_scan_id == scan.id
@@ -117,6 +118,7 @@ def test_upsert_findings_updates_existing_without_duplicate(tmp_path: Path) -> N
 
         findings = list(db.scalars(select(Finding)))
         assert result.finding_count == 1
+        assert result.notification_finding_ids == []
         assert len(findings) == 1
         assert findings[0].first_seen_scan_id == first_scan.id
         assert findings[0].last_seen_scan_id == second_scan.id
@@ -139,3 +141,24 @@ def test_upsert_findings_resolves_missing_open_finding(tmp_path: Path) -> None:
         assert result.resolved_count == 1
         assert finding.status == FindingStatus.resolved
         assert finding.resolved_at is not None
+
+
+def test_upsert_findings_reports_reopened_finding_for_notification(tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        _, app, first_scan = create_repo_app_scan(db, tmp_path)
+        upsert_findings(db, app, first_scan, [normalized()], resolved_sources={"osv"})
+        second_scan = Scan(application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running)
+        db.add(second_scan)
+        db.flush()
+        upsert_findings(db, app, second_scan, [], resolved_sources={"osv"})
+        third_scan = Scan(application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running)
+        db.add(third_scan)
+        db.flush()
+
+        result = upsert_findings(db, app, third_scan, [normalized()], resolved_sources={"osv"})
+        db.flush()
+
+        finding = db.scalar(select(Finding))
+        assert finding.status == FindingStatus.open
+        assert result.notification_finding_ids == [finding.id]

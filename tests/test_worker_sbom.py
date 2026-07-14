@@ -4,12 +4,16 @@ from pathlib import Path
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from api.app.config import Settings
 from api.app.database import Base
 from api.app.models import (
     Application,
     ApplicationType,
     Component,
     Finding,
+    Job,
+    JobType,
+    Notification,
     Repository,
     RepositoryProvider,
     Scan,
@@ -62,9 +66,14 @@ def create_repo_and_app(db: Session, tmp_path: Path) -> tuple[Repository, Applic
     return repo, app
 
 
+def disable_notifications(monkeypatch) -> None:
+    monkeypatch.setattr(runner, "get_settings", lambda: Settings())
+
+
 def test_scan_application_persists_successful_syft_sbom(monkeypatch, tmp_path: Path) -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
+        disable_notifications(monkeypatch)
         repo, app = create_repo_and_app(db, tmp_path)
         store = FakeArtifactStore()
 
@@ -89,6 +98,7 @@ def test_scan_application_persists_successful_syft_sbom(monkeypatch, tmp_path: P
         assert scan.result_summary["component_count"] == 1
         assert scan.result_summary["finding_count"] == 0
         assert scan.result_summary["resolved_count"] == 0
+        assert scan.result_summary["notification_count"] == 0
         assert scan.result_summary["scanner_failures"] == []
         assert store.keys == [
             f"repositories/{repo.id}/applications/{app.id}/scans/{scan.id}/source-sbom.cdx.json",
@@ -101,6 +111,7 @@ def test_scan_application_persists_successful_syft_sbom(monkeypatch, tmp_path: P
 def test_scan_application_persists_vulnerability_findings(monkeypatch, tmp_path: Path) -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
+        disable_notifications(monkeypatch)
         repo, app = create_repo_and_app(db, tmp_path)
         app.internet_exposed = True
         app.production = True
@@ -143,8 +154,65 @@ def test_scan_application_persists_vulnerability_findings(monkeypatch, tmp_path:
         finding = db.scalar(select(Finding))
         assert scan.status == ScanStatus.succeeded
         assert scan.result_summary["finding_count"] == 1
+        assert scan.result_summary["notification_count"] == 0
         assert finding.severity == Severity.high
         assert finding.risk_score == 10.0
+
+
+def test_scan_application_enqueues_chat_notifications(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        monkeypatch.setattr(
+            runner,
+            "get_settings",
+            lambda: Settings(
+                slack_webhook_url="https://hooks.slack.test/demo",
+                discord_webhook_url="https://discord.test/webhook",
+            ),
+        )
+        repo, app = create_repo_and_app(db, tmp_path)
+        store = FakeArtifactStore()
+
+        def fake_run_syft(_: Path, output_path: Path) -> dict:
+            payload = {
+                "bomFormat": "CycloneDX",
+                "specVersion": "1.6",
+                "components": [{"type": "library", "name": "demo", "version": "1.0.0"}],
+            }
+            output_path.write_text(json.dumps(payload), encoding="utf-8")
+            return payload
+
+        monkeypatch.setattr(runner, "run_syft", fake_run_syft)
+        monkeypatch.setattr(
+            runner,
+            "run_osv_scanner",
+            lambda *_: {
+                "results": [
+                    {
+                        "package": {"name": "demo", "ecosystem": "PyPI", "version": "1.0.0"},
+                        "vulnerabilities": [
+                            {
+                                "id": "GHSA-123",
+                                "summary": "demo issue",
+                                "severity": [{"type": "CVSS_V3", "score": "CRITICAL"}],
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+
+        assert runner.scan_application(db, repo, app, tmp_path, store, tmp_path)
+        db.flush()
+
+        scan = db.scalar(select(Scan))
+        notifications = list(db.scalars(select(Notification)))
+        job = db.scalar(select(Job).where(Job.job_type == JobType.notification))
+        assert scan.result_summary["notification_count"] == 2
+        assert {notification.channel for notification in notifications} == {"slack", "discord"}
+        assert job
+        assert set(job.payload["notification_ids"]) == {str(notification.id) for notification in notifications}
 
 
 def test_scan_application_records_partial_success_for_scanner_failure(
@@ -153,6 +221,7 @@ def test_scan_application_records_partial_success_for_scanner_failure(
 ) -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
+        disable_notifications(monkeypatch)
         repo, app = create_repo_and_app(db, tmp_path)
         store = FakeArtifactStore()
 
@@ -191,12 +260,14 @@ def test_scan_application_records_partial_success_for_scanner_failure(
         assert scan.result_summary["scanner_failure"] is True
         assert scan.result_summary["scanner_failures"] == [{"tool": "osv", "error": "osv missing"}]
         assert scan.result_summary["finding_count"] == 1
+        assert scan.result_summary["notification_count"] == 0
         assert db.scalar(select(Finding))
 
 
 def test_scan_application_records_failure_without_raising(monkeypatch, tmp_path: Path) -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
+        disable_notifications(monkeypatch)
         repo, app = create_repo_and_app(db, tmp_path)
 
         def fake_run_syft(_: Path, __: Path) -> dict:
@@ -211,3 +282,39 @@ def test_scan_application_records_failure_without_raising(monkeypatch, tmp_path:
         assert scan.status == ScanStatus.failed
         assert scan.result_summary == {"scanner_failure": True, "sbom_stored": False}
         assert scan.error_message == "syft missing"
+
+
+def test_run_notification_job_delivers_queued_notifications(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo, app = create_repo_and_app(db, tmp_path)
+        notification = Notification(
+            channel="slack",
+            severity=Severity.high,
+            subject="High vulnerability detected: GHSA-123",
+            body="body",
+            status="queued",
+            metadata_json={"notification_kind": "vulnerability_alert"},
+        )
+        job = Job(
+            job_type=JobType.notification,
+            repository_id=repo.id,
+            application_id=app.id,
+            payload={"notification_ids": []},
+        )
+        db.add_all([notification, job])
+        db.flush()
+        job.payload = {"notification_ids": [str(notification.id)]}
+        delivered = []
+
+        def fake_deliver(target: Notification, *, settings: Settings) -> None:
+            delivered.append((target.id, settings))
+            target.status = "sent"
+
+        monkeypatch.setattr(runner, "deliver_notification", fake_deliver)
+        monkeypatch.setattr(runner, "get_settings", lambda: Settings(slack_webhook_url="https://example.test"))
+
+        runner.run_notification_job(db, job)
+
+        assert delivered == [(notification.id, runner.get_settings())]
+        assert notification.status == "sent"

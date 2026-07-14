@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     github_private_key: str | None = None
     github_webhook_secret: str | None = None
     slack_webhook_url: str | None = None
+    discord_webhook_url: str | None = None
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_username: str | None = None
@@ -30,4 +31,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
