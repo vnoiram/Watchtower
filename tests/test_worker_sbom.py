@@ -980,3 +980,57 @@ def test_handle_job_dispatches_repository_sync(monkeypatch) -> None:
         runner.handle_job(db, job)
 
         assert calls == [(db, job)]
+
+
+def test_run_scan_job_uses_schedule_trigger_from_payload(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo, app = create_repo_and_app(db, tmp_path)
+        job = Job(
+            job_type=JobType.scan,
+            repository_id=repo.id,
+            payload={"repository_id": str(repo.id), "trigger_type": "schedule"},
+        )
+        db.add(job)
+        db.flush()
+        trigger_types: list[TriggerType] = []
+
+        monkeypatch.setattr(runner, "clone_repository", lambda *_: tmp_path)
+        monkeypatch.setattr(runner, "upsert_detected_applications", lambda *_: [app])
+        monkeypatch.setattr(runner, "ArtifactStore", lambda *_: FakeArtifactStore())
+        monkeypatch.setattr(runner, "get_settings", lambda: Settings())
+
+        def fake_scan_application(*args, trigger_type: TriggerType = TriggerType.manual) -> bool:
+            trigger_types.append(trigger_type)
+            return True
+
+        monkeypatch.setattr(runner, "scan_application", fake_scan_application)
+
+        runner.run_scan_job(db, job)
+
+        assert trigger_types == [TriggerType.schedule]
+
+
+def test_run_scan_job_defaults_to_manual_trigger(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo, app = create_repo_and_app(db, tmp_path)
+        job = Job(job_type=JobType.scan, payload={"repository_id": str(repo.id)})
+        db.add(job)
+        db.flush()
+        trigger_types: list[TriggerType] = []
+
+        monkeypatch.setattr(runner, "clone_repository", lambda *_: tmp_path)
+        monkeypatch.setattr(runner, "upsert_detected_applications", lambda *_: [app])
+        monkeypatch.setattr(runner, "ArtifactStore", lambda *_: FakeArtifactStore())
+        monkeypatch.setattr(runner, "get_settings", lambda: Settings())
+
+        def fake_scan_application(*args, trigger_type: TriggerType = TriggerType.schedule) -> bool:
+            trigger_types.append(trigger_type)
+            return True
+
+        monkeypatch.setattr(runner, "scan_application", fake_scan_application)
+
+        runner.run_scan_job(db, job)
+
+        assert trigger_types == [TriggerType.manual]

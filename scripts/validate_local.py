@@ -6,6 +6,7 @@ MODULES = [
     "api.app.services.scanner",
     "api.app.services.sbom",
     "api.app.services.github",
+    "api.app.services.scheduler",
     "worker.runner",
 ]
 
