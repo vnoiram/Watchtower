@@ -8,6 +8,7 @@ MODULES = [
     "api.app.services.github",
     "api.app.services.scheduler",
     "worker.runner",
+    "worker.scheduler",
 ]
 
 
