@@ -33,6 +33,10 @@ from api.app.services.artifacts import ArtifactStore, artifact_key
 from api.app.services.jobs import enqueue_job, lock_next_job, mark_job_failed, mark_job_succeeded
 from api.app.services.notifications import deliver_notification, enqueue_finding_notifications
 from api.app.services.registry import detect_applications
+from api.app.services.remediation import (
+    enqueue_github_issue_requests,
+    mark_issue_actions_pending_provider,
+)
 from api.app.services.scanner import normalize_osv_results, normalize_trivy_results
 from api.app.services.sbom import upsert_source_sbom
 from api.app.services.vulnerabilities import upsert_findings
@@ -229,6 +233,18 @@ def scan_application(
                 application_id=app.id,
                 payload={"notification_ids": [str(notification.id) for notification in notifications]},
             )
+        issue_requests = enqueue_github_issue_requests(
+            db,
+            finding_ids=persistence.notification_finding_ids,
+        )
+        if issue_requests:
+            enqueue_job(
+                db,
+                JobType.issue_create,
+                repository_id=repo.id,
+                application_id=app.id,
+                payload={"remediation_action_ids": [str(action.id) for action in issue_requests]},
+            )
         scan.status = ScanStatus.partially_succeeded if scanner_failures else ScanStatus.succeeded
         scan.completed_at = now_utc()
         scan.result_summary = {
@@ -238,6 +254,7 @@ def scan_application(
             "finding_count": persistence.finding_count,
             "resolved_count": persistence.resolved_count,
             "notification_count": len(notifications),
+            "issue_request_count": len(issue_requests),
             "scanner_failures": scanner_failures,
             "artifacts": artifacts,
         }
@@ -286,11 +303,25 @@ def run_notification_job(db: Session, job: Job) -> None:
         deliver_notification(notification, settings=settings)
 
 
+def run_issue_create_job(db: Session, job: Job) -> None:
+    action_ids = [UUID(str(raw_id)) for raw_id in job.payload.get("remediation_action_ids") or []]
+    actions = mark_issue_actions_pending_provider(db, action_ids=action_ids)
+    if action_ids and len(actions) != len(action_ids):
+        logger.warning(
+            "some remediation actions were not queued for issue creation job_id=%s expected=%s updated=%s",
+            job.id,
+            len(action_ids),
+            len(actions),
+        )
+
+
 def handle_job(db: Session, job: Job) -> None:
     if job.job_type == JobType.scan:
         run_scan_job(db, job)
     elif job.job_type == JobType.notification:
         run_notification_job(db, job)
+    elif job.job_type == JobType.issue_create:
+        run_issue_create_job(db, job)
     elif job.job_type == JobType.repository_sync:
         logger.info("repository sync placeholder payload=%s", json.dumps(job.payload))
     else:
