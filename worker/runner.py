@@ -26,8 +26,10 @@ from api.app.models import (
     TriggerType,
     now_utc,
 )
+from api.app.services.artifacts import ArtifactStore, artifact_key
 from api.app.services.jobs import lock_next_job, mark_job_failed, mark_job_succeeded
 from api.app.services.registry import detect_applications
+from api.app.services.sbom import upsert_source_sbom
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("watchtower.worker")
@@ -81,19 +83,71 @@ def upsert_detected_applications(db: Session, repo: Repository, root: Path) -> l
     return apps
 
 
-def create_failed_scan(db: Session, app: Application, error: str) -> None:
-    db.add(
-        Scan(
-            application_id=app.id,
-            trigger_type=TriggerType.manual,
-            status=ScanStatus.failed,
-            tool="watchtower-worker",
-            result_summary={"scanner_failure": True},
-            error_message=error,
-            started_at=now_utc(),
-            completed_at=now_utc(),
-        )
+def run_syft(target: Path, output_path: Path) -> dict:
+    result = run_command(["syft", str(target), "-o", "cyclonedx-json"])
+    if result.returncode != 0:
+        raise RuntimeError(f"syft failed: {result.stderr.strip() or result.stdout.strip()}")
+    if not result.stdout.strip():
+        raise RuntimeError("syft produced empty output")
+    output_path.write_text(result.stdout, encoding="utf-8")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"syft produced invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("syft output must be a JSON object")
+    return payload
+
+
+def scan_application(
+    db: Session,
+    repo: Repository,
+    app: Application,
+    root: Path,
+    store: ArtifactStore,
+    workdir: Path,
+) -> bool:
+    started = now_utc()
+    scan = Scan(
+        application_id=app.id,
+        trigger_type=TriggerType.manual,
+        status=ScanStatus.running,
+        tool="syft",
+        started_at=started,
     )
+    db.add(scan)
+    db.flush()
+
+    try:
+        target = root / app.path
+        output_path = workdir / f"{scan.id}-source-sbom.cdx.json"
+        payload = run_syft(target, output_path)
+        key = artifact_key(str(repo.id), str(app.id), str(scan.id), "source-sbom.cdx.json")
+        digest = store.put_file(key, output_path)
+        _, component_count = upsert_source_sbom(
+            db,
+            app,
+            scan,
+            payload,
+            storage_key=key,
+            sbom_digest=digest,
+            commit_sha=scan.commit_sha,
+        )
+        scan.status = ScanStatus.succeeded
+        scan.completed_at = now_utc()
+        scan.result_summary = {
+            "scanner_failure": False,
+            "sbom_stored": True,
+            "component_count": component_count,
+        }
+        return True
+    except Exception as exc:  # noqa: BLE001
+        scan.status = ScanStatus.failed
+        scan.completed_at = now_utc()
+        scan.error_message = str(exc)
+        scan.result_summary = {"scanner_failure": True, "sbom_stored": False}
+        logger.warning("application scan failed app_id=%s error=%s", app.id, exc)
+        return False
 
 
 def run_scan_job(db: Session, job: Job) -> None:
@@ -104,19 +158,16 @@ def run_scan_job(db: Session, job: Job) -> None:
     if not repo:
         raise RuntimeError(f"repository not found: {repo_id}")
     with tempfile.TemporaryDirectory(prefix="watchtower-") as tmp:
-        root = clone_repository(repo, Path(tmp))
+        temp_root = Path(tmp)
+        root = clone_repository(repo, temp_root)
         apps = upsert_detected_applications(db, repo, root)
+        store = ArtifactStore(get_settings())
+        successes = 0
         for app in apps:
-            scan = Scan(
-                application_id=app.id,
-                trigger_type=TriggerType.manual,
-                status=ScanStatus.succeeded,
-                tool="watchtower-worker",
-                result_summary={"applications_detected": len(apps), "scanner_failure": False},
-                started_at=now_utc(),
-                completed_at=now_utc(),
-            )
-            db.add(scan)
+            if scan_application(db, repo, app, root, store, temp_root):
+                successes += 1
+        if successes == 0:
+            raise RuntimeError("all application scans failed")
 
 
 def handle_job(db: Session, job: Job) -> None:
@@ -158,4 +209,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
