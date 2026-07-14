@@ -23,6 +23,7 @@ from api.app.services.github import GitHubAuthError
 from api.app.services.remediation import (
     build_github_issue_payload,
     enqueue_github_issue_requests,
+    process_github_issue_closures,
     process_github_issue_actions,
 )
 
@@ -383,3 +384,169 @@ def test_process_github_issue_actions_skips_duplicate_created_action(tmp_path: P
         assert processed == [queued]
         assert queued.status == "skipped_duplicate"
         assert queued.metadata_json["skipped_reason"] == "github issue already created"
+
+
+def test_process_github_issue_closures_closes_created_issue(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path, status=FindingStatus.resolved)
+        repository = db.get(Repository, finding.application.repository_id)
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            provider_id="42",
+            url=f"https://github.com/{repository.owner}/{repository.name}/issues/42",
+            metadata_json={
+                "repository_id": str(repository.id),
+                "close_error": "previous failure",
+            },
+        )
+        db.add(action)
+        db.flush()
+        calls = []
+
+        def fake_patch(url: str, **kwargs) -> FakeResponse:
+            calls.append((url, kwargs))
+            return FakeResponse(200, {"state": "closed"})
+
+        monkeypatch.setattr("api.app.services.remediation.httpx.patch", fake_patch)
+
+        processed = process_github_issue_closures(
+            db,
+            finding_ids=[finding.id],
+            settings=Settings(github_token="token"),
+        )
+
+        assert processed == [action]
+        assert action.status == "closed"
+        assert "github_issue_closed_at" in action.metadata_json
+        assert action.metadata_json["close_api_url"].endswith(f"/issues/{action.provider_id}")
+        assert "close_error" not in action.metadata_json
+        assert calls == [
+            (
+                f"https://api.github.com/repos/{repository.owner}/{repository.name}/issues/42",
+                {
+                    "json": {"state": "closed", "state_reason": "completed"},
+                    "headers": {
+                        "Accept": "application/vnd.github+json",
+                        "Authorization": "Bearer token",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    },
+                    "timeout": 10.0,
+                },
+            )
+        ]
+
+
+def test_process_github_issue_closures_records_http_failure(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path, status=FindingStatus.resolved)
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            provider_id="42",
+            metadata_json={"repository_id": str(finding.application.repository_id)},
+        )
+        db.add(action)
+        db.flush()
+
+        def fake_patch(*args, **kwargs) -> FakeResponse:
+            return FakeResponse(404, text="not found")
+
+        monkeypatch.setattr("api.app.services.remediation.httpx.patch", fake_patch)
+
+        processed = process_github_issue_closures(
+            db,
+            finding_ids=[finding.id],
+            settings=Settings(github_token="token"),
+        )
+
+        assert processed == [action]
+        assert action.status == "close_failed"
+        assert action.metadata_json["close_error"] == (
+            "github issue close failed with status 404: not found"
+        )
+
+
+def test_process_github_issue_closures_records_exception(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path, status=FindingStatus.resolved)
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="close_failed",
+            provider="github",
+            provider_id="42",
+            metadata_json={"repository_id": str(finding.application.repository_id)},
+        )
+        db.add(action)
+        db.flush()
+
+        def fake_patch(*args, **kwargs) -> FakeResponse:
+            raise RuntimeError("network down")
+
+        monkeypatch.setattr("api.app.services.remediation.httpx.patch", fake_patch)
+
+        processed = process_github_issue_closures(
+            db,
+            finding_ids=[finding.id],
+            settings=Settings(github_token="token"),
+        )
+
+        assert processed == [action]
+        assert action.status == "close_failed"
+        assert action.metadata_json["close_error"] == "github issue close failed: network down"
+
+
+def test_process_github_issue_closures_skips_ineligible_actions(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        open_finding = create_finding(db, tmp_path)
+        resolved_finding = create_finding(db, tmp_path, status=FindingStatus.resolved)
+        no_provider_id = RemediationAction(
+            finding_id=resolved_finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            metadata_json={"repository_id": str(resolved_finding.application.repository_id)},
+        )
+        open_action = RemediationAction(
+            finding_id=open_finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            provider_id="43",
+            metadata_json={"repository_id": str(open_finding.application.repository_id)},
+        )
+        closed_action = RemediationAction(
+            finding_id=resolved_finding.id,
+            action_type="github_issue",
+            status="closed",
+            provider="github",
+            provider_id="44",
+            metadata_json={"repository_id": str(resolved_finding.application.repository_id)},
+        )
+        db.add_all([no_provider_id, open_action, closed_action])
+        db.flush()
+        calls = []
+
+        def fake_patch(*args, **kwargs) -> FakeResponse:
+            calls.append((args, kwargs))
+            return FakeResponse(200)
+
+        monkeypatch.setattr("api.app.services.remediation.httpx.patch", fake_patch)
+
+        processed = process_github_issue_closures(
+            db,
+            finding_ids=[],
+            settings=Settings(github_token="token"),
+        )
+
+        assert processed == []
+        assert calls == []
