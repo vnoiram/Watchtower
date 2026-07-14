@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     smtp_from: str | None = None
     worker_poll_interval_seconds: int = 5
     worker_job_timeout_seconds: int = 1800
+    scan_scheduler_interval_seconds: int = 86400
+    scan_scheduler_stale_after_hours: int = 24
+    scan_scheduler_limit: int | None = None
+
+    @field_validator("scan_scheduler_limit", mode="before")
+    @classmethod
+    def empty_scan_scheduler_limit_is_none(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
 
 
 @lru_cache

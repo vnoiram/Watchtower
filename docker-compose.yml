@@ -58,6 +58,18 @@ services:
       - .:/app
       - worker-cache:/tmp/watchtower
 
+  scheduler:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: python -m worker.scheduler
+    volumes:
+      - .:/app
+
   frontend:
     build:
       context: .
@@ -72,4 +84,3 @@ volumes:
   postgres-data:
   minio-data:
   worker-cache:
-
