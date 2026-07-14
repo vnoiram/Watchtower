@@ -19,6 +19,7 @@ from api.app.models import (
     SourceClassification,
     Vulnerability,
 )
+from api.app.services.github import GitHubAuthError
 from api.app.services.remediation import (
     build_github_issue_payload,
     enqueue_github_issue_requests,
@@ -206,7 +207,94 @@ def test_process_github_issue_actions_creates_issue(monkeypatch, tmp_path: Path)
         assert calls[0][1]["json"]["title"].startswith("[Watchtower] high vulnerability")
 
 
-def test_process_github_issue_actions_fails_without_token(tmp_path: Path) -> None:
+def test_process_github_issue_actions_prefers_app_token(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path)
+        action = enqueue_github_issue_requests(db, finding_ids=[finding.id])[0]
+        repository = db.get(Repository, finding.application.repository_id)
+        tokens = []
+        posts = []
+
+        def fake_get_token(repository, settings: Settings) -> str:
+            tokens.append((repository.owner, repository.name, settings.github_app_id))
+            return "app-token"
+
+        def fake_post(url: str, **kwargs) -> FakeResponse:
+            posts.append((url, kwargs))
+            return FakeResponse(
+                201,
+                {
+                    "number": 42,
+                    "html_url": "https://github.com/local/demo/issues/42",
+                    "url": "https://api.github.com/repos/local/demo/issues/42",
+                },
+            )
+
+        monkeypatch.setattr(
+            "api.app.services.remediation.get_repository_installation_token",
+            fake_get_token,
+        )
+        monkeypatch.setattr("api.app.services.remediation.httpx.post", fake_post)
+
+        processed = process_github_issue_actions(
+            db,
+            action_ids=[action.id],
+            settings=Settings(
+                github_app_id="12345",
+                github_private_key="pem",
+                github_token="pat-token",
+            ),
+        )
+
+        assert processed == [action]
+        assert action.status == "created"
+        assert tokens == [(repository.owner, repository.name, "12345")]
+        assert posts[0][1]["headers"]["Authorization"] == "Bearer app-token"
+
+
+def test_process_github_issue_actions_fails_when_app_token_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path)
+        action = enqueue_github_issue_requests(db, finding_ids=[finding.id])[0]
+        calls = []
+
+        def fake_get_token(*args, **kwargs) -> str:
+            raise GitHubAuthError("github installation lookup failed with status 404: not found")
+
+        def fake_post(*args, **kwargs) -> FakeResponse:
+            calls.append((args, kwargs))
+            return FakeResponse(201, {"number": 42})
+
+        monkeypatch.setattr(
+            "api.app.services.remediation.get_repository_installation_token",
+            fake_get_token,
+        )
+        monkeypatch.setattr("api.app.services.remediation.httpx.post", fake_post)
+
+        processed = process_github_issue_actions(
+            db,
+            action_ids=[action.id],
+            settings=Settings(
+                github_app_id="12345",
+                github_private_key="pem",
+                github_token="pat-token",
+            ),
+        )
+
+        assert processed == [action]
+        assert action.status == "failed"
+        assert action.metadata_json["error"] == (
+            "github installation lookup failed with status 404: not found"
+        )
+        assert calls == []
+
+
+def test_process_github_issue_actions_fails_without_auth(tmp_path: Path) -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
         finding = create_finding(db, tmp_path)
@@ -216,7 +304,7 @@ def test_process_github_issue_actions_fails_without_token(tmp_path: Path) -> Non
 
         assert processed == [action]
         assert action.status == "failed"
-        assert action.metadata_json["error"] == "github_token is not configured"
+        assert action.metadata_json["error"] == "github authentication is not configured"
 
 
 def test_process_github_issue_actions_records_http_failure(monkeypatch, tmp_path: Path) -> None:

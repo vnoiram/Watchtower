@@ -7,6 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.app.config import Settings
+from api.app.services.github import (
+    GitHubAuthError,
+    get_repository_installation_token,
+    github_api_headers,
+    github_app_configured,
+)
 from api.app.models import (
     Application,
     Component,
@@ -117,12 +123,6 @@ def process_github_issue_actions(
             set_action_metadata(action, error=None, skipped_reason="github issue already created")
             processed.append(action)
             continue
-        if not settings.github_token:
-            action.status = "failed"
-            set_action_metadata(action, error="github_token is not configured")
-            processed.append(action)
-            continue
-
         payload = build_github_issue_payload(db, action)
         if isinstance(payload, str):
             action.status = "failed"
@@ -131,16 +131,24 @@ def process_github_issue_actions(
             continue
 
         repository = payload.pop("_repository")
+        token = github_issue_auth_token(repository, settings)
+        if isinstance(token, str) and not token:
+            action.status = "failed"
+            set_action_metadata(action, error="github authentication is not configured")
+            processed.append(action)
+            continue
+        if isinstance(token, GitHubAuthError):
+            action.status = "failed"
+            set_action_metadata(action, error=str(token))
+            processed.append(action)
+            continue
+
         api_url = GITHUB_ISSUES_API.format(owner=repository.owner, name=repository.name)
         try:
             response = httpx.post(
                 api_url,
                 json=payload,
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "Authorization": f"Bearer {settings.github_token}",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
+                headers=github_api_headers(token),
                 timeout=10.0,
             )
             if response.status_code < 200 or response.status_code >= 300:
@@ -176,6 +184,17 @@ def process_github_issue_actions(
             processed.append(action)
 
     return processed
+
+
+def github_issue_auth_token(repository: Repository, settings: Settings) -> str | GitHubAuthError:
+    if github_app_configured(settings):
+        try:
+            return get_repository_installation_token(repository, settings)
+        except GitHubAuthError as exc:
+            return exc
+    if settings.github_token:
+        return settings.github_token
+    return ""
 
 
 def select_issue_actions_for_creation(
