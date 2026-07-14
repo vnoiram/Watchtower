@@ -35,7 +35,7 @@ from api.app.services.notifications import deliver_notification, enqueue_finding
 from api.app.services.registry import detect_applications
 from api.app.services.remediation import (
     enqueue_github_issue_requests,
-    mark_issue_actions_pending_provider,
+    process_github_issue_actions,
 )
 from api.app.services.scanner import normalize_osv_results, normalize_trivy_results
 from api.app.services.sbom import upsert_source_sbom
@@ -305,10 +305,10 @@ def run_notification_job(db: Session, job: Job) -> None:
 
 def run_issue_create_job(db: Session, job: Job) -> None:
     action_ids = [UUID(str(raw_id)) for raw_id in job.payload.get("remediation_action_ids") or []]
-    actions = mark_issue_actions_pending_provider(db, action_ids=action_ids)
+    actions = process_github_issue_actions(db, action_ids=action_ids, settings=get_settings())
     if action_ids and len(actions) != len(action_ids):
         logger.warning(
-            "some remediation actions were not queued for issue creation job_id=%s expected=%s updated=%s",
+            "some remediation actions were not processed for issue creation job_id=%s expected=%s updated=%s",
             job.id,
             len(action_ids),
             len(actions),
