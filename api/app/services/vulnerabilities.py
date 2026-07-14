@@ -24,6 +24,7 @@ class FindingPersistenceResult:
     finding_count: int
     resolved_count: int
     notification_finding_ids: list[UUID]
+    resolved_finding_ids: list[UUID]
 
 
 def upsert_component(db: Session, finding: NormalizedFinding) -> Component:
@@ -131,7 +132,7 @@ def upsert_findings(
             notification_finding_ids.append(finding.id)
         seen_finding_ids.add(finding.id)
 
-    resolved_count = resolve_missing_findings(
+    resolved_finding_ids = resolve_missing_findings(
         db,
         application,
         seen_finding_ids=seen_finding_ids,
@@ -139,8 +140,9 @@ def upsert_findings(
     )
     return FindingPersistenceResult(
         finding_count=len(seen_keys),
-        resolved_count=resolved_count,
+        resolved_count=len(resolved_finding_ids),
         notification_finding_ids=notification_finding_ids,
+        resolved_finding_ids=resolved_finding_ids,
     )
 
 
@@ -150,9 +152,9 @@ def resolve_missing_findings(
     *,
     seen_finding_ids: set[object],
     resolved_sources: set[str] | None,
-) -> int:
+) -> list[UUID]:
     if resolved_sources is not None and not resolved_sources:
-        return 0
+        return []
 
     stmt = (
         select(Finding)
@@ -168,9 +170,9 @@ def resolve_missing_findings(
         stmt = stmt.where(Vulnerability.source.in_(resolved_sources))
 
     resolved_at = now_utc()
-    resolved_count = 0
+    resolved_finding_ids: list[UUID] = []
     for finding in db.scalars(stmt):
         finding.status = FindingStatus.resolved
         finding.resolved_at = resolved_at
-        resolved_count += 1
-    return resolved_count
+        resolved_finding_ids.append(finding.id)
+    return resolved_finding_ids

@@ -11,6 +11,7 @@ from api.app.models import (
     ApplicationType,
     Component,
     Finding,
+    FindingStatus,
     Job,
     JobType,
     Notification,
@@ -108,6 +109,7 @@ def test_scan_application_persists_successful_syft_sbom(monkeypatch, tmp_path: P
         assert scan.result_summary["resolved_count"] == 0
         assert scan.result_summary["notification_count"] == 0
         assert scan.result_summary["issue_request_count"] == 0
+        assert scan.result_summary["issue_close_request_count"] == 0
         assert scan.result_summary["scanner_failures"] == []
         assert store.keys == [
             f"repositories/{repo.id}/applications/{app.id}/scans/{scan.id}/source-sbom.cdx.json",
@@ -165,6 +167,7 @@ def test_scan_application_persists_vulnerability_findings(monkeypatch, tmp_path:
         assert scan.result_summary["finding_count"] == 1
         assert scan.result_summary["notification_count"] == 0
         assert scan.result_summary["issue_request_count"] == 0
+        assert scan.result_summary["issue_close_request_count"] == 0
         assert finding.severity == Severity.high
         assert finding.risk_score == 10.0
 
@@ -221,6 +224,7 @@ def test_scan_application_enqueues_chat_notifications(monkeypatch, tmp_path: Pat
         job = db.scalar(select(Job).where(Job.job_type == JobType.notification))
         assert scan.result_summary["notification_count"] == 2
         assert scan.result_summary["issue_request_count"] == 0
+        assert scan.result_summary["issue_close_request_count"] == 0
         assert {notification.channel for notification in notifications} == {"slack", "discord"}
         assert job
         assert set(job.payload["notification_ids"]) == {str(notification.id) for notification in notifications}
@@ -277,6 +281,7 @@ def test_scan_application_enqueues_github_issue_requests(monkeypatch, tmp_path: 
         action = db.scalar(select(RemediationAction))
         job = db.scalar(select(Job).where(Job.job_type == JobType.issue_create))
         assert scan.result_summary["issue_request_count"] == 1
+        assert scan.result_summary["issue_close_request_count"] == 0
         assert action.action_type == "github_issue"
         assert action.status == "queued"
         assert job
@@ -330,7 +335,79 @@ def test_scan_application_records_partial_success_for_scanner_failure(
         assert scan.result_summary["finding_count"] == 1
         assert scan.result_summary["notification_count"] == 0
         assert scan.result_summary["issue_request_count"] == 0
+        assert scan.result_summary["issue_close_request_count"] == 0
         assert db.scalar(select(Finding))
+
+
+def test_scan_application_enqueues_github_issue_closures(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        disable_notifications(monkeypatch)
+        repo, app = create_repo_and_app(db, tmp_path, provider=RepositoryProvider.github)
+        component = Component(
+            purl="pkg:pypi/demo@1.0.0",
+            ecosystem="PyPI",
+            name="demo",
+            version="1.0.0",
+        )
+        vulnerability = Vulnerability(
+            source="osv",
+            external_id="GHSA-123",
+            severity=Severity.high,
+            references=[],
+        )
+        db.add_all([component, vulnerability])
+        db.flush()
+        finding = Finding(
+            application_id=app.id,
+            component_id=component.id,
+            vulnerability_id=vulnerability.id,
+            status=FindingStatus.open,
+            severity=Severity.high,
+            fixed_version="1.0.1",
+            risk_score=8.0,
+        )
+        db.add(finding)
+        db.flush()
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            provider_id="42",
+            metadata_json={"finding_id": str(finding.id), "repository_id": str(repo.id)},
+        )
+        db.add(action)
+        db.flush()
+        store = FakeArtifactStore()
+
+        def fake_run_syft(_: Path, output_path: Path) -> dict:
+            payload = {
+                "bomFormat": "CycloneDX",
+                "specVersion": "1.6",
+                "components": [{"type": "library", "name": "demo", "version": "1.0.0"}],
+            }
+            output_path.write_text(json.dumps(payload), encoding="utf-8")
+            return payload
+
+        monkeypatch.setattr(runner, "run_syft", fake_run_syft)
+        monkeypatch.setattr(runner, "run_osv_scanner", lambda *_: {"results": []})
+        monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+
+        assert runner.scan_application(db, repo, app, tmp_path, store, tmp_path)
+        db.flush()
+
+        scan = db.scalar(select(Scan))
+        close_job = next(
+            job
+            for job in db.scalars(select(Job).where(Job.job_type == JobType.issue_create))
+            if job.payload.get("operation") == "close"
+        )
+        assert finding.status == FindingStatus.resolved
+        assert scan.result_summary["resolved_count"] == 1
+        assert scan.result_summary["issue_close_request_count"] == 1
+        assert close_job
+        assert close_job.payload == {"operation": "close", "finding_ids": [str(finding.id)]}
 
 
 def test_scan_application_records_failure_without_raising(monkeypatch, tmp_path: Path) -> None:
@@ -522,3 +599,54 @@ def test_run_issue_create_job_processes_all_when_payload_empty(monkeypatch, tmp_
         assert queued.status == "created"
         assert pending.status == "failed"
         assert created.status == "created"
+
+
+def test_run_issue_create_job_processes_close_operation(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo, app = create_repo_and_app(db, tmp_path, provider=RepositoryProvider.github)
+        component = Component(
+            purl="pkg:pypi/demo@1.0.0",
+            ecosystem="PyPI",
+            name="demo",
+            version="1.0.0",
+        )
+        vulnerability = Vulnerability(
+            source="osv",
+            external_id="GHSA-123",
+            severity=Severity.high,
+            references=[],
+        )
+        db.add_all([component, vulnerability])
+        db.flush()
+        finding = Finding(
+            application_id=app.id,
+            component_id=component.id,
+            vulnerability_id=vulnerability.id,
+            status=FindingStatus.resolved,
+            severity=Severity.high,
+            fixed_version="1.0.1",
+            risk_score=8.0,
+        )
+        db.add(finding)
+        db.flush()
+        job = Job(
+            job_type=JobType.issue_create,
+            repository_id=repo.id,
+            application_id=app.id,
+            payload={"operation": "close", "finding_ids": [str(finding.id)]},
+        )
+        db.add(job)
+        db.flush()
+        calls = []
+
+        def fake_close(db_arg: Session, *, finding_ids: list, settings: Settings) -> list[RemediationAction]:
+            calls.append((db_arg, finding_ids, settings))
+            return []
+
+        monkeypatch.setattr(runner, "process_github_issue_closures", fake_close)
+        monkeypatch.setattr(runner, "get_settings", lambda: Settings(github_token="token"))
+
+        runner.run_issue_create_job(db, job)
+
+        assert calls == [(db, [finding.id], runner.get_settings())]

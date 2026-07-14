@@ -35,6 +35,7 @@ from api.app.services.notifications import deliver_notification, enqueue_finding
 from api.app.services.registry import detect_applications
 from api.app.services.remediation import (
     enqueue_github_issue_requests,
+    process_github_issue_closures,
     process_github_issue_actions,
 )
 from api.app.services.scanner import normalize_osv_results, normalize_trivy_results
@@ -245,6 +246,17 @@ def scan_application(
                 application_id=app.id,
                 payload={"remediation_action_ids": [str(action.id) for action in issue_requests]},
             )
+        if persistence.resolved_finding_ids:
+            enqueue_job(
+                db,
+                JobType.issue_create,
+                repository_id=repo.id,
+                application_id=app.id,
+                payload={
+                    "operation": "close",
+                    "finding_ids": [str(finding_id) for finding_id in persistence.resolved_finding_ids],
+                },
+            )
         scan.status = ScanStatus.partially_succeeded if scanner_failures else ScanStatus.succeeded
         scan.completed_at = now_utc()
         scan.result_summary = {
@@ -255,6 +267,7 @@ def scan_application(
             "resolved_count": persistence.resolved_count,
             "notification_count": len(notifications),
             "issue_request_count": len(issue_requests),
+            "issue_close_request_count": len(persistence.resolved_finding_ids),
             "scanner_failures": scanner_failures,
             "artifacts": artifacts,
         }
@@ -304,6 +317,11 @@ def run_notification_job(db: Session, job: Job) -> None:
 
 
 def run_issue_create_job(db: Session, job: Job) -> None:
+    if job.payload.get("operation") == "close":
+        finding_ids = [UUID(str(raw_id)) for raw_id in job.payload.get("finding_ids") or []]
+        process_github_issue_closures(db, finding_ids=finding_ids, settings=get_settings())
+        return
+
     action_ids = [UUID(str(raw_id)) for raw_id in job.payload.get("remediation_action_ids") or []]
     actions = process_github_issue_actions(db, action_ids=action_ids, settings=get_settings())
     if action_ids and len(actions) != len(action_ids):

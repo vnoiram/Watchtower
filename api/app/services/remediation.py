@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timezone
 from uuid import UUID
 
 import httpx
@@ -23,13 +24,16 @@ from api.app.models import (
     RepositoryProvider,
     Severity,
     Vulnerability,
+    now_utc,
 )
 
 ACTION_TYPE_GITHUB_ISSUE = "github_issue"
-OPEN_REMEDIATION_STATUSES = {"queued", "pending_provider", "created", "in_progress"}
+OPEN_REMEDIATION_STATUSES = {"queued", "pending_provider", "created", "in_progress", "close_failed"}
 ISSUE_ELIGIBLE_SEVERITIES = {Severity.critical, Severity.high}
 ISSUE_CREATE_STATUSES = {"queued", "pending_provider"}
+ISSUE_CLOSE_STATUSES = {"created", "close_failed"}
 GITHUB_ISSUES_API = "https://api.github.com/repos/{owner}/{name}/issues"
+GITHUB_ISSUE_API = "https://api.github.com/repos/{owner}/{name}/issues/{issue_number}"
 
 
 def enqueue_github_issue_requests(
@@ -197,6 +201,126 @@ def github_issue_auth_token(repository: Repository, settings: Settings) -> str |
     return ""
 
 
+def process_github_issue_closures(
+    db: Session,
+    *,
+    finding_ids: list[UUID],
+    settings: Settings,
+) -> list[RemediationAction]:
+    actions = list(select_issue_actions_for_closure(db, finding_ids=finding_ids))
+    processed: list[RemediationAction] = []
+
+    for action in actions:
+        if not action.provider_id:
+            continue
+        close_context = build_github_issue_close_context(db, action)
+        if isinstance(close_context, str):
+            action.status = "close_failed"
+            set_action_metadata(action, close_error=close_context)
+            processed.append(action)
+            continue
+
+        repository = close_context
+        token = github_issue_auth_token(repository, settings)
+        if isinstance(token, str) and not token:
+            action.status = "close_failed"
+            set_action_metadata(action, close_error="github authentication is not configured")
+            processed.append(action)
+            continue
+        if isinstance(token, GitHubAuthError):
+            action.status = "close_failed"
+            set_action_metadata(action, close_error=str(token))
+            processed.append(action)
+            continue
+
+        api_url = GITHUB_ISSUE_API.format(
+            owner=repository.owner,
+            name=repository.name,
+            issue_number=action.provider_id,
+        )
+        try:
+            response = httpx.patch(
+                api_url,
+                json={"state": "closed", "state_reason": "completed"},
+                headers=github_api_headers(token),
+                timeout=10.0,
+            )
+            if response.status_code < 200 or response.status_code >= 300:
+                action.status = "close_failed"
+                set_action_metadata(
+                    action,
+                    close_error=f"github issue close failed with status {response.status_code}: {response.text}",
+                )
+                processed.append(action)
+                continue
+
+            action.status = "closed"
+            closed_at = now_utc().astimezone(timezone.utc).isoformat()
+            metadata = dict(action.metadata_json or {})
+            metadata["github_issue_closed_at"] = closed_at
+            metadata["close_api_url"] = api_url
+            metadata.pop("close_error", None)
+            action.metadata_json = metadata
+            processed.append(action)
+        except Exception as exc:  # noqa: BLE001
+            action.status = "close_failed"
+            set_action_metadata(action, close_error=f"github issue close failed: {exc}")
+            processed.append(action)
+
+    return processed
+
+
+def select_issue_actions_for_closure(
+    db: Session,
+    *,
+    finding_ids: list[UUID],
+):
+    stmt = (
+        select(RemediationAction)
+        .join(Finding, RemediationAction.finding_id == Finding.id)
+        .where(
+            RemediationAction.action_type == ACTION_TYPE_GITHUB_ISSUE,
+            RemediationAction.provider == "github",
+            RemediationAction.status.in_(ISSUE_CLOSE_STATUSES),
+            RemediationAction.provider_id.is_not(None),
+            Finding.status == FindingStatus.resolved,
+        )
+    )
+    if finding_ids:
+        stmt = stmt.where(RemediationAction.finding_id.in_(finding_ids))
+    return db.scalars(stmt)
+
+
+def build_github_issue_close_context(db: Session, action: RemediationAction) -> Repository | str:
+    finding = db.get(Finding, action.finding_id)
+    if not finding:
+        return f"finding not found: {action.finding_id}"
+    if finding.status != FindingStatus.resolved:
+        return "finding is not resolved"
+
+    metadata = action.metadata_json or {}
+    repository_id = metadata.get("repository_id")
+    if not repository_id:
+        application = db.get(Application, finding.application_id)
+        if not application:
+            return "finding is missing application"
+        repository_id = application.repository_id
+
+    try:
+        repository_uuid = UUID(str(repository_id))
+    except ValueError:
+        return f"repository_id is not a valid UUID: {repository_id}"
+
+    repository = db.get(Repository, repository_uuid)
+    if not repository:
+        return f"repository not found: {repository_id}"
+    if repository.provider != RepositoryProvider.github:
+        return f"repository provider is not github: {repository.provider.value}"
+    if not repository.owner or not repository.name:
+        return "github repository owner/name is missing"
+    return repository
+
+
 def select_issue_actions_for_creation(
     db: Session,
     *,
@@ -291,7 +415,8 @@ def build_github_issue_payload(
 def set_action_metadata(
     action: RemediationAction,
     *,
-    error: str | None,
+    error: str | None = None,
+    close_error: str | None = None,
     skipped_reason: str | None = None,
 ) -> None:
     metadata = dict(action.metadata_json or {})
@@ -299,6 +424,10 @@ def set_action_metadata(
         metadata.pop("error", None)
     else:
         metadata["error"] = error
+    if close_error is None:
+        metadata.pop("close_error", None)
+    else:
+        metadata["close_error"] = close_error
     if skipped_reason:
         metadata["skipped_reason"] = skipped_reason
     action.metadata_json = metadata
