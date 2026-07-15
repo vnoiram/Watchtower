@@ -16,6 +16,7 @@ from api.app.routers.operations import manual_action_count, manual_workload_coun
 from api.app.routers.remediation import stale_remediation_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.sla import count_sla_breached_findings
+from api.app.routers.storage import retention_review_count
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -61,6 +62,7 @@ def dashboard_summary(
     stale_remediation_items = stale_remediation_count(db)
     manual_actions = manual_action_count(db)
     exposure_items = exposure_review_count(db)
+    retention_items = retention_review_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -82,4 +84,5 @@ def dashboard_summary(
         stale_remediation_items=stale_remediation_items,
         manual_action_count=manual_actions,
         exposure_review_items=exposure_items,
+        retention_review_items=retention_items,
     )

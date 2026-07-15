@@ -41,9 +41,9 @@ from api.app.routers.audit_logs import list_audit_logs
 from api.app.routers.application_detection import list_application_detection
 from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
-from api.app.routers.artifacts import list_artifacts
+from api.app.routers.artifacts import list_artifact_sbom_coverage, list_artifacts
 from api.app.routers.auto_merge import list_auto_merge_eligibility
-from api.app.routers.components import list_component_applications, list_components
+from api.app.routers.components import list_component_applications, list_components, list_license_review
 from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
 from api.app.routers.findings import list_findings
@@ -79,10 +79,11 @@ from api.app.routers.rollout import list_repository_rollout
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.scanner_inventory import list_scanner_inventory
 from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
+from api.app.routers.security import data_protection, list_security_findings
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sboms
 from api.app.routers.sla import list_sla_findings
-from api.app.routers.storage import list_storage_cleanup_candidates
+from api.app.routers.storage import list_storage_cleanup_candidates, retention_review
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_statements
 from api.app.routers.vulnerabilities import list_vulnerabilities
@@ -1565,6 +1566,194 @@ def test_list_auto_merge_scope_reports_scope_risks_and_validation_state() -> Non
         assert by_name[risky.name]["blocked_action_count"] == 1
         assert by_name[safe.name]["recent_validation"] is True
         assert by_name[safe.name]["reasons"] == []
+
+
+def test_data_protection_reports_configuration_without_secret_values() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={"artifacts": {"source_sbom": {"storage_key": "source.json"}}},
+        )
+        db.add(scan)
+        db.flush()
+        db.add(
+            Sbom(
+                application_id=app.id,
+                scan_id=scan.id,
+                sbom_digest="missing-storage-key",
+                storage_key="",
+                active=True,
+                sbom_kind="source",
+            )
+        )
+        db.flush()
+        settings = Settings(
+            github_token="secret-token",
+            github_webhook_secret="webhook-secret",
+            minio_secret_key="minio-secret",
+        )
+
+        rows = data_protection(db=db, settings=settings, _=None)
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["object_storage"].configured is True
+        assert by_check["github_secrets"].configured is True
+        assert by_check["sbom_storage_keys"].configured is False
+        assert by_check["sbom_storage_keys"].count == 1
+        assert by_check["stored_artifacts"].count == 1
+        rendered = " ".join(row.detail for row in rows)
+        assert "secret-token" not in rendered
+        assert "webhook-secret" not in rendered
+        assert "minio-secret" not in rendered
+
+
+def test_retention_review_reports_old_artifacts_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        old_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=91),
+            result_summary={"artifacts": {"osv": {"storage_key": "old-osv.json", "digest": "old"}}},
+        )
+        current_scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        old_log = AuditLog(
+            actor="operator",
+            role="operator",
+            action="scan.create",
+            resource_type="scan",
+            resource_id="old",
+            metadata_json={},
+            created_at=now_utc() - timedelta(days=91),
+        )
+        db.add_all([old_scan, current_scan, old_log])
+        db.flush()
+        db.add(
+            Sbom(
+                application_id=app.id,
+                scan_id=current_scan.id,
+                sbom_digest="inactive-retention",
+                storage_key="inactive-retention.json",
+                active=False,
+            )
+        )
+        db.flush()
+
+        rows = retention_review(db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_item = {row.item: row for row in rows}
+        assert by_item["old_scan_artifacts"].count == 1
+        assert by_item["inactive_sboms"].count == 1
+        assert by_item["old_audit_logs"].count == 1
+        assert by_item["cleanup_candidates"].count == 2
+        assert summary.retention_review_items == 5
+
+
+def test_list_artifact_sbom_coverage_reports_artifact_sbom_sources() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        covered = create_application(db, repo, "artifact-covered")
+        missing = create_application(db, repo, "artifact-missing")
+        scan = Scan(
+            application_id=covered.id,
+            status=ScanStatus.succeeded,
+            result_summary={"artifacts": {"container_sbom": {"storage_key": "container.cdx.json"}}},
+        )
+        db.add(scan)
+        db.flush()
+        db.add(
+            Sbom(
+                application_id=covered.id,
+                scan_id=scan.id,
+                sbom_kind="container",
+                sbom_digest="container-digest",
+                storage_key="container.cdx.json",
+                active=True,
+            )
+        )
+        db.flush()
+
+        all_page = list_artifact_sbom_coverage(db=db, _=None)
+        missing_page = list_artifact_sbom_coverage(missing=True, db=db, _=None)
+
+        by_name = {item["application_name"]: item for item in all_page.items}
+        assert by_name[covered.name]["has_artifact_sbom"] is True
+        assert by_name[covered.name]["artifact_types"] == ["container_sbom"]
+        assert [item["application_name"] for item in missing_page.items] == [missing.name]
+
+
+def test_list_license_review_reports_missing_unknown_and_copyleft_components() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        db.add(scan)
+        db.flush()
+        sbom = Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="license-sbom", storage_key="license.json")
+        missing = Component(purl="pkg:pypi/missing@1", ecosystem="pypi", name="missing", version="1")
+        unknown = Component(purl="pkg:pypi/unknown@1", ecosystem="pypi", name="unknown", version="1", license="unknown")
+        copyleft = Component(purl="pkg:npm/gpl@1", ecosystem="npm", name="gpl", version="1", license="GPL-3.0")
+        permissive = Component(purl="pkg:pypi/mit@1", ecosystem="pypi", name="mit", version="1", license="MIT")
+        db.add_all([sbom, missing, unknown, copyleft, permissive])
+        db.flush()
+        db.add_all(
+            [
+                SbomComponent(sbom_id=sbom.id, component_id=missing.id),
+                SbomComponent(sbom_id=sbom.id, component_id=unknown.id),
+                SbomComponent(sbom_id=sbom.id, component_id=copyleft.id),
+                SbomComponent(sbom_id=sbom.id, component_id=permissive.id),
+            ]
+        )
+        db.flush()
+
+        page = list_license_review(db=db, _=None)
+        npm_page = list_license_review(issue_type="copyleft_license", ecosystem="npm", db=db, _=None)
+
+        issues = {(item["component_name"], item["issue_type"]) for item in page.items}
+        assert issues == {
+            ("gpl", "copyleft_license"),
+            ("missing", "missing_license"),
+            ("unknown", "unknown_license"),
+        }
+        assert [item["component_name"] for item in npm_page.items] == ["gpl"]
+        assert npm_page.items[0]["application_name"] == app.name
+
+
+def test_list_security_findings_extracts_scan_summary_findings() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={
+                "secrets": [{"severity": "critical", "title": "AWS key", "path": ".env"}],
+                "sast": [{"severity": "high", "rule_id": "sql-injection", "message": "unsafe query"}],
+                "license_findings": [{"severity": "medium", "title": "GPL dependency"}],
+                "security_findings": [{"severity": "low", "title": "generic hardening"}],
+            },
+        )
+        db.add(scan)
+        db.flush()
+
+        page = list_security_findings(db=db, _=None)
+        filtered = list_security_findings(finding_type="sast", severity="high", db=db, _=None)
+
+        types = {item["finding_type"] for item in page.items}
+        assert types == {"license", "sast", "secret", "security"}
+        assert [item["title"] for item in filtered.items] == ["sql-injection"]
+        assert filtered.items[0]["application_name"] == app.name
+        assert filtered.items[0]["scan_status"] == "succeeded"
 
 
 def test_list_artifacts_returns_scan_artifact_context_and_filters() -> None:

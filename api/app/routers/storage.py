@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.app import models, schemas
@@ -25,6 +25,34 @@ def list_storage_cleanup_candidates(
     items.extend(_failed_scans_without_sbom(db))
     items.sort(key=lambda item: item["created_at"], reverse=True)
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/retention", response_model=list[schemas.RetentionReviewOut])
+def retention_review(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return retention_review_items(db)
+
+
+def retention_review_count(db: Session) -> int:
+    return sum(item.count for item in retention_review_items(db))
+
+
+def retention_review_items(db: Session) -> list[schemas.RetentionReviewOut]:
+    cutoff_90 = datetime.now(timezone.utc) - timedelta(days=90)
+    old_scan_artifacts = len(_old_scan_artifacts(db, cutoff_90))
+    inactive_sboms = db.scalar(
+        select(func.count()).select_from(models.Sbom).where(models.Sbom.active.is_(False))
+    ) or 0
+    old_audit_logs = sum(1 for log in db.scalars(select(models.AuditLog)) if _before(log.created_at, cutoff_90))
+    cleanup_candidates = len(list_storage_cleanup_candidates(db=db, _=None).items)
+    return [
+        _retention_item("old_scan_artifacts", old_scan_artifacts, "Scan artifacts older than 90 days"),
+        _retention_item("inactive_sboms", inactive_sboms, "Inactive SBOM records eligible for review"),
+        _retention_item("old_audit_logs", old_audit_logs, "Audit logs older than 90 days"),
+        _retention_item("cleanup_candidates", cleanup_candidates, "Storage cleanup candidates awaiting review"),
+    ]
 
 
 def _inactive_sboms(db: Session) -> list[dict]:
@@ -146,3 +174,12 @@ def _before(value: datetime, cutoff: datetime) -> bool:
     if value.tzinfo is None:
         cutoff = cutoff.replace(tzinfo=None)
     return value < cutoff
+
+
+def _retention_item(item: str, count: int, detail: str) -> schemas.RetentionReviewOut:
+    return schemas.RetentionReviewOut(
+        item=item,
+        status="warn" if count else "ok",
+        count=count,
+        detail=detail,
+    )

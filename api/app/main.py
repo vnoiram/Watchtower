@@ -32,6 +32,7 @@ from api.app.routers import (
     scan_health,
     scans,
     scanner_inventory,
+    security,
     sla,
     storage,
     technologies,
@@ -67,6 +68,7 @@ app.include_router(governance.router, prefix=api_prefix)
 app.include_router(vex.router, prefix=api_prefix)
 app.include_router(scan_health.router, prefix=api_prefix)
 app.include_router(scanner_inventory.router, prefix=api_prefix)
+app.include_router(security.router, prefix=api_prefix)
 app.include_router(maintenance.router, prefix=api_prefix)
 app.include_router(job_health.router, prefix=api_prefix)
 app.include_router(exceptions.router, prefix=api_prefix)
