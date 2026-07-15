@@ -28,6 +28,7 @@ from api.app.models import (
 )
 
 ACTION_TYPE_GITHUB_ISSUE = "github_issue"
+ACTION_TYPE_AI_FIX = "ai_fix"
 OPEN_REMEDIATION_STATUSES = {"queued", "pending_provider", "created", "in_progress", "close_failed"}
 ISSUE_ELIGIBLE_SEVERITIES = {Severity.critical, Severity.high}
 ISSUE_CREATE_STATUSES = {"queued", "pending_provider"}
@@ -81,6 +82,61 @@ def enqueue_github_issue_requests(
     return created
 
 
+def enqueue_ai_fix_requests(
+    db: Session,
+    *,
+    finding_ids: list[UUID] | None = None,
+    application_id: UUID | None = None,
+) -> list[RemediationAction]:
+    target_finding_ids = finding_ids or []
+    if target_finding_ids:
+        findings = list(db.scalars(select(Finding).where(Finding.id.in_(target_finding_ids))))
+        found_ids = {finding.id for finding in findings}
+        missing_ids = [str(finding_id) for finding_id in target_finding_ids if finding_id not in found_ids]
+        if missing_ids:
+            raise RuntimeError(f"finding not found: {', '.join(missing_ids)}")
+    elif application_id:
+        findings = list(
+            db.scalars(
+                select(Finding).where(
+                    Finding.application_id == application_id,
+                    Finding.status == FindingStatus.open,
+                )
+            )
+        )
+    else:
+        return []
+
+    created: list[RemediationAction] = []
+    for finding in findings:
+        if finding.status != FindingStatus.open:
+            continue
+        if not finding.fixed_version:
+            continue
+        if ai_fix_action_exists(db, finding_id=finding.id):
+            continue
+
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type=ACTION_TYPE_AI_FIX,
+            status="queued",
+            provider="watchtower",
+            fixed_version=finding.fixed_version,
+            metadata_json={
+                "finding_id": str(finding.id),
+                "application_id": str(finding.application_id),
+                "severity": finding.severity.value,
+                "fixed_version": finding.fixed_version,
+                "component_id": str(finding.component_id),
+                "vulnerability_id": str(finding.vulnerability_id),
+            },
+        )
+        db.add(action)
+        db.flush()
+        created.append(action)
+    return created
+
+
 def should_create_github_issue(db: Session, finding: Finding | None) -> bool:
     if not finding:
         return False
@@ -104,6 +160,17 @@ def github_issue_action_exists(db: Session, *, finding_id: UUID) -> bool:
             RemediationAction.finding_id == finding_id,
             RemediationAction.action_type == ACTION_TYPE_GITHUB_ISSUE,
             RemediationAction.provider == "github",
+            RemediationAction.status.in_(OPEN_REMEDIATION_STATUSES),
+        )
+    )
+    return action is not None
+
+
+def ai_fix_action_exists(db: Session, *, finding_id: UUID) -> bool:
+    action = db.scalar(
+        select(RemediationAction).where(
+            RemediationAction.finding_id == finding_id,
+            RemediationAction.action_type == ACTION_TYPE_AI_FIX,
             RemediationAction.status.in_(OPEN_REMEDIATION_STATUSES),
         )
     )

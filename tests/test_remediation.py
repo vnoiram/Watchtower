@@ -21,6 +21,7 @@ from api.app.models import (
 )
 from api.app.services.github import GitHubAuthError
 from api.app.services.remediation import (
+    enqueue_ai_fix_requests,
     build_github_issue_payload,
     enqueue_github_issue_requests,
     process_github_issue_closures,
@@ -139,6 +140,85 @@ def test_enqueue_github_issue_requests_suppresses_duplicates(tmp_path: Path) -> 
         assert len(first) == 1
         assert second == []
         assert len(list(db.scalars(select(RemediationAction)))) == 1
+
+
+def test_enqueue_ai_fix_requests_creates_remediation_action(tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        finding = create_finding(db, tmp_path, severity=Severity.high)
+
+        actions = enqueue_ai_fix_requests(db, finding_ids=[finding.id])
+
+        assert len(actions) == 1
+        action = actions[0]
+        assert action.action_type == "ai_fix"
+        assert action.provider == "watchtower"
+        assert action.status == "queued"
+        assert action.fixed_version == "1.0.1"
+        assert action.metadata_json == {
+            "finding_id": str(finding.id),
+            "application_id": str(finding.application_id),
+            "severity": "high",
+            "fixed_version": "1.0.1",
+            "component_id": str(finding.component_id),
+            "vulnerability_id": str(finding.vulnerability_id),
+        }
+
+
+def test_enqueue_ai_fix_requests_skips_ineligible_and_duplicate_findings(tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        resolved = create_finding(db, tmp_path, status=FindingStatus.resolved)
+        no_fix = create_finding(db, tmp_path, fixed_version=None)
+        duplicate = create_finding(db, tmp_path)
+        existing = RemediationAction(
+            finding_id=duplicate.id,
+            action_type="ai_fix",
+            status="queued",
+            provider="watchtower",
+            fixed_version=duplicate.fixed_version,
+            metadata_json={"finding_id": str(duplicate.id)},
+        )
+        db.add(existing)
+        db.flush()
+
+        actions = enqueue_ai_fix_requests(
+            db,
+            finding_ids=[resolved.id, no_fix.id, duplicate.id],
+        )
+
+        assert actions == []
+        assert list(db.scalars(select(RemediationAction))) == [existing]
+
+
+def test_enqueue_ai_fix_requests_raises_for_missing_finding_id(tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        missing_id = uuid4()
+        create_finding(db, tmp_path)
+
+        try:
+            enqueue_ai_fix_requests(db, finding_ids=[missing_id])
+        except RuntimeError as exc:
+            assert str(exc) == f"finding not found: {missing_id}"
+        else:
+            raise AssertionError("expected RuntimeError")
+
+
+def test_enqueue_ai_fix_requests_filters_by_application_id(tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        target = create_finding(db, tmp_path)
+        other = create_finding(db, tmp_path)
+
+        actions = enqueue_ai_fix_requests(db, application_id=target.application_id)
+
+        assert len(actions) == 1
+        assert actions[0].finding_id == target.id
+        assert actions[0].metadata_json["application_id"] == str(target.application_id)
+        action_findings = [action.finding_id for action in db.scalars(select(RemediationAction))]
+        assert action_findings == [target.id]
+        assert other.id not in action_findings
 
 
 class FakeResponse:

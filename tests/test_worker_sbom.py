@@ -76,6 +76,41 @@ def create_repo_and_app(
     return repo, app
 
 
+def create_finding(
+    db: Session,
+    app: Application,
+    *,
+    status: FindingStatus = FindingStatus.open,
+    fixed_version: str | None = "1.0.1",
+) -> Finding:
+    component = Component(
+        purl=f"pkg:pypi/demo-{app.id}@1.0.0",
+        ecosystem="PyPI",
+        name=f"demo-{app.id}",
+        version="1.0.0",
+    )
+    vulnerability = Vulnerability(
+        source="osv",
+        external_id=f"GHSA-{app.id}",
+        severity=Severity.high,
+        references=[],
+    )
+    db.add_all([component, vulnerability])
+    db.flush()
+    finding = Finding(
+        application_id=app.id,
+        component_id=component.id,
+        vulnerability_id=vulnerability.id,
+        status=status,
+        severity=Severity.high,
+        fixed_version=fixed_version,
+        risk_score=8.0,
+    )
+    db.add(finding)
+    db.flush()
+    return finding
+
+
 def disable_notifications(monkeypatch) -> None:
     monkeypatch.setattr(runner, "get_settings", lambda: Settings())
 
@@ -877,6 +912,90 @@ def test_handle_job_dispatches_remediation_validation(monkeypatch) -> None:
             "run_remediation_validation_job",
             fake_run_remediation_validation_job,
         )
+
+        runner.handle_job(db, job)
+
+        assert calls == [(db, job)]
+
+
+def test_run_ai_fix_job_passes_finding_ids_to_service(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        _, app = create_repo_and_app(db, tmp_path)
+        finding = create_finding(db, app)
+        job = Job(job_type=JobType.ai_fix, payload={"finding_ids": [str(finding.id)]})
+        db.add(job)
+        db.flush()
+        calls = []
+
+        def fake_enqueue_ai_fix_requests(
+            db_arg: Session,
+            *,
+            finding_ids: list,
+            application_id,
+        ) -> list[RemediationAction]:
+            calls.append((db_arg, finding_ids, application_id))
+            return []
+
+        monkeypatch.setattr(runner, "enqueue_ai_fix_requests", fake_enqueue_ai_fix_requests)
+
+        runner.run_ai_fix_job(db, job)
+
+        assert calls == [(db, [finding.id], None)]
+
+
+def test_run_ai_fix_job_supports_application_id(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        _, app = create_repo_and_app(db, tmp_path)
+        job = Job(job_type=JobType.ai_fix, payload={"application_id": str(app.id)})
+        db.add(job)
+        db.flush()
+        calls = []
+
+        def fake_enqueue_ai_fix_requests(
+            db_arg: Session,
+            *,
+            finding_ids: list,
+            application_id,
+        ) -> list[RemediationAction]:
+            calls.append((db_arg, finding_ids, application_id))
+            return []
+
+        monkeypatch.setattr(runner, "enqueue_ai_fix_requests", fake_enqueue_ai_fix_requests)
+
+        runner.run_ai_fix_job(db, job)
+
+        assert calls == [(db, [], app.id)]
+
+
+def test_run_ai_fix_job_requires_target() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        job = Job(job_type=JobType.ai_fix, payload={})
+        db.add(job)
+        db.flush()
+
+        try:
+            runner.run_ai_fix_job(db, job)
+        except RuntimeError as exc:
+            assert str(exc) == "ai fix job requires finding_ids or application_id"
+        else:
+            raise AssertionError("expected RuntimeError")
+
+
+def test_handle_job_dispatches_ai_fix(monkeypatch) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        job = Job(job_type=JobType.ai_fix, payload={"finding_ids": []})
+        db.add(job)
+        db.flush()
+        calls = []
+
+        def fake_run_ai_fix_job(db_arg: Session, job_arg: Job) -> None:
+            calls.append((db_arg, job_arg))
+
+        monkeypatch.setattr(runner, "run_ai_fix_job", fake_run_ai_fix_job)
 
         runner.handle_job(db, job)
 
