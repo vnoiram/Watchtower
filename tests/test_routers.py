@@ -41,6 +41,7 @@ from api.app.routers.audit_logs import list_audit_logs
 from api.app.routers.application_detection import list_application_detection
 from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
+from api.app.routers.audit import list_audit_review
 from api.app.routers.artifacts import list_artifact_sbom_coverage, list_artifacts
 from api.app.routers.auto_merge import list_auto_merge_eligibility
 from api.app.routers.components import list_component_applications, list_components, list_license_review
@@ -53,6 +54,7 @@ from api.app.routers.governance import (
     list_auto_merge_scope,
     list_exposure_review,
     list_ownership_review,
+    list_risk_acceptance_review,
     list_runtime_eol,
 )
 from api.app.routers.isolated_lane import list_isolated_lane
@@ -67,6 +69,7 @@ from api.app.routers.operations import (
     list_manual_actions,
     operational_workload,
     operations_readiness,
+    restore_readiness,
     weekly_review,
 )
 from api.app.routers.quality import list_duplicate_review, list_reopen_risk
@@ -81,12 +84,12 @@ from api.app.routers.remediation import (
 )
 from api.app.routers.remediation_actions import list_remediation_actions
 from api.app.routers.repository_sync import list_repository_sync
-from api.app.routers.rollout import list_repository_rollout
+from api.app.routers.rollout import list_repository_rollout, list_rollout_gaps
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.scanner_inventory import list_scanner_inventory
 from api.app.routers.scanner_versions import list_scanner_versions
 from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
-from api.app.routers.security import data_protection, list_security_findings
+from api.app.routers.security import data_protection, list_security_findings, rbac_review
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sboms
 from api.app.routers.sla import list_sla_findings
@@ -2049,6 +2052,212 @@ def test_list_runtime_eol_reports_missing_old_major_and_component_context() -> N
         assert ("technology", "java", "old_major") not in issues
         assert [item["name"] for item in missing_page.items] == ["node"]
         assert missing_page.items[0]["application_name"] == app.name
+
+
+def test_list_audit_review_reports_manual_config_privileged_and_failure_events() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        manual = AuditLog(
+            actor="operator",
+            role="operator",
+            action="scan.create",
+            resource_type="scan",
+            resource_id="scan-1",
+            metadata_json={},
+        )
+        config = AuditLog(
+            actor="admin",
+            role="admin",
+            action="repository.create",
+            resource_type="repository",
+            resource_id="repo-1",
+            metadata_json={},
+        )
+        failure = AuditLog(
+            actor="worker",
+            role="admin",
+            action="backup.restore",
+            resource_type="backup",
+            resource_id="backup-1",
+            metadata_json={"error": "object missing"},
+        )
+        skipped = AuditLog(
+            actor="viewer",
+            role="viewer",
+            action="repository.view",
+            resource_type="repository",
+            resource_id="repo-2",
+            metadata_json={},
+        )
+        db.add_all([manual, config, failure, skipped])
+        db.flush()
+
+        page = list_audit_review(db=db, _=None)
+        manual_page = list_audit_review(reason="privileged_non_admin", role="operator", db=db, _=None)
+
+        by_id = {item["id"]: item for item in page.items}
+        assert set(by_id) == {str(manual.id), str(config.id), str(failure.id)}
+        assert by_id[str(manual.id)]["reason"] == "privileged_non_admin"
+        assert by_id[str(config.id)]["reason"] == "configuration_change"
+        assert by_id[str(failure.id)]["reason"] == "failure_event"
+        assert [item["id"] for item in manual_page.items] == [str(manual.id)]
+
+
+def test_rbac_review_reports_default_token_role_and_non_admin_privileged_actions() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        db.add_all(
+            [
+                AuditLog(
+                    actor="operator",
+                    role="operator",
+                    action="repository.create",
+                    resource_type="repository",
+                    resource_id="repo-1",
+                    metadata_json={},
+                ),
+                AuditLog(
+                    actor="viewer",
+                    role="viewer",
+                    action="repository.view",
+                    resource_type="repository",
+                    resource_id="repo-2",
+                    metadata_json={},
+                ),
+            ]
+        )
+        db.flush()
+        settings = Settings(api_token="change-me", api_default_role="admin")
+
+        rows = rbac_review(db=db, settings=settings, _=None)
+        summary = dashboard_summary(db=db, settings=settings, _=None)
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["default_api_token"].status == "fail"
+        assert by_check["default_role_admin"].status == "warn"
+        assert by_check["non_admin_privileged_actions"].count == 1
+        assert by_check["audit_role_coverage"].count == 2
+        assert summary.rbac_review_items == 3
+
+
+def test_restore_readiness_reports_storage_artifacts_and_restore_exercise() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        with_artifact = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={"artifacts": {"source_sbom": {"storage_key": "source.json"}}},
+        )
+        missing_artifact = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        restore_log = AuditLog(
+            actor="admin",
+            role="admin",
+            action="restore.verify",
+            resource_type="backup",
+            resource_id="restore-1",
+            metadata_json={},
+            created_at=now_utc(),
+        )
+        db.add_all([with_artifact, missing_artifact, restore_log])
+        db.flush()
+        db.add_all(
+            [
+                Sbom(
+                    application_id=app.id,
+                    scan_id=with_artifact.id,
+                    sbom_digest="restore-active",
+                    storage_key="restore-active.json",
+                    active=True,
+                    sbom_kind="source",
+                ),
+                Sbom(
+                    application_id=app.id,
+                    scan_id=missing_artifact.id,
+                    sbom_digest="restore-missing-key",
+                    storage_key="",
+                    active=True,
+                    sbom_kind="source",
+                ),
+            ]
+        )
+        db.flush()
+        settings = Settings(minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket="")
+
+        rows = restore_readiness(db=db, settings=settings, _=None)
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["object_storage"].status == "fail"
+        assert by_check["sbom_storage_keys"].status == "fail"
+        assert by_check["sbom_storage_keys"].count == 1
+        assert by_check["source_sbom_artifacts"].status == "warn"
+        assert by_check["restore_exercise_30d"].status == "ok"
+        assert by_check["restore_exercise_30d"].count == 1
+
+
+def test_list_risk_acceptance_review_reports_accepted_risk_and_vex_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        accepted = create_finding(db, app, severity=Severity.high, status=FindingStatus.accepted_risk)
+        vex_finding = create_finding(db, app, severity=Severity.medium)
+        db.add(
+            VexStatement(
+                finding_id=vex_finding.id,
+                status=VexStatus.not_affected,
+                justification="not reachable",
+                approved_by="security",
+                review_date=now_utc() - timedelta(days=1),
+            )
+        )
+        db.flush()
+
+        page = list_risk_acceptance_review(db=db, _=None)
+        expired_page = list_risk_acceptance_review(expired=True, source="vex", db=db, _=None)
+        severity_page = list_risk_acceptance_review(severity=Severity.high, source="finding", db=db, _=None)
+
+        sources = {(item["source"], item["finding_id"]) for item in page.items}
+        assert sources == {("finding", str(accepted.id)), ("vex", str(vex_finding.id))}
+        assert [item["finding_id"] for item in expired_page.items] == [str(vex_finding.id)]
+        assert expired_page.items[0]["expired"] is True
+        assert expired_page.items[0]["application_name"] == app.name
+        assert [item["finding_id"] for item in severity_page.items] == [str(accepted.id)]
+
+
+def test_list_rollout_gaps_reports_deployment_blockers_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        empty_repo = create_repository(db, "empty-rollout")
+        repo = create_repository(db, "rollout")
+        app = create_application(db, repo, "rollout-app")
+        stale_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=31),
+        )
+        db.add(stale_scan)
+        finding = create_finding(db, app, severity=Severity.critical)
+        db.flush()
+
+        page = list_rollout_gaps(db=db, _=None)
+        owner_page = list_rollout_gaps(issue_type="missing_owner", db=db, _=None)
+        summary = dashboard_summary(
+            db=db,
+            settings=Settings(api_token="custom-token", api_default_role="operator"),
+            _=None,
+        )
+
+        issues = {(item["issue_type"], item["repository_name"], item["application_name"]) for item in page.items}
+        assert ("missing_application", empty_repo.name, None) in issues
+        assert ("missing_owner", repo.name, app.name) in issues
+        assert ("missing_active_source_sbom", repo.name, app.name) in issues
+        assert ("stale_scan", repo.name, app.name) in issues
+        assert ("open_critical_high", repo.name, app.name) in issues
+        assert owner_page.items[0]["application_name"] == app.name
+        assert summary.rollout_gap_items == 5
+        assert finding.status == FindingStatus.open
 
 
 def test_list_ai_fix_actions_filters_and_returns_context() -> None:

@@ -61,6 +61,25 @@ def list_runtime_eol(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/risk-acceptance", response_model=schemas.CursorPage)
+def list_risk_acceptance_review(
+    limit: int = 50,
+    expired: bool | None = None,
+    severity: models.Severity | None = None,
+    source: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = risk_acceptance_items(db)
+    if expired is not None:
+        items = [item for item in items if item["expired"] is expired]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if source:
+        items = [item for item in items if item["source"] == source]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def exposure_review_count(db: Session) -> int:
     return len(exposure_review_items(db))
 
@@ -252,6 +271,84 @@ def runtime_eol_items(db: Session) -> list[dict]:
                 repository_owner=repository.owner,
                 repository_name=repository.name,
                 detail=detail,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
+def risk_acceptance_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    items = []
+    finding_stmt = (
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(models.Finding.status == models.FindingStatus.accepted_risk)
+        .order_by(models.Finding.updated_at.desc(), models.Finding.id.asc())
+    )
+    for finding, application, repository, component, vulnerability in db.execute(finding_stmt):
+        items.append(
+            schemas.RiskAcceptanceReviewOut(
+                source="finding",
+                finding_id=finding.id,
+                severity=finding.severity,
+                status=finding.status,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                component_name=component.name,
+                vulnerability_external_id=vulnerability.external_id,
+                expired=False,
+                justification="Finding is accepted risk",
+            ).model_dump(mode="json")
+        )
+
+    vex_stmt = (
+        select(
+            models.VexStatement,
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
+        .join(models.Finding, models.VexStatement.finding_id == models.Finding.id)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .order_by(models.VexStatement.review_date.asc(), models.VexStatement.id.asc())
+    )
+    for vex, finding, application, repository, component, vulnerability in db.execute(vex_stmt):
+        if vex.status not in {models.VexStatus.not_affected, models.VexStatus.under_investigation}:
+            continue
+        items.append(
+            schemas.RiskAcceptanceReviewOut(
+                source="vex",
+                finding_id=finding.id,
+                severity=finding.severity,
+                status=vex.status,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                component_name=component.name,
+                vulnerability_external_id=vulnerability.external_id,
+                review_date=vex.review_date,
+                expired=_before(vex.review_date, now),
+                approved_by=vex.approved_by,
+                justification=vex.justification,
             ).model_dump(mode="json")
         )
     return items

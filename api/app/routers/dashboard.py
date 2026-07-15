@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.app import models, schemas
+from api.app.config import Settings, get_settings
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
 from api.app.routers.governance import exposure_review_count
@@ -15,7 +16,9 @@ from api.app.routers.notifications import notification_slo_breach_count
 from api.app.routers.operations import manual_action_count, manual_workload_count
 from api.app.routers.quality import reopen_risk_count
 from api.app.routers.remediation import stale_remediation_count
+from api.app.routers.rollout import rollout_gap_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
+from api.app.routers.security import rbac_review_count
 from api.app.routers.sla import count_sla_breached_findings
 from api.app.routers.storage import retention_review_count
 
@@ -25,8 +28,11 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 @router.get("/summary", response_model=schemas.DashboardSummary)
 def dashboard_summary(
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     _: Principal = Depends(get_principal),
 ):
+    if not isinstance(settings, Settings):
+        settings = get_settings()
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     repositories = db.scalar(select(func.count()).select_from(models.Repository)) or 0
     applications = db.scalar(select(func.count()).select_from(models.Application)) or 0
@@ -65,6 +71,8 @@ def dashboard_summary(
     exposure_items = exposure_review_count(db)
     retention_items = retention_review_count(db)
     reopen_risk_items = reopen_risk_count(db)
+    rbac_review_items = rbac_review_count(db, settings)
+    rollout_gap_items = rollout_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -88,4 +96,6 @@ def dashboard_summary(
         exposure_review_items=exposure_items,
         retention_review_items=retention_items,
         reopen_risk_items=reopen_risk_items,
+        rbac_review_items=rbac_review_items,
+        rollout_gap_items=rollout_gap_items,
     )

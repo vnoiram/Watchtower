@@ -191,6 +191,55 @@ def backup_readiness(
     ]
 
 
+@router.get("/restore-readiness", response_model=list[schemas.RestoreReadinessOut])
+def restore_readiness(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    storage_configured = bool(
+        settings.minio_endpoint
+        and settings.minio_access_key
+        and settings.minio_secret_key
+        and settings.minio_bucket
+    )
+    missing_storage_keys = _count(
+        db,
+        select(models.Sbom).where(
+            (models.Sbom.storage_key.is_(None)) | (models.Sbom.storage_key == ""),
+        ),
+    )
+    source_sbom_artifacts = _source_sbom_artifact_count(db)
+    source_sboms = _count(db, select(models.Sbom).where(models.Sbom.sbom_kind == "source"))
+    restore_logs = _recent_restore_logs(db)
+    return [
+        _restore_check(
+            "object_storage",
+            "ok" if storage_configured else "fail",
+            1 if storage_configured else 0,
+            f"Object storage bucket setting: {settings.minio_bucket}",
+        ),
+        _restore_check(
+            "sbom_storage_keys",
+            "ok" if not missing_storage_keys else "fail",
+            missing_storage_keys,
+            "SBOM records without a storage key",
+        ),
+        _restore_check(
+            "source_sbom_artifacts",
+            "ok" if source_sbom_artifacts >= source_sboms else "warn",
+            source_sbom_artifacts,
+            f"Source SBOM artifacts available for {source_sboms} source SBOMs",
+        ),
+        _restore_check(
+            "restore_exercise_30d",
+            "ok" if restore_logs else "warn",
+            len(restore_logs),
+            "Restore verification audit logs in the last 30 days",
+        ),
+    ]
+
+
 @router.get("/weekly-review", response_model=list[schemas.WeeklyReviewOut])
 def weekly_review(
     db: Session = Depends(get_db),
@@ -336,6 +385,10 @@ def _backup_check(check: str, status: str, count: int, detail: str) -> schemas.B
     return schemas.BackupReadinessOut(check=check, status=status, count=count, detail=detail)
 
 
+def _restore_check(check: str, status: str, count: int, detail: str) -> schemas.RestoreReadinessOut:
+    return schemas.RestoreReadinessOut(check=check, status=status, count=count, detail=detail)
+
+
 def _weekly(item: str, nonzero_status: str, count: int, detail: str) -> schemas.WeeklyReviewOut:
     return schemas.WeeklyReviewOut(
         item=item,
@@ -359,6 +412,16 @@ def _source_sbom_artifact_count(db: Session) -> int:
             if artifacts["source_sbom"].get("storage_key"):
                 count += 1
     return count
+
+
+def _recent_restore_logs(db: Session) -> list[models.AuditLog]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    actions = {"backup.restore", "restore.verify", "backup.restore.verify"}
+    return [
+        log
+        for log in db.scalars(select(models.AuditLog).where(models.AuditLog.action.in_(actions)))
+        if _after_cutoff(log.created_at, cutoff)
+    ]
 
 
 def _manual_action_reason(audit_log: models.AuditLog) -> str | None:

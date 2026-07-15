@@ -924,6 +924,64 @@ class RuntimeEolOut(BaseModel):
     detail: str
 
 
+class AuditReviewOut(BaseModel):
+    id: UUID
+    actor: str
+    role: str
+    action: str
+    resource_type: str
+    resource_id: str | None
+    reason: str
+    metadata_json: dict[str, Any]
+    created_at: datetime
+
+
+class RbacReviewOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class RestoreReadinessOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class RiskAcceptanceReviewOut(BaseModel):
+    source: str
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus | models.VexStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    review_date: datetime | None = None
+    expired: bool | None = None
+    approved_by: str | None = None
+    justification: str | None = None
+
+
+class RolloutGapOut(BaseModel):
+    issue_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    application_id: UUID | None = None
+    application_name: str | None = None
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    count: int
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -947,3 +1005,5 @@ class DashboardSummary(BaseModel):
     exposure_review_items: int
     retention_review_items: int
     reopen_risk_items: int
+    rbac_review_items: int
+    rollout_gap_items: int
