@@ -79,6 +79,11 @@ const applicationReadiness = document.querySelector("#application-readiness");
 const scanTargets = document.querySelector("#scan-targets");
 const remediationCoverage = document.querySelector("#remediation-coverage");
 const resolutionVerification = document.querySelector("#resolution-verification");
+const monthlyReview = document.querySelector("#monthly-review");
+const operationalLoadKpis = document.querySelector("#operational-load-kpis");
+const remediationAging = document.querySelector("#remediation-aging");
+const toolchainPosture = document.querySelector("#toolchain-posture");
+const notificationDigest = document.querySelector("#notification-digest");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -157,6 +162,7 @@ function renderMetrics(summary) {
     ["quarterly_review_items", "Quarterly review", "warn"],
     ["application_readiness_items", "App readiness", "warn"],
     ["remediation_coverage_items", "Remediation coverage", "danger"],
+    ["monthly_review_items", "Monthly review", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -1088,6 +1094,63 @@ function renderResolutionVerification(page) {
     : `<tr><td colspan="5">No resolution verification issues</td></tr>`;
 }
 
+function renderMonthlyReview(rows) {
+  monthlyReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.item)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No monthly review checks</td></tr>`;
+}
+
+function renderOperationalLoadKpis(rows) {
+  operationalLoadKpis.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.metric)}</td><td>${escapeHtml(item.value)}</td><td>${escapeHtml(item.unit)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No operational load KPIs</td></tr>`;
+}
+
+function renderRemediationAging(page) {
+  const rows = page.items || [];
+  remediationAging.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.age_bucket)}</td><td>${escapeHtml(item.age_days)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.action_status)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No stale remediation actions</td></tr>`;
+}
+
+function renderToolchainPosture(rows) {
+  toolchainPosture.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No toolchain posture checks</td></tr>`;
+}
+
+function renderNotificationDigest(page) {
+  const rows = page.items || [];
+  notificationDigest.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No notification digest issues</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1168,6 +1231,11 @@ async function refresh() {
   scanTargets.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   resolutionVerification.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  monthlyReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  operationalLoadKpis.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  remediationAging.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  toolchainPosture.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  notificationDigest.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -1250,6 +1318,11 @@ async function refresh() {
       scanTargetPage,
       remediationCoveragePage,
       resolutionVerificationPage,
+      monthlyReviewPage,
+      operationalLoadPage,
+      remediationAgingPage,
+      toolchainPosturePage,
+      notificationDigestPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -1331,6 +1404,11 @@ async function refresh() {
       loadJson("/operations/scan-targets"),
       loadJson("/remediation/coverage?missing_action=true&limit=10"),
       loadJson("/remediation/resolution-verification?limit=10"),
+      loadJson("/operations/monthly-review"),
+      loadJson("/kpis/operational-load"),
+      loadJson("/remediation/aging?limit=10"),
+      loadJson("/operations/toolchain-posture"),
+      loadJson("/notifications/digest-readiness?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -1411,6 +1489,11 @@ async function refresh() {
     renderScanTargets(scanTargetPage);
     renderRemediationCoverage(remediationCoveragePage);
     renderResolutionVerification(resolutionVerificationPage);
+    renderMonthlyReview(monthlyReviewPage);
+    renderOperationalLoadKpis(operationalLoadPage);
+    renderRemediationAging(remediationAgingPage);
+    renderToolchainPosture(toolchainPosturePage);
+    renderNotificationDigest(notificationDigestPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1491,6 +1574,11 @@ async function refresh() {
     scanTargets.innerHTML = `<tr><td colspan="5">Unable to load scan targets</td></tr>`;
     remediationCoverage.innerHTML = `<tr><td colspan="5">Unable to load remediation coverage</td></tr>`;
     resolutionVerification.innerHTML = `<tr><td colspan="5">Unable to load resolution verification</td></tr>`;
+    monthlyReview.innerHTML = `<tr><td colspan="4">Unable to load monthly review</td></tr>`;
+    operationalLoadKpis.innerHTML = `<tr><td colspan="4">Unable to load operational load KPIs</td></tr>`;
+    remediationAging.innerHTML = `<tr><td colspan="5">Unable to load remediation aging</td></tr>`;
+    toolchainPosture.innerHTML = `<tr><td colspan="4">Unable to load toolchain posture</td></tr>`;
+    notificationDigest.innerHTML = `<tr><td colspan="5">Unable to load notification digest readiness</td></tr>`;
   }
 }
 

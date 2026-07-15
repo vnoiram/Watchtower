@@ -8,6 +8,7 @@ from api.app import models, schemas
 from api.app.config import Settings, get_settings
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
+from api.app.routers.governance import runtime_eol_items
 from api.app.routers.job_health import job_health_reason
 from api.app.routers.remediation import stale_remediation_count
 from api.app.routers.scan_health import list_scan_health
@@ -337,8 +338,28 @@ def scan_targets(
     return scan_target_items(db)
 
 
+@router.get("/monthly-review", response_model=list[schemas.MonthlyReviewOut])
+def monthly_review(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return monthly_review_items(db)
+
+
+@router.get("/toolchain-posture", response_model=list[schemas.ToolchainPostureOut])
+def toolchain_posture(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return toolchain_posture_items(db)
+
+
 def failure_signal_count(db: Session) -> int:
     return len(failure_signal_items(db))
+
+
+def monthly_review_count(db: Session) -> int:
+    return sum(item.count for item in monthly_review_items(db) if item.status != "ok")
 
 
 def manual_action_count(db: Session, days: int = 30) -> int:
@@ -426,6 +447,77 @@ def scan_target_items(db: Session) -> list[schemas.ScanTargetOut]:
         _scan_target("failed_scans", "fail" if failed else "ok", failed, None, None, "Failed or timed out scan records"),
         _scan_target("partial_scans", "warn" if partial else "ok", partial, None, None, "Partially succeeded scan records"),
         _scan_target("stale_active_applications", "warn" if stale else "ok", stale, None, None, "Active applications without a scan in the last 30 days"),
+    ]
+
+
+def monthly_review_items(db: Session) -> list[schemas.MonthlyReviewOut]:
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=30)
+    scans = list(db.scalars(select(models.Scan)))
+    scan_success_rate = _percent(
+        sum(1 for scan in scans if scan.status == models.ScanStatus.succeeded),
+        len(scans),
+    )
+    expired_vex = sum(1 for vex in db.scalars(select(models.VexStatement)) if _before(vex.review_date, now))
+    accepted_risk = _count(
+        db,
+        select(models.Finding).where(models.Finding.status == models.FindingStatus.accepted_risk),
+    )
+    scanner_version_missing = _count(
+        db,
+        select(models.Scan).where(models.Scan.tool.is_not(None), models.Scan.tool_version.is_(None)),
+    )
+    runtime_eol = len(runtime_eol_items(db))
+    storage_cleanup = len(list_storage_cleanup_candidates(db=db, _=None).items)
+    restore_logs = _recent_restore_logs(db)
+    stale_prs = stale_remediation_count(db)
+    recent_scans = sum(1 for scan in scans if _after_cutoff(scan.created_at, cutoff))
+    return [
+        _monthly("vex_reassessment", "warn", expired_vex, "Expired VEX statements to reassess"),
+        _monthly("risk_acceptance_reassessment", "warn", accepted_risk, "Accepted-risk findings to sample review"),
+        _monthly("tool_version_review", "warn", scanner_version_missing, "Scanner runs without tool version"),
+        _monthly("runtime_eol_review", "warn", runtime_eol, "Runtime or component EOL review items"),
+        _monthly(
+            "scan_success_rate",
+            "warn" if scan_success_rate < 95.0 else "ok",
+            int(scan_success_rate),
+            f"Scan success rate is {scan_success_rate}% across {len(scans)} records",
+            status_by_count=False,
+        ),
+        _monthly("mttr_review", "ok", _resolved_last_30d_count(db, cutoff), "Resolved findings in the last 30 days"),
+        _monthly("storage_cleanup", "warn", storage_cleanup, "Storage cleanup candidates awaiting monthly review"),
+        _monthly(
+            "restore_exercise",
+            "warn" if not restore_logs else "ok",
+            len(restore_logs),
+            "Restore verification audit logs in the last 30 days",
+            status_by_count=False,
+        ),
+        _monthly("stale_pr_review", "fail", stale_prs, "Stale or failed remediation actions"),
+        _monthly("recent_scan_volume", "ok" if recent_scans else "warn", recent_scans, "Scan records created in the last 30 days"),
+    ]
+
+
+def toolchain_posture_items(db: Session) -> list[schemas.ToolchainPostureOut]:
+    scans = list(db.scalars(select(models.Scan)))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    version_missing = sum(1 for scan in scans if scan.tool and not scan.tool_version)
+    stale_tools = {
+        tool
+        for tool in {scan.tool for scan in scans if scan.tool}
+        if not any(scan.tool == tool and _after_cutoff(scan.created_at, cutoff) for scan in scans)
+    }
+    failure_count = sum(
+        1
+        for scan in scans
+        if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out, models.ScanStatus.partially_succeeded}
+    )
+    runtime_count = len(runtime_eol_items(db))
+    return [
+        _toolchain("scanner_version_missing", "warn" if version_missing else "ok", version_missing, "Scanner runs without tool version"),
+        _toolchain("stale_scanner_tools", "warn" if stale_tools else "ok", len(stale_tools), "Scanner tools not seen in the last 30 days"),
+        _toolchain("scanner_failure_records", "fail" if failure_count else "ok", failure_count, "Failed, timed out, or partial scanner runs"),
+        _toolchain("runtime_eol_items", "warn" if runtime_count else "ok", runtime_count, "Runtime EOL review items"),
     ]
 
 
@@ -649,6 +741,25 @@ def _weekly(item: str, nonzero_status: str, count: int, detail: str) -> schemas.
     )
 
 
+def _monthly(
+    item: str,
+    nonzero_status: str,
+    count: int,
+    detail: str,
+    status_by_count: bool = True,
+) -> schemas.MonthlyReviewOut:
+    return schemas.MonthlyReviewOut(
+        item=item,
+        status=nonzero_status if (count or not status_by_count) else "ok",
+        count=count,
+        detail=detail,
+    )
+
+
+def _toolchain(check: str, status: str, count: int, detail: str) -> schemas.ToolchainPostureOut:
+    return schemas.ToolchainPostureOut(check=check, status=status, count=count, detail=detail)
+
+
 def _count(db: Session, stmt) -> int:
     subquery = stmt.subquery()
     return db.scalar(select(func.count()).select_from(subquery)) or 0
@@ -711,6 +822,19 @@ def _stale_active_application_count(db: Session) -> int:
         if latest is None or _before(latest.created_at, cutoff):
             count += 1
     return count
+
+
+def _resolved_last_30d_count(db: Session, cutoff: datetime) -> int:
+    return sum(
+        1
+        for finding in db.scalars(
+            select(models.Finding).where(
+                models.Finding.status == models.FindingStatus.resolved,
+                models.Finding.resolved_at.is_not(None),
+            )
+        )
+        if finding.resolved_at and _after_cutoff(finding.resolved_at, cutoff)
+    )
 
 
 def _manual_action_reason(audit_log: models.AuditLog) -> str | None:

@@ -220,6 +220,28 @@ def quality_kpis(
     ]
 
 
+@router.get("/operational-load", response_model=list[schemas.KpiMetricOut])
+def operational_load_kpis(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    audit_logs = [log for log in db.scalars(select(models.AuditLog)) if _after_cutoff(log.created_at, cutoff)]
+    actions = list(db.scalars(select(models.RemediationAction)))
+    manual_checks = sum(1 for log in audit_logs if _manual_action_reason(log))
+    manual_issues = sum(1 for log in audit_logs if log.action in {"finding.github_issue.enqueue", "github.issue.create"})
+    manual_dependency_updates = sum(1 for log in audit_logs if _manual_action_reason(log) == "manual_dependency_update")
+    open_findings = sum(1 for finding in db.scalars(select(models.Finding)) if finding.status == models.FindingStatus.open)
+    stale_prs = sum(1 for action in actions if _has_pr_signal(action) and _before(action.updated_at, cutoff))
+    return [
+        _metric("monthly_manual_check_count", manual_checks, "count", "Manual review or operation audit logs in the last 30 days"),
+        _metric("manual_issue_creation_count", manual_issues, "count", "Manual issue creation audit logs in the last 30 days"),
+        _metric("manual_dependency_update_count", manual_dependency_updates, "count", "Manual dependency update audit logs in the last 30 days"),
+        _metric("unaddressed_finding_count", open_findings, "count", "Open findings awaiting remediation"),
+        _metric("long_stale_pr_count", stale_prs, "count", "PR-like remediation actions untouched for 30 days"),
+    ]
+
+
 def scan_failure_rate_percent(db: Session) -> float:
     scans = list(db.scalars(select(models.Scan)))
     failed = sum(1 for scan in scans if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out})
@@ -299,6 +321,29 @@ def _has_successful_action_after(actions: list[models.RemediationAction], findin
         if action.status in {"succeeded", "merged", "closed"} or metadata.get("validation_status") == "succeeded":
             return True
     return False
+
+
+def _manual_action_reason(audit_log: models.AuditLog) -> str | None:
+    metadata = audit_log.metadata_json or {}
+    searchable = f"{audit_log.action} {metadata}".lower()
+    if audit_log.action in {"scan.create", "job.create", "repository.scan.enqueue", "finding.github_issue.enqueue"}:
+        return "manual_operation"
+    if "dependency" in searchable:
+        return "manual_dependency_update"
+    if "manual" in searchable:
+        return "manual"
+    return None
+
+
+def _has_pr_signal(action: models.RemediationAction) -> bool:
+    metadata = action.metadata_json or {}
+    return bool(
+        action.branch
+        or action.url
+        or action.provider_id
+        or metadata.get("pull_request_url")
+        or metadata.get("pr_number")
+    )
 
 
 def _hours_between(start: datetime, end: datetime) -> float:
