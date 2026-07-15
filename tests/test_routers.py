@@ -54,11 +54,20 @@ from api.app.routers.job_health import list_job_health
 from api.app.routers.jobs import list_retry_candidates
 from api.app.routers.kpis import kpi_summary
 from api.app.routers.maintenance import list_application_maintenance_candidates
-from api.app.routers.notifications import list_notifications
-from api.app.routers.operations import backup_readiness, daily_operations, operational_workload, operations_readiness
+from api.app.routers.notifications import list_notification_slo, list_notifications
+from api.app.routers.operations import (
+    backup_readiness,
+    daily_operations,
+    operational_workload,
+    operations_readiness,
+    weekly_review,
+)
 from api.app.routers.remediation import (
+    list_remediation_backlog,
     list_github_issue_actions,
     list_issue_closures,
+    list_remediation_prs,
+    list_remediation_rescans,
     list_remediation_candidates,
     list_remediation_validations,
 )
@@ -1118,6 +1127,208 @@ def test_backup_readiness_reports_storage_artifact_and_cleanup_state() -> None:
         assert by_check["source_sbom_artifacts"].count == 1
         assert by_check["cleanup_backlog"].status == "warn"
         assert by_check["cleanup_backlog"].count == 1
+
+
+def test_list_notification_slo_reports_breaches_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        breached = create_finding(db, app, severity=Severity.critical)
+        breached.created_at = now_utc() - timedelta(hours=2)
+        notified = create_finding(db, app, severity=Severity.high)
+        notified.created_at = now_utc() - timedelta(hours=25)
+        db.add(
+            Notification(
+                channel="slack",
+                severity=Severity.high,
+                subject="High vulnerability detected",
+                body="body",
+                status="sent",
+                sent_at=notified.created_at + timedelta(hours=23),
+                metadata_json={"finding_id": str(notified.id)},
+            )
+        )
+        db.flush()
+
+        page = list_notification_slo(breached=True, db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        assert [item["finding_id"] for item in page.items] == [str(breached.id)]
+        assert page.items[0]["severity"] == "critical"
+        assert page.items[0]["breached"] is True
+        assert page.items[0]["application_name"] == app.name
+        assert summary.notification_slo_breaches == 1
+
+
+def test_list_remediation_prs_reports_ci_and_pr_context() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        pr_action = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="created",
+            provider="watchtower",
+            branch="fix/high",
+            metadata_json={"pull_request_url": "https://github.com/local/demo/pull/7", "ci_passed": False},
+        )
+        skipped = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="queued",
+            provider="watchtower",
+            metadata_json={},
+        )
+        db.add_all([pr_action, skipped])
+        db.flush()
+
+        page = list_remediation_prs(severity=Severity.high, db=db, _=None)
+
+        assert [item["action_id"] for item in page.items] == [str(pr_action.id)]
+        assert page.items[0]["url"] == "https://github.com/local/demo/pull/7"
+        assert page.items[0]["ci_passed"] is False
+        assert page.items[0]["application_name"] == app.name
+
+
+def test_list_remediation_backlog_reports_stale_and_failed_items() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        stale_finding = create_finding(db, app, severity=Severity.high)
+        failed_finding = create_finding(db, app, severity=Severity.critical)
+        stale = RemediationAction(
+            finding_id=stale_finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            metadata_json={},
+            updated_at=now_utc() - timedelta(days=8),
+        )
+        failed = RemediationAction(
+            finding_id=failed_finding.id,
+            action_type="ai_fix",
+            status="failed",
+            provider="watchtower",
+            metadata_json={"error": "patch failed"},
+        )
+        healthy = RemediationAction(
+            finding_id=stale_finding.id,
+            action_type="ai_fix",
+            status="created",
+            provider="watchtower",
+            metadata_json={},
+        )
+        db.add_all([stale, failed, healthy])
+        db.flush()
+
+        page = list_remediation_backlog(db=db, _=None)
+        high_page = list_remediation_backlog(severity=Severity.high, db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_id = {item["action_id"]: item for item in page.items}
+        assert set(by_id) == {str(stale.id), str(failed.id)}
+        assert by_id[str(stale.id)]["reason"] == "stale_open"
+        assert by_id[str(failed.id)]["reason"] == "failed"
+        assert by_id[str(failed.id)]["detail"] == "patch failed"
+        assert [item["action_id"] for item in high_page.items] == [str(stale.id)]
+        assert summary.stale_remediation_items == 2
+
+
+def test_list_remediation_rescans_reports_validation_and_missing_rescans() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        validated_app = create_application(db, repo, "validated-rescan")
+        missing_app = create_application(db, repo, "missing-rescan")
+        validated_finding = create_finding(db, validated_app, severity=Severity.high)
+        missing_finding = create_finding(db, missing_app, severity=Severity.critical)
+        validation_scan = Scan(
+            application_id=validated_app.id,
+            trigger_type=TriggerType.remediation_validation,
+            status=ScanStatus.succeeded,
+            created_at=now_utc(),
+        )
+        db.add(validation_scan)
+        db.flush()
+        validated_action = RemediationAction(
+            finding_id=validated_finding.id,
+            action_type="ai_fix",
+            status="created",
+            provider="watchtower",
+            metadata_json={"validation_status": "succeeded", "validation_scan_id": str(validation_scan.id)},
+            created_at=now_utc() - timedelta(hours=1),
+        )
+        missing_action = RemediationAction(
+            finding_id=missing_finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            metadata_json={},
+            created_at=now_utc() - timedelta(hours=1),
+        )
+        db.add_all([validated_action, missing_action])
+        db.flush()
+
+        all_page = list_remediation_rescans(db=db, _=None)
+        missing_page = list_remediation_rescans(missing=True, db=db, _=None)
+
+        by_action = {item["action_id"]: item for item in all_page.items}
+        assert by_action[str(validated_action.id)]["validation_scan_id"] == str(validation_scan.id)
+        assert by_action[str(validated_action.id)]["missing_rescan"] is False
+        assert [item["action_id"] for item in missing_page.items] == [str(missing_action.id)]
+        assert missing_page.items[0]["missing_rescan"] is True
+
+
+def test_weekly_review_reports_operational_review_counts() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        medium = create_finding(db, app, severity=Severity.medium)
+        create_finding(db, app, severity=Severity.low, status=FindingStatus.false_positive)
+        vex_finding = create_finding(db, app, severity=Severity.high)
+        db.add_all(
+            [
+                VexStatement(
+                    finding_id=vex_finding.id,
+                    status=VexStatus.not_affected,
+                    justification="not reachable",
+                    approved_by="security",
+                    review_date=now_utc() - timedelta(days=1),
+                ),
+                VexStatement(
+                    finding_id=medium.id,
+                    status=VexStatus.under_investigation,
+                    justification="review pending",
+                    approved_by="security",
+                    review_date=now_utc() + timedelta(days=3),
+                ),
+                RemediationAction(
+                    finding_id=vex_finding.id,
+                    action_type="ai_fix",
+                    status="failed",
+                    provider="watchtower",
+                    metadata_json={},
+                ),
+                Scan(application_id=app.id, tool="syft", tool_version=None),
+            ]
+        )
+        db.flush()
+
+        rows = weekly_review(db=db, _=None)
+
+        by_item = {row.item: row for row in rows}
+        assert by_item["medium_findings"].count == 1
+        assert by_item["expired_vex"].count == 1
+        assert by_item["upcoming_vex"].count == 1
+        assert by_item["false_positive"].count == 1
+        assert by_item["auto_fix_failed"].count == 1
+        assert by_item["scanner_version_missing"].count == 1
+        assert by_item["stale_prs"].count == 1
 
 
 def test_list_artifacts_returns_scan_artifact_context_and_filters() -> None:

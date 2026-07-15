@@ -39,6 +39,11 @@ const applicationDetection = document.querySelector("#application-detection");
 const scheduledScanCoverage = document.querySelector("#scheduled-scan-coverage");
 const resolutionCandidates = document.querySelector("#resolution-candidates");
 const backupReadiness = document.querySelector("#backup-readiness");
+const notificationSlo = document.querySelector("#notification-slo");
+const remediationPrs = document.querySelector("#remediation-prs");
+const remediationBacklog = document.querySelector("#remediation-backlog");
+const remediationRescans = document.querySelector("#remediation-rescans");
+const weeklyReview = document.querySelector("#weekly-review");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -103,6 +108,8 @@ function renderMetrics(summary) {
     ["notification_failure_count", "Notification failures", "danger"],
     ["manual_workload_items", "Manual workload", "warn"],
     ["missing_scheduled_scans", "Missing schedules", "warn"],
+    ["notification_slo_breaches", "SLO breaches", "danger"],
+    ["stale_remediation_items", "Stale remediation", "danger"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -566,6 +573,65 @@ function renderBackupReadiness(rows) {
     : `<tr><td colspan="4">No backup readiness checks</td></tr>`;
 }
 
+function renderNotificationSlo(page) {
+  const rows = page.items || [];
+  notificationSlo.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(formatDateTime(item.deadline_at))}</td><td>${escapeHtml(item.breached ? "breached" : item.status)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No notification SLO breaches</td></tr>`;
+}
+
+function renderRemediationPrs(page) {
+  const rows = page.items || [];
+  remediationPrs.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.action_status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.provider_id || item.branch || item.url || "-")}</td><td>${escapeHtml(item.ci_passed === null || item.ci_passed === undefined ? "unknown" : item.ci_passed ? "passed" : "failed")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No PR/CI actions</td></tr>`;
+}
+
+function renderRemediationBacklog(page) {
+  const rows = page.items || [];
+  remediationBacklog.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.action_status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.age_days)}d</td><td>${escapeHtml(item.reason)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No remediation backlog</td></tr>`;
+}
+
+function renderRemediationRescans(page) {
+  const rows = page.items || [];
+  remediationRescans.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.validation_status)}</td><td>${escapeHtml(item.latest_rescan_status || "missing")}</td><td>${escapeHtml(item.missing_rescan ? "missing" : "present")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No missing remediation rescans</td></tr>`;
+}
+
+function renderWeeklyReview(rows) {
+  weeklyReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.item)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No weekly review checks</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -606,6 +672,11 @@ async function refresh() {
   scheduledScanCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   resolutionCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   backupReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  notificationSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  remediationPrs.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  remediationBacklog.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  remediationRescans.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  weeklyReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -648,6 +719,11 @@ async function refresh() {
       scheduledScanCoveragePage,
       resolutionCandidatePage,
       backupReadinessPage,
+      notificationSloPage,
+      remediationPrPage,
+      remediationBacklogPage,
+      remediationRescanPage,
+      weeklyReviewPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -689,6 +765,11 @@ async function refresh() {
       loadJson("/scheduled-scan-coverage?missing=true&limit=10"),
       loadJson("/findings/resolution-candidates?limit=10"),
       loadJson("/operations/backup-readiness"),
+      loadJson("/notifications/slo?breached=true&limit=10"),
+      loadJson("/remediation/prs?limit=10"),
+      loadJson("/remediation/backlog?limit=10"),
+      loadJson("/remediation/rescans?missing=true&limit=10"),
+      loadJson("/operations/weekly-review"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -729,6 +810,11 @@ async function refresh() {
     renderScheduledScanCoverage(scheduledScanCoveragePage);
     renderResolutionCandidates(resolutionCandidatePage);
     renderBackupReadiness(backupReadinessPage);
+    renderNotificationSlo(notificationSloPage);
+    renderRemediationPrs(remediationPrPage);
+    renderRemediationBacklog(remediationBacklogPage);
+    renderRemediationRescans(remediationRescanPage);
+    renderWeeklyReview(weeklyReviewPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -769,6 +855,11 @@ async function refresh() {
     scheduledScanCoverage.innerHTML = `<tr><td colspan="5">Unable to load scheduled scan coverage</td></tr>`;
     resolutionCandidates.innerHTML = `<tr><td colspan="5">Unable to load resolution candidates</td></tr>`;
     backupReadiness.innerHTML = `<tr><td colspan="4">Unable to load backup readiness</td></tr>`;
+    notificationSlo.innerHTML = `<tr><td colspan="5">Unable to load notification SLO</td></tr>`;
+    remediationPrs.innerHTML = `<tr><td colspan="5">Unable to load PR/CI status</td></tr>`;
+    remediationBacklog.innerHTML = `<tr><td colspan="5">Unable to load remediation backlog</td></tr>`;
+    remediationRescans.innerHTML = `<tr><td colspan="5">Unable to load remediation rescans</td></tr>`;
+    weeklyReview.innerHTML = `<tr><td colspan="4">Unable to load weekly review</td></tr>`;
   }
 }
 

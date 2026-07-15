@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -7,7 +8,11 @@ from sqlalchemy.orm import Session
 from api.app import models, schemas
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
-from api.app.services.remediation import ACTION_TYPE_GITHUB_ISSUE, OPEN_REMEDIATION_STATUSES
+from api.app.services.remediation import (
+    ACTION_TYPE_AI_FIX,
+    ACTION_TYPE_GITHUB_ISSUE,
+    OPEN_REMEDIATION_STATUSES,
+)
 
 router = APIRouter(prefix="/remediation", tags=["remediation"])
 
@@ -208,6 +213,162 @@ def list_issue_closures(
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
+@router.get("/prs", response_model=schemas.CursorPage)
+def list_remediation_prs(
+    limit: int = 50,
+    status: str | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    stmt = _remediation_action_context_stmt()
+    if status:
+        stmt = stmt.where(models.RemediationAction.status == status)
+    if severity:
+        stmt = stmt.where(models.Finding.severity == severity)
+    stmt = stmt.order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc())
+    items = []
+    for action, finding, application, vulnerability, component in db.execute(stmt):
+        if not _has_pr_signal(action):
+            continue
+        repository = db.get(models.Repository, application.repository_id)
+        metadata = action.metadata_json or {}
+        items.append(
+            schemas.RemediationPrOut(
+                action_id=action.id,
+                action_type=action.action_type,
+                action_status=action.status,
+                finding_id=finding.id,
+                severity=finding.severity,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                provider_id=action.provider_id,
+                branch=action.branch,
+                url=_pr_url(action),
+                ci_passed=_metadata_bool_or_none(metadata.get("ci_passed")),
+                created_at=action.created_at,
+                updated_at=action.updated_at,
+            ).model_dump(mode="json")
+        )
+        if len(items) >= min(limit, 100):
+            break
+    return schemas.CursorPage(items=items, next_cursor=None)
+
+
+@router.get("/backlog", response_model=schemas.CursorPage)
+def list_remediation_backlog(
+    limit: int = 50,
+    status: str | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = remediation_backlog_items(db)
+    if status:
+        items = [item for item in items if item["action_status"] == status]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/rescans", response_model=schemas.CursorPage)
+def list_remediation_rescans(
+    limit: int = 50,
+    missing: bool | None = None,
+    validation_status: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = remediation_rescan_items(db)
+    if missing is not None:
+        items = [item for item in items if item["missing_rescan"] is missing]
+    if validation_status:
+        items = [item for item in items if item["validation_status"] == validation_status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def stale_remediation_count(db: Session) -> int:
+    return len(remediation_backlog_items(db))
+
+
+def remediation_backlog_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=7)
+    items = []
+    stmt = _remediation_action_context_stmt().order_by(
+        models.RemediationAction.updated_at.asc(),
+        models.RemediationAction.id.asc(),
+    )
+    for action, finding, application, vulnerability, component in db.execute(stmt):
+        failed = action.status in {"failed", "close_failed"}
+        stale = action.status in _BACKLOG_OPEN_STATUSES and _before(action.updated_at, cutoff)
+        if not failed and not stale:
+            continue
+        repository = db.get(models.Repository, application.repository_id)
+        reason = "failed" if failed else "stale_open"
+        metadata = action.metadata_json or {}
+        items.append(
+            schemas.RemediationBacklogOut(
+                action_id=action.id,
+                action_type=action.action_type,
+                action_status=action.status,
+                finding_id=finding.id,
+                severity=finding.severity,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                age_days=max((now.replace(tzinfo=None) - action.updated_at.replace(tzinfo=None)).days, 0),
+                reason=reason,
+                detail=metadata.get("error") or metadata.get("close_error") or metadata.get("validation_error"),
+                updated_at=action.updated_at,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
+def remediation_rescan_items(db: Session) -> list[dict]:
+    items = []
+    stmt = _remediation_action_context_stmt().order_by(
+        models.RemediationAction.created_at.desc(),
+        models.RemediationAction.id.asc(),
+    )
+    for action, finding, application, vulnerability, component in db.execute(stmt):
+        metadata = action.metadata_json or {}
+        validation_scan = _scan_from_metadata(db, metadata)
+        latest_rescan = validation_scan or _latest_scan_after(db, application.id, action.created_at)
+        repository = db.get(models.Repository, application.repository_id)
+        validation_status = str(metadata.get("validation_status") or "pending")
+        items.append(
+            schemas.RemediationRescanOut(
+                action_id=action.id,
+                action_type=action.action_type,
+                action_status=action.status,
+                finding_id=finding.id,
+                severity=finding.severity,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                validation_status=validation_status,
+                validation_scan_id=validation_scan.id if validation_scan else None,
+                validation_scan_status=validation_scan.status if validation_scan else _optional_scan_status(
+                    metadata.get("validation_scan_status")
+                ),
+                latest_rescan_id=latest_rescan.id if latest_rescan else None,
+                latest_rescan_status=latest_rescan.status if latest_rescan else None,
+                latest_rescan_created_at=latest_rescan.created_at if latest_rescan else None,
+                missing_rescan=latest_rescan is None,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
 def _remediation_action_context_stmt():
     return (
         select(
@@ -276,6 +437,63 @@ def _close_state(action: models.RemediationAction | None) -> str:
     if action.status == "close_failed":
         return "close_failed"
     return "pending_close"
+
+
+_BACKLOG_OPEN_STATUSES = OPEN_REMEDIATION_STATUSES | {"running", "pending", "open", "queued"}
+
+
+def _has_pr_signal(action: models.RemediationAction) -> bool:
+    metadata = action.metadata_json or {}
+    return bool(
+        action.action_type in {ACTION_TYPE_AI_FIX, ACTION_TYPE_GITHUB_ISSUE}
+        and (
+            action.branch
+            or action.url
+            or action.provider_id
+            or metadata.get("pull_request_url")
+            or metadata.get("pr_number")
+        )
+    )
+
+
+def _pr_url(action: models.RemediationAction) -> str | None:
+    metadata = action.metadata_json or {}
+    return metadata.get("pull_request_url") or metadata.get("github_issue_url") or metadata.get("html_url") or action.url
+
+
+def _metadata_bool_or_none(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def _before(value: datetime, reference: datetime) -> bool:
+    if value.tzinfo is None:
+        reference = reference.replace(tzinfo=None)
+    elif reference.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return value < reference
+
+
+def _scan_from_metadata(db: Session, metadata: dict) -> models.Scan | None:
+    scan_id = _optional_uuid(metadata.get("validation_scan_id"))
+    return db.get(models.Scan, scan_id) if scan_id else None
+
+
+def _latest_scan_after(db: Session, application_id: UUID, created_at: datetime) -> models.Scan | None:
+    scans = db.scalars(
+        select(models.Scan)
+        .where(models.Scan.application_id == application_id)
+        .order_by(models.Scan.created_at.desc(), models.Scan.id.desc())
+    )
+    for scan in scans:
+        if not _before(scan.created_at, created_at) and scan.created_at != created_at:
+            return scan
+    return None
 
 
 def _optional_uuid(value: object) -> UUID | None:

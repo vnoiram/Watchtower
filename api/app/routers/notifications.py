@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -57,6 +58,72 @@ def list_notifications(
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
+@router.get("/slo", response_model=schemas.CursorPage)
+def list_notification_slo(
+    limit: int = 50,
+    breached: bool | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = notification_slo_items(db)
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if breached is not None:
+        items = [item for item in items if item["breached"] is breached]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def notification_slo_breach_count(db: Session) -> int:
+    return sum(1 for item in notification_slo_items(db) if item["breached"])
+
+
+def notification_slo_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    sent_by_finding = _sent_notifications_by_finding(db)
+    stmt = (
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(models.Finding.severity.in_([models.Severity.critical, models.Severity.high]))
+        .order_by(models.Finding.created_at.asc(), models.Finding.id.asc())
+    )
+    items = []
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        deadline = finding.created_at + _slo_window(finding.severity)
+        sent_at = sent_by_finding.get(finding.id)
+        breached = (sent_at is None and _after(now, deadline)) or (
+            sent_at is not None and _after(sent_at, deadline)
+        )
+        items.append(
+            schemas.NotificationSloOut(
+                finding_id=finding.id,
+                severity=finding.severity,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                component_name=component.name,
+                vulnerability_external_id=vulnerability.external_id,
+                finding_created_at=finding.created_at,
+                deadline_at=deadline,
+                notified_at=sent_at,
+                breached=breached,
+                status="notified" if sent_at else "missing_notification",
+            ).model_dump(mode="json")
+        )
+    return items
+
+
 def _finding_from_metadata(db: Session, metadata: dict | None) -> models.Finding | None:
     if not metadata:
         return None
@@ -67,3 +134,40 @@ def _finding_from_metadata(db: Session, metadata: dict | None) -> models.Finding
         return db.get(models.Finding, UUID(str(finding_id)))
     except ValueError:
         return None
+
+
+def _sent_notifications_by_finding(db: Session) -> dict[UUID, datetime]:
+    notifications = db.execute(
+        select(models.Notification)
+        .where(models.Notification.status == "sent")
+        .order_by(models.Notification.sent_at.asc().nullslast(), models.Notification.created_at.asc())
+    ).scalars()
+    by_finding = {}
+    for notification in notifications:
+        finding_id = _metadata_uuid((notification.metadata_json or {}).get("finding_id"))
+        if finding_id and finding_id not in by_finding:
+            by_finding[finding_id] = notification.sent_at or notification.created_at
+    return by_finding
+
+
+def _metadata_uuid(value: object) -> UUID | None:
+    if not value:
+        return None
+    try:
+        return UUID(str(value))
+    except ValueError:
+        return None
+
+
+def _slo_window(severity: models.Severity) -> timedelta:
+    if severity == models.Severity.critical:
+        return timedelta(hours=1)
+    return timedelta(hours=24)
+
+
+def _after(value: datetime, reference: datetime) -> bool:
+    if value.tzinfo is None:
+        reference = reference.replace(tzinfo=None)
+    elif reference.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return value > reference
