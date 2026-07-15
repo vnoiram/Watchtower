@@ -15,6 +15,7 @@ from api.app.routers import (
     findings,
     governance,
     github,
+    integrations,
     isolated_lane,
     job_health,
     jobs,
@@ -35,6 +36,7 @@ from api.app.routers import (
     scans,
     scanner_inventory,
     scanner_versions,
+    scanners,
     security,
     sla,
     storage,
@@ -68,12 +70,14 @@ app.include_router(auto_merge.router, prefix=api_prefix)
 app.include_router(notifications.router, prefix=api_prefix)
 app.include_router(dashboard.router, prefix=api_prefix)
 app.include_router(github.router, prefix=api_prefix)
+app.include_router(integrations.router, prefix=api_prefix)
 app.include_router(governance.router, prefix=api_prefix)
 app.include_router(quality.router, prefix=api_prefix)
 app.include_router(vex.router, prefix=api_prefix)
 app.include_router(scan_health.router, prefix=api_prefix)
 app.include_router(scanner_inventory.router, prefix=api_prefix)
 app.include_router(scanner_versions.router, prefix=api_prefix)
+app.include_router(scanners.router, prefix=api_prefix)
 app.include_router(security.router, prefix=api_prefix)
 app.include_router(maintenance.router, prefix=api_prefix)
 app.include_router(job_health.router, prefix=api_prefix)

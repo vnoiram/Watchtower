@@ -258,6 +258,25 @@ def list_remediation_prs(
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
+@router.get("/dependency-updates", response_model=schemas.CursorPage)
+def list_dependency_updates(
+    limit: int = 50,
+    provider: str | None = None,
+    ci_failed: bool | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = dependency_update_items(db)
+    if provider:
+        items = [item for item in items if item["provider"] == provider]
+    if ci_failed is not None:
+        items = [item for item in items if (item["ci_passed"] is False) is ci_failed]
+    if status:
+        items = [item for item in items if item["action_status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/backlog", response_model=schemas.CursorPage)
 def list_remediation_backlog(
     limit: int = 50,
@@ -292,6 +311,37 @@ def list_remediation_rescans(
 
 def stale_remediation_count(db: Session) -> int:
     return len(remediation_backlog_items(db))
+
+
+def dependency_update_items(db: Session) -> list[dict]:
+    items = []
+    stmt = _remediation_action_context_stmt().order_by(
+        models.RemediationAction.updated_at.desc(),
+        models.RemediationAction.id.asc(),
+    )
+    for action, _, application, _, _ in db.execute(stmt):
+        if not _has_dependency_update_signal(action):
+            continue
+        repository = db.get(models.Repository, application.repository_id)
+        metadata = action.metadata_json or {}
+        items.append(
+            schemas.DependencyUpdateOut(
+                action_id=action.id,
+                provider=action.provider,
+                update_source=_dependency_update_source(action),
+                action_status=action.status,
+                ci_passed=_metadata_bool_or_none(metadata.get("ci_passed")),
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                branch=action.branch,
+                url=_pr_url(action),
+                detail=str(metadata.get("update_kind") or metadata.get("dependency") or action.fixed_version or action.action_type),
+            ).model_dump(mode="json")
+        )
+    return items
 
 
 def remediation_backlog_items(db: Session) -> list[dict]:
@@ -454,6 +504,41 @@ def _has_pr_signal(action: models.RemediationAction) -> bool:
             or metadata.get("pr_number")
         )
     )
+
+
+def _has_dependency_update_signal(action: models.RemediationAction) -> bool:
+    metadata = action.metadata_json or {}
+    searchable = " ".join(
+        str(value or "")
+        for value in [
+            action.provider,
+            action.branch,
+            action.url,
+            metadata.get("pull_request_url"),
+            metadata.get("update_kind"),
+            metadata.get("dependency"),
+            metadata.get("source"),
+        ]
+    ).lower()
+    return bool(
+        "renovate" in searchable
+        or "dependabot" in searchable
+        or metadata.get("pull_request_url")
+        or metadata.get("update_kind")
+        or "ci_passed" in metadata
+    )
+
+
+def _dependency_update_source(action: models.RemediationAction) -> str:
+    metadata = action.metadata_json or {}
+    searchable = f"{action.provider or ''} {action.branch or ''} {action.url or ''} {metadata}".lower()
+    if "renovate" in searchable:
+        return "renovate"
+    if "dependabot" in searchable:
+        return "dependabot"
+    if action.action_type == ACTION_TYPE_AI_FIX:
+        return "ai_fix"
+    return "dependency_update"
 
 
 def _pr_url(action: models.RemediationAction) -> str | None:

@@ -64,6 +64,11 @@ const rbacReview = document.querySelector("#rbac-review");
 const restoreReadiness = document.querySelector("#restore-readiness");
 const riskAcceptance = document.querySelector("#risk-acceptance");
 const rolloutGaps = document.querySelector("#rollout-gaps");
+const githubHealth = document.querySelector("#github-health");
+const webhookIntake = document.querySelector("#webhook-intake");
+const scannerFailures = document.querySelector("#scanner-failures");
+const dependencyUpdates = document.querySelector("#dependency-updates");
+const failureSignals = document.querySelector("#failure-signals");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -136,6 +141,8 @@ function renderMetrics(summary) {
     ["reopen_risk_items", "Reopen risk", "danger"],
     ["rbac_review_items", "RBAC review", "warn"],
     ["rollout_gap_items", "Rollout gaps", "warn"],
+    ["github_integration_issues", "GitHub issues", "warn"],
+    ["failure_signal_items", "Failure signals", "danger"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -892,6 +899,65 @@ function renderRolloutGaps(page) {
     : `<tr><td colspan="5">No rollout gaps</td></tr>`;
 }
 
+function renderGithubHealth(rows) {
+  githubHealth.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No GitHub integration checks</td></tr>`;
+}
+
+function renderWebhookIntake(page) {
+  const rows = page.items || [];
+  webhookIntake.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.event || "-")}</td><td>${escapeHtml(item.repository || "-")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.duplicate_candidate ? "duplicate" : "unique")}</td><td>${escapeHtml(item.error || formatDateTime(item.created_at))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No webhook intake jobs</td></tr>`;
+}
+
+function renderScannerFailures(page) {
+  const rows = page.items || [];
+  scannerFailures.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.tool || "-")}</td><td>${escapeHtml(item.failure_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.error)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scanner failures</td></tr>`;
+}
+
+function renderDependencyUpdates(page) {
+  const rows = page.items || [];
+  dependencyUpdates.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.update_source)}</td><td>${escapeHtml(item.action_status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.ci_passed === null || item.ci_passed === undefined ? "unknown" : item.ci_passed ? "passed" : "failed")}</td><td>${escapeHtml(item.url || item.branch || item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No dependency update PRs</td></tr>`;
+}
+
+function renderFailureSignals(page) {
+  const rows = page.items || [];
+  failureSignals.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.signal_type)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No failure signals</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -957,6 +1023,11 @@ async function refresh() {
   restoreReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   riskAcceptance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   rolloutGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  githubHealth.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  webhookIntake.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scannerFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  dependencyUpdates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  failureSignals.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -1024,6 +1095,11 @@ async function refresh() {
       restoreReadinessPage,
       riskAcceptancePage,
       rolloutGapPage,
+      githubHealthPage,
+      webhookIntakePage,
+      scannerFailurePage,
+      dependencyUpdatePage,
+      failureSignalPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -1090,6 +1166,11 @@ async function refresh() {
       loadJson("/operations/restore-readiness"),
       loadJson("/governance/risk-acceptance?limit=10"),
       loadJson("/rollout/gaps?limit=10"),
+      loadJson("/integrations/github-health"),
+      loadJson("/integrations/webhooks?limit=10"),
+      loadJson("/scanners/failures?limit=10"),
+      loadJson("/remediation/dependency-updates?limit=10"),
+      loadJson("/operations/failure-signals?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -1155,6 +1236,11 @@ async function refresh() {
     renderRestoreReadiness(restoreReadinessPage);
     renderRiskAcceptance(riskAcceptancePage);
     renderRolloutGaps(rolloutGapPage);
+    renderGithubHealth(githubHealthPage);
+    renderWebhookIntake(webhookIntakePage);
+    renderScannerFailures(scannerFailurePage);
+    renderDependencyUpdates(dependencyUpdatePage);
+    renderFailureSignals(failureSignalPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1220,6 +1306,11 @@ async function refresh() {
     restoreReadiness.innerHTML = `<tr><td colspan="4">Unable to load restore readiness</td></tr>`;
     riskAcceptance.innerHTML = `<tr><td colspan="5">Unable to load risk acceptance review</td></tr>`;
     rolloutGaps.innerHTML = `<tr><td colspan="5">Unable to load rollout gaps</td></tr>`;
+    githubHealth.innerHTML = `<tr><td colspan="4">Unable to load GitHub integration health</td></tr>`;
+    webhookIntake.innerHTML = `<tr><td colspan="5">Unable to load webhook intake</td></tr>`;
+    scannerFailures.innerHTML = `<tr><td colspan="5">Unable to load scanner failures</td></tr>`;
+    dependencyUpdates.innerHTML = `<tr><td colspan="5">Unable to load dependency updates</td></tr>`;
+    failureSignals.innerHTML = `<tr><td colspan="5">Unable to load failure signals</td></tr>`;
   }
 }
 
