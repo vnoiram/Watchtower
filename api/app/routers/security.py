@@ -1,0 +1,135 @@
+from typing import Any
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from api.app import models, schemas
+from api.app.config import Settings, get_settings
+from api.app.database import get_db
+from api.app.deps import Principal, get_principal
+
+router = APIRouter(prefix="/security", tags=["security"])
+
+
+@router.get("/data-protection", response_model=list[schemas.DataProtectionOut])
+def data_protection(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    storage_configured = bool(
+        settings.minio_endpoint
+        and settings.minio_access_key
+        and settings.minio_secret_key
+        and settings.minio_bucket
+    )
+    github_secret_configured = bool(settings.github_webhook_secret and (settings.github_token or settings.github_app_id))
+    missing_storage_keys = sum(1 for sbom in db.scalars(select(models.Sbom)) if not sbom.storage_key)
+    classification_missing = sum(1 for sbom in db.scalars(select(models.Sbom)) if not sbom.sbom_kind)
+    artifact_count = _stored_artifact_count(db)
+    return [
+        _protection("object_storage", storage_configured, 1 if storage_configured else 0, "Object storage settings are configured"),
+        _protection("github_secrets", github_secret_configured, 1 if github_secret_configured else 0, "GitHub token/app and webhook secret are configured"),
+        _protection("sbom_storage_keys", missing_storage_keys == 0, missing_storage_keys, "SBOM records without storage keys"),
+        _protection("sbom_classification", classification_missing == 0, classification_missing, "SBOM records without kind classification"),
+        _protection("stored_artifacts", artifact_count > 0, artifact_count, "Scan artifacts with storage keys"),
+    ]
+
+
+@router.get("/findings", response_model=schemas.CursorPage)
+def list_security_findings(
+    limit: int = 50,
+    finding_type: str | None = None,
+    severity: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = []
+    stmt = (
+        select(models.Scan, models.Application, models.Repository)
+        .join(models.Application, models.Scan.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Scan.created_at.desc(), models.Scan.id.asc())
+    )
+    for scan, application, repository in db.execute(stmt):
+        for current_type, finding in _security_findings(scan.result_summary):
+            if finding_type and current_type != finding_type:
+                continue
+            current_severity = _finding_severity(finding)
+            if severity and current_severity != severity:
+                continue
+            items.append(
+                schemas.SecurityFindingOut(
+                    finding_type=current_type,
+                    severity=current_severity,
+                    title=_finding_title(finding),
+                    detail=_finding_detail(finding),
+                    scan_id=scan.id,
+                    scan_status=scan.status,
+                    scan_created_at=scan.created_at,
+                    application_id=application.id,
+                    application_name=application.name,
+                    repository_id=repository.id,
+                    repository_owner=repository.owner,
+                    repository_name=repository.name,
+                ).model_dump(mode="json")
+            )
+            if len(items) >= min(limit, 100):
+                return schemas.CursorPage(items=items, next_cursor=None)
+    return schemas.CursorPage(items=items, next_cursor=None)
+
+
+def _protection(check: str, configured: bool, count: int, detail: str) -> schemas.DataProtectionOut:
+    return schemas.DataProtectionOut(
+        check=check,
+        status="ok" if configured else "warn",
+        configured=configured,
+        count=count,
+        detail=detail,
+    )
+
+
+def _stored_artifact_count(db: Session) -> int:
+    count = 0
+    for scan in db.scalars(select(models.Scan)):
+        artifacts = (scan.result_summary or {}).get("artifacts") or {}
+        if not isinstance(artifacts, dict):
+            continue
+        count += sum(1 for artifact in artifacts.values() if isinstance(artifact, dict) and artifact.get("storage_key"))
+    return count
+
+
+def _security_findings(result_summary: dict[str, Any] | None) -> list[tuple[str, dict]]:
+    if not result_summary:
+        return []
+    items = []
+    for key, finding_type in [
+        ("secrets", "secret"),
+        ("sast", "sast"),
+        ("license_findings", "license"),
+        ("security_findings", "security"),
+    ]:
+        raw = result_summary.get(key) or []
+        if isinstance(raw, dict):
+            raw = [raw]
+        if not isinstance(raw, list):
+            continue
+        for finding in raw:
+            if isinstance(finding, dict):
+                items.append((finding_type, finding))
+    return items
+
+
+def _finding_severity(finding: dict) -> str | None:
+    value = finding.get("severity") or finding.get("level")
+    return str(value) if value else None
+
+
+def _finding_title(finding: dict) -> str:
+    return str(finding.get("title") or finding.get("rule_id") or finding.get("type") or "security finding")
+
+
+def _finding_detail(finding: dict) -> str | None:
+    value = finding.get("detail") or finding.get("message") or finding.get("description") or finding.get("path")
+    return str(value) if value else None

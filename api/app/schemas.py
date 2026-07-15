@@ -801,6 +801,64 @@ class AutoMergeScopeOut(BaseModel):
     reasons: list[str] = Field(default_factory=list)
 
 
+class DataProtectionOut(BaseModel):
+    check: str
+    status: str
+    configured: bool
+    count: int
+    detail: str
+
+
+class RetentionReviewOut(BaseModel):
+    item: str
+    status: str
+    count: int
+    detail: str
+
+
+class ArtifactSbomCoverageOut(BaseModel):
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    has_artifact_sbom: bool
+    latest_artifact_sbom_id: UUID | None = None
+    latest_artifact_sbom_generated_at: datetime | None = None
+    artifact_types: list[str] = Field(default_factory=list)
+
+
+class LicenseReviewOut(BaseModel):
+    issue_type: str
+    component_id: UUID
+    purl: str
+    ecosystem: str | None
+    component_name: str
+    component_version: str | None
+    license: str | None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+
+
+class SecurityFindingOut(BaseModel):
+    finding_type: str
+    severity: str | None = None
+    title: str
+    detail: str | None = None
+    scan_id: UUID
+    scan_status: models.ScanStatus
+    scan_created_at: datetime
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -822,3 +880,4 @@ class DashboardSummary(BaseModel):
     stale_remediation_items: int
     manual_action_count: int
     exposure_review_items: int
+    retention_review_items: int

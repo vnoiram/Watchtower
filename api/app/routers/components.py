@@ -59,6 +59,49 @@ def list_component_applications(
     return _component_usage_by_id(db, [component_id]).get(component_id, [])
 
 
+@router.get("/licenses", response_model=schemas.CursorPage)
+def list_license_review(
+    limit: int = 50,
+    issue_type: str | None = None,
+    ecosystem: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    stmt = select(models.Component).order_by(models.Component.name.asc(), models.Component.id.asc())
+    if ecosystem:
+        stmt = stmt.where(models.Component.ecosystem == ecosystem)
+    components = list(db.scalars(stmt))
+    usage_by_component = _component_usage_by_id(db, [component.id for component in components])
+    items = []
+    for component in components:
+        current_issue = _license_issue(component.license)
+        if not current_issue:
+            continue
+        if issue_type and current_issue != issue_type:
+            continue
+        usages = usage_by_component.get(component.id) or [None]
+        for usage in usages:
+            items.append(
+                schemas.LicenseReviewOut(
+                    issue_type=current_issue,
+                    component_id=component.id,
+                    purl=component.purl,
+                    ecosystem=component.ecosystem,
+                    component_name=component.name,
+                    component_version=component.version,
+                    license=component.license,
+                    application_id=usage.application_id if usage else None,
+                    application_name=usage.application_name if usage else None,
+                    repository_id=usage.repository_id if usage else None,
+                    repository_owner=usage.repository_owner if usage else None,
+                    repository_name=usage.repository_name if usage else None,
+                ).model_dump(mode="json")
+            )
+            if len(items) >= min(limit, 100):
+                return schemas.CursorPage(items=items, next_cursor=None)
+    return schemas.CursorPage(items=items, next_cursor=None)
+
+
 def _component_out(
     component: models.Component,
     active_sbom_count: int,
@@ -114,3 +157,14 @@ def _component_usage_by_id(
             )
         )
     return usage
+
+
+def _license_issue(license_value: str | None) -> str | None:
+    if not license_value:
+        return "missing_license"
+    normalized = license_value.lower()
+    if normalized in {"unknown", "unknown license", "noassertion"}:
+        return "unknown_license"
+    if any(token in normalized for token in ["agpl", "lgpl", "gpl"]):
+        return "copyleft_license"
+    return None

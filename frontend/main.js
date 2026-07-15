@@ -49,6 +49,11 @@ const manualActions = document.querySelector("#manual-actions");
 const ownershipReview = document.querySelector("#ownership-review");
 const exposureReview = document.querySelector("#exposure-review");
 const autoMergeScope = document.querySelector("#auto-merge-scope");
+const dataProtection = document.querySelector("#data-protection");
+const retentionReview = document.querySelector("#retention-review");
+const artifactSbomCoverage = document.querySelector("#artifact-sbom-coverage");
+const licenseReview = document.querySelector("#license-review");
+const securityFindings = document.querySelector("#security-findings");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -117,6 +122,7 @@ function renderMetrics(summary) {
     ["stale_remediation_items", "Stale remediation", "danger"],
     ["manual_action_count", "Manual actions", "warn"],
     ["exposure_review_items", "Exposure review", "danger"],
+    ["retention_review_items", "Retention review", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -698,6 +704,64 @@ function renderAutoMergeScope(page) {
     : `<tr><td colspan="5">No auto-merge scope items</td></tr>`;
 }
 
+function renderDataProtection(rows) {
+  dataProtection.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.configured ? "configured" : "missing")}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No data protection checks</td></tr>`;
+}
+
+function renderRetentionReview(rows) {
+  retentionReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.item)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No retention checks</td></tr>`;
+}
+
+function renderArtifactSbomCoverage(page) {
+  const rows = page.items || [];
+  artifactSbomCoverage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.has_artifact_sbom ? "covered" : "missing")}</td><td>${escapeHtml(item.artifact_types.join(", ") || "-")}</td><td>${escapeHtml(item.latest_artifact_sbom_generated_at ? formatDateTime(item.latest_artifact_sbom_generated_at) : "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No artifact SBOM gaps</td></tr>`;
+}
+
+function renderLicenseReview(page) {
+  const rows = page.items || [];
+  licenseReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.component_name)} ${escapeHtml(item.component_version || "")}</td><td>${escapeHtml(item.license || "-")}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.repository_name || "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No license review items</td></tr>`;
+}
+
+function renderSecurityFindings(page) {
+  const rows = page.items || [];
+  securityFindings.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.finding_type)}</td><td>${escapeHtml(item.severity || "-")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.scan_status)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No security findings</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -748,6 +812,11 @@ async function refresh() {
   ownershipReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   exposureReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   autoMergeScope.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  dataProtection.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  retentionReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  artifactSbomCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  licenseReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  securityFindings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -800,6 +869,11 @@ async function refresh() {
       ownershipReviewPage,
       exposureReviewPage,
       autoMergeScopePage,
+      dataProtectionPage,
+      retentionReviewPage,
+      artifactSbomCoveragePage,
+      licenseReviewPage,
+      securityFindingPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -851,6 +925,11 @@ async function refresh() {
       loadJson("/governance/ownership?limit=10"),
       loadJson("/governance/exposure?limit=10"),
       loadJson("/governance/auto-merge-scope?limit=10"),
+      loadJson("/security/data-protection"),
+      loadJson("/storage/retention"),
+      loadJson("/artifacts/sbom-coverage?missing=true&limit=10"),
+      loadJson("/components/licenses?limit=10"),
+      loadJson("/security/findings?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -901,6 +980,11 @@ async function refresh() {
     renderOwnershipReview(ownershipReviewPage);
     renderExposureReview(exposureReviewPage);
     renderAutoMergeScope(autoMergeScopePage);
+    renderDataProtection(dataProtectionPage);
+    renderRetentionReview(retentionReviewPage);
+    renderArtifactSbomCoverage(artifactSbomCoveragePage);
+    renderLicenseReview(licenseReviewPage);
+    renderSecurityFindings(securityFindingPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -951,6 +1035,11 @@ async function refresh() {
     ownershipReview.innerHTML = `<tr><td colspan="5">Unable to load ownership review</td></tr>`;
     exposureReview.innerHTML = `<tr><td colspan="5">Unable to load exposure review</td></tr>`;
     autoMergeScope.innerHTML = `<tr><td colspan="5">Unable to load auto-merge scope</td></tr>`;
+    dataProtection.innerHTML = `<tr><td colspan="5">Unable to load data protection</td></tr>`;
+    retentionReview.innerHTML = `<tr><td colspan="4">Unable to load retention review</td></tr>`;
+    artifactSbomCoverage.innerHTML = `<tr><td colspan="5">Unable to load artifact SBOM coverage</td></tr>`;
+    licenseReview.innerHTML = `<tr><td colspan="5">Unable to load license review</td></tr>`;
+    securityFindings.innerHTML = `<tr><td colspan="5">Unable to load security findings</td></tr>`;
   }
 }
 
