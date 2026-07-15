@@ -41,13 +41,13 @@ from api.app.routers.audit_logs import list_audit_logs
 from api.app.routers.application_detection import list_application_detection
 from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
-from api.app.routers.audit import list_audit_review
+from api.app.routers.audit import list_audit_evidence_gaps, list_audit_review
 from api.app.routers.artifacts import list_artifact_sbom_coverage, list_artifacts
 from api.app.routers.auto_merge import list_auto_merge_eligibility, list_auto_merge_pilot_readiness
 from api.app.routers.components import list_component_applications, list_components, list_license_review
 from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
-from api.app.routers.findings import list_findings, list_finding_lifecycle_review
+from api.app.routers.findings import list_finding_evidence_gaps, list_findings, list_finding_lifecycle_review
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
 from api.app.routers.findings import list_resolution_candidates
 from api.app.routers.governance import (
@@ -61,7 +61,7 @@ from api.app.routers.governance import (
 from api.app.routers.integrations import github_integration_health, list_webhook_intake
 from api.app.routers.isolated_lane import list_isolated_lane, list_isolated_safeguards
 from api.app.routers.job_health import list_job_health
-from api.app.routers.jobs import list_retry_candidates
+from api.app.routers.jobs import list_job_backlog, list_retry_candidates
 from api.app.routers.kpis import efficiency_kpis, kpi_summary, operational_load_kpis, quality_kpis
 from api.app.routers.maintenance import list_application_maintenance_candidates
 from api.app.routers.notifications import (
@@ -71,6 +71,7 @@ from api.app.routers.notifications import (
 )
 from api.app.routers.operations import (
     backup_readiness,
+    control_evidence,
     daily_operations,
     list_failure_signals,
     list_manual_actions,
@@ -108,6 +109,7 @@ from api.app.routers.rollout import (
     rollout_baseline,
 )
 from api.app.routers.scan_health import list_scan_health
+from api.app.routers.scans import list_scan_evidence_quality
 from api.app.routers.scanner_inventory import list_scanner_inventory
 from api.app.routers.scanners import list_scanner_failures
 from api.app.routers.scanner_versions import list_scanner_versions
@@ -3578,3 +3580,162 @@ def test_enqueue_github_issue_endpoint_rejects_ineligible_finding() -> None:
             enqueue_github_issue_endpoint(finding.id, db=db, _=None)
 
         assert exc.value.status_code == 409
+
+
+def test_control_evidence_reports_operational_evidence_gaps_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "control-evidence")
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, result_summary={})
+        db.add(scan)
+        db.flush()
+        db.add(Sbom(application_id=app.id, scan_id=scan.id, sbom_kind="source", sbom_digest="control", storage_key="sbom.json", active=True))
+        open_finding = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
+        resolved = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
+        db.add_all(
+            [
+                RemediationAction(finding_id=open_finding.id, action_type="github_issue", status="created", provider="github", metadata_json={}),
+                VexStatement(
+                    finding_id=resolved.id,
+                    status=VexStatus.not_affected,
+                    justification="test",
+                    approved_by="",
+                    review_date=now_utc() + timedelta(days=7),
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = control_evidence(db=db, _=None)
+        by_check = {row.check: row for row in rows}
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert by_check["source_sbom_artifacts"].count == 1
+        assert by_check["scan_result_summary"].count == 1
+        assert by_check["critical_high_notifications"].count == 1
+        assert by_check["validation_evidence"].count == 1
+        assert by_check["closure_evidence"].count == 1
+        assert by_check["vex_approval_evidence"].count == 1
+        assert summary.control_evidence_items >= 6
+
+
+def test_list_finding_evidence_gaps_reports_filters_and_context() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "finding-evidence")
+        app = create_application(db, repo)
+        open_critical = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
+        open_high = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
+        resolved = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
+        accepted = create_finding(db, app, severity=Severity.low, status=FindingStatus.accepted_risk)
+        db.add(RemediationAction(finding_id=open_high.id, action_type="github_issue", status="created", provider="github", metadata_json={}))
+        db.flush()
+
+        page = list_finding_evidence_gaps(db=db, _=None)
+        filtered = list_finding_evidence_gaps(gap_type="missing_notification", severity=Severity.critical, status=FindingStatus.open, db=db, _=None)
+        gaps = {(item["gap_type"], item["finding_id"]) for item in page.items}
+
+        assert ("missing_notification", str(open_critical.id)) in gaps
+        assert ("missing_issue_or_pr", str(open_critical.id)) in gaps
+        assert ("missing_validation", str(open_high.id)) in gaps
+        assert ("missing_closure", str(resolved.id)) in gaps
+        assert ("missing_exception_review", str(accepted.id)) in gaps
+        assert [item["finding_id"] for item in filtered.items] == [str(open_critical.id)]
+        assert filtered.items[0]["repository_name"] == repo.name
+
+
+def test_list_job_backlog_reports_stale_failed_and_retry_exhausted() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "job-backlog")
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.queued,
+                    repository_id=repo.id,
+                    application_id=app.id,
+                    run_after=now_utc() - timedelta(days=2),
+                    created_at=now_utc() - timedelta(days=2),
+                ),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.running,
+                    started_at=now_utc() - timedelta(days=2),
+                    run_after=now_utc() - timedelta(days=3),
+                    created_at=now_utc() - timedelta(days=3),
+                    locked_by="worker-1",
+                ),
+                Job(
+                    job_type=JobType.notification,
+                    status=JobStatus.failed,
+                    attempts=3,
+                    max_attempts=3,
+                    run_after=now_utc() - timedelta(hours=1),
+                    last_error="boom",
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_job_backlog(db=db, _=None)
+        filtered = list_job_backlog(reason="retry_exhausted", status=JobStatus.failed, db=db, _=None)
+        reasons = {item["reason"] for item in page.items}
+
+        assert {"stale_queued", "stale_running", "retry_exhausted"} <= reasons
+        assert filtered.items[0]["job_type"] == "notification"
+        assert filtered.items[0]["last_error"] == "boom"
+
+
+def test_list_audit_evidence_gaps_reports_missing_and_incomplete_audit() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "audit-evidence")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
+        action = RemediationAction(finding_id=finding.id, action_type="github_issue", status="created", provider="github", metadata_json={})
+        notification = Notification(channel="slack", severity=Severity.high, subject="failed", body="failed", status="failed", metadata_json={"finding_id": str(finding.id)})
+        db.add_all([action, notification])
+        db.flush()
+        db.add(AuditLog(actor="operator", role="operator", action="remediation.action", resource_type="remediation_action", resource_id=str(action.id), metadata_json={}))
+        db.flush()
+
+        page = list_audit_evidence_gaps(db=db, _=None)
+        incomplete = list_audit_evidence_gaps(resource_type="remediation_action", gap_type="incomplete_audit_log", db=db, _=None)
+        gaps = {(item["gap_type"], item["resource_type"]) for item in page.items}
+
+        assert ("incomplete_audit_log", "remediation_action") in gaps
+        assert ("missing_audit_log", "notification") in gaps
+        assert incomplete.items[0]["resource_id"] == str(action.id)
+
+
+def test_list_scan_evidence_quality_reports_scan_evidence_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "scan-evidence")
+        app = create_application(db, repo)
+        empty_success = Scan(application_id=app.id, status=ScanStatus.succeeded, result_summary={})
+        failed_scanner = Scan(
+            application_id=app.id,
+            status=ScanStatus.partially_succeeded,
+            tool="trivy",
+            tool_version="1.0",
+            commit_sha="abc",
+            result_summary={"scanner_failures": [{"scanner": "osv", "error": "timeout"}]},
+        )
+        db.add_all([empty_success, failed_scanner])
+        db.flush()
+
+        page = list_scan_evidence_quality(db=db, _=None)
+        filtered = list_scan_evidence_quality(gap_type="scanner_failures", status=ScanStatus.partially_succeeded, tool="trivy", db=db, _=None)
+        gaps = {(item["gap_type"], item["scan_id"]) for item in page.items}
+
+        assert ("missing_tool", str(empty_success.id)) in gaps
+        assert ("missing_tool_version", str(empty_success.id)) in gaps
+        assert ("missing_commit_sha", str(empty_success.id)) in gaps
+        assert ("empty_result_summary", str(empty_success.id)) in gaps
+        assert ("missing_source_sbom_artifact", str(empty_success.id)) in gaps
+        assert ("empty_successful_scan", str(empty_success.id)) in gaps
+        assert filtered.items[0]["scan_id"] == str(failed_scanner.id)

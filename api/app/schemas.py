@@ -1309,6 +1309,75 @@ class AutoMergePilotReadinessOut(BaseModel):
     touches_forbidden_path: bool
 
 
+class ControlEvidenceOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class FindingEvidenceGapOut(BaseModel):
+    gap_type: str
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    detail: str
+    updated_at: datetime
+
+
+class JobBacklogOut(BaseModel):
+    id: UUID
+    job_type: models.JobType
+    status: models.JobStatus
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    attempts: int
+    max_attempts: int
+    run_after: datetime
+    locked_by: str | None = None
+    age_hours: int
+    reason: str
+    last_error: str | None = None
+    created_at: datetime
+
+
+class AuditEvidenceGapOut(BaseModel):
+    gap_type: str
+    resource_type: str
+    resource_id: str
+    expected_action: str
+    actor: str | None = None
+    audit_log_id: UUID | None = None
+    detail: str
+    created_at: datetime
+
+
+class ScanEvidenceQualityOut(BaseModel):
+    gap_type: str
+    scan_id: UUID
+    status: models.ScanStatus
+    tool: str | None = None
+    tool_version: str | None = None
+    commit_sha: str | None = None
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    detail: str
+    created_at: datetime
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1342,3 +1411,4 @@ class DashboardSummary(BaseModel):
     remediation_coverage_items: int
     monthly_review_items: int
     phase_readiness_items: int
+    control_evidence_items: int

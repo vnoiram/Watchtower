@@ -15,6 +15,7 @@ from api.app.routers.job_health import job_health_reason
 from api.app.routers.kpis import notification_failure_count, scan_failure_rate_percent
 from api.app.routers.notifications import notification_slo_breach_count
 from api.app.routers.operations import (
+    control_evidence_count,
     failure_signal_count,
     manual_action_count,
     manual_workload_count,
@@ -88,6 +89,7 @@ def dashboard_summary(
     remediation_coverage_items = remediation_coverage_count(db)
     monthly_review_items = monthly_review_count(db)
     phase_readiness_items = phase_readiness_count(db)
+    control_evidence_items = control_evidence_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -121,4 +123,5 @@ def dashboard_summary(
         remediation_coverage_items=remediation_coverage_items,
         monthly_review_items=monthly_review_items,
         phase_readiness_items=phase_readiness_items,
+        control_evidence_items=control_evidence_items,
     )
