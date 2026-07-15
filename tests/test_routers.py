@@ -14,6 +14,9 @@ from api.app.models import (
     Component,
     Finding,
     FindingStatus,
+    Job,
+    JobStatus,
+    JobType,
     Lifecycle,
     Notification,
     RemediationAction,
@@ -37,8 +40,15 @@ from api.app.routers.components import list_component_applications, list_compone
 from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.findings import list_findings
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
+from api.app.routers.job_health import list_job_health
 from api.app.routers.maintenance import list_application_maintenance_candidates
 from api.app.routers.notifications import list_notifications
+from api.app.routers.remediation import (
+    list_github_issue_actions,
+    list_issue_closures,
+    list_remediation_candidates,
+    list_remediation_validations,
+)
 from api.app.routers.remediation_actions import list_remediation_actions
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.sbom_coverage import list_sbom_coverage
@@ -536,6 +546,209 @@ def test_list_application_maintenance_candidates_reports_reasons() -> None:
         assert by_name["unsupported"]["reasons"] == ["unsupported"]
         assert by_name["deprecated"]["reasons"] == ["deprecated"]
         assert by_name["stale"]["reasons"] == ["stale_scan"]
+
+
+def test_list_remediation_candidates_excludes_findings_with_open_issue_action() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        candidate = create_finding(db, app, severity=Severity.critical, risk_score=9.8)
+        with_issue = create_finding(db, app, severity=Severity.high, risk_score=8.2)
+        db.add(
+            RemediationAction(
+                finding_id=with_issue.id,
+                action_type="github_issue",
+                status="created",
+                provider="github",
+                metadata_json={"finding_id": str(with_issue.id)},
+            )
+        )
+        db.flush()
+
+        page = list_remediation_candidates(db=db, _=None)
+
+        assert [item["finding_id"] for item in page.items] == [str(candidate.id)]
+        assert page.items[0]["application_name"] == app.name
+        assert page.items[0]["vulnerability_external_id"] == "critical-open"
+        assert page.items[0]["fixed_version"] == "1.0.1"
+
+
+def test_list_github_issue_actions_filters_and_returns_errors() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical)
+        matching = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="close_failed",
+            provider="github",
+            provider_id="42",
+            url="https://github.com/local/demo/issues/42",
+            metadata_json={"close_error": "github unavailable"},
+        )
+        skipped = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="queued",
+            provider="watchtower",
+            metadata_json={},
+        )
+        db.add_all([matching, skipped])
+        db.flush()
+
+        page = list_github_issue_actions(
+            status="close_failed",
+            severity=Severity.critical,
+            finding_id=finding.id,
+            db=db,
+            _=None,
+        )
+
+        assert [item["id"] for item in page.items] == [str(matching.id)]
+        assert page.items[0]["provider_id"] == "42"
+        assert page.items[0]["close_error"] == "github unavailable"
+        assert page.items[0]["application_name"] == app.name
+
+
+def test_list_remediation_validations_filters_metadata_status() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        scan = Scan(application_id=app.id, status=ScanStatus.failed)
+        db.add(scan)
+        db.flush()
+        failed = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            metadata_json={
+                "validation_status": "failed",
+                "validation_scan_id": str(scan.id),
+                "validation_scan_status": "failed",
+                "validation_error": "syft missing",
+            },
+        )
+        pending = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="queued",
+            provider="watchtower",
+            metadata_json={},
+        )
+        db.add_all([failed, pending])
+        db.flush()
+
+        page = list_remediation_validations(
+            validation_status="failed",
+            action_type="github_issue",
+            severity=Severity.high,
+            db=db,
+            _=None,
+        )
+
+        assert [item["id"] for item in page.items] == [str(failed.id)]
+        assert page.items[0]["validation_scan_id"] == str(scan.id)
+        assert page.items[0]["validation_scan_status"] == "failed"
+        assert page.items[0]["validation_error"] == "syft missing"
+
+
+def test_list_issue_closures_reports_close_states() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        not_requested = create_finding(db, app, severity=Severity.critical, status=FindingStatus.resolved)
+        pending = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
+        close_failed = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
+        closed = create_finding(db, app, severity=Severity.low, status=FindingStatus.resolved)
+        db.add_all(
+            [
+                RemediationAction(
+                    finding_id=pending.id,
+                    action_type="github_issue",
+                    status="created",
+                    provider="github",
+                    provider_id="10",
+                    metadata_json={},
+                ),
+                RemediationAction(
+                    finding_id=close_failed.id,
+                    action_type="github_issue",
+                    status="close_failed",
+                    provider="github",
+                    provider_id="11",
+                    metadata_json={"close_error": "rate limited"},
+                ),
+                RemediationAction(
+                    finding_id=closed.id,
+                    action_type="github_issue",
+                    status="closed",
+                    provider="github",
+                    provider_id="12",
+                    metadata_json={"github_issue_closed_at": "2026-07-15T00:00:00+00:00"},
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_issue_closures(db=db, _=None)
+
+        by_finding = {item["finding_id"]: item for item in page.items}
+        assert by_finding[str(not_requested.id)]["close_state"] == "not_requested"
+        assert by_finding[str(pending.id)]["close_state"] == "pending_close"
+        assert by_finding[str(close_failed.id)]["close_state"] == "close_failed"
+        assert by_finding[str(close_failed.id)]["close_error"] == "rate limited"
+        assert by_finding[str(closed.id)]["close_state"] == "closed"
+
+
+def test_list_job_health_reports_unhealthy_jobs_and_summary_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.failed,
+                    repository_id=repo.id,
+                    application_id=app.id,
+                    last_error="clone failed",
+                ),
+                Job(
+                    job_type=JobType.notification,
+                    status=JobStatus.running,
+                    started_at=now_utc() - timedelta(hours=2),
+                ),
+                Job(
+                    job_type=JobType.issue_create,
+                    status=JobStatus.queued,
+                    run_after=now_utc() - timedelta(hours=2),
+                ),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.queued,
+                    run_after=now_utc() + timedelta(minutes=5),
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_job_health(db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        reasons = {item["health_reason"] for item in page.items}
+        assert reasons == {"failed", "stale_running", "overdue_queued"}
+        failed = next(item for item in page.items if item["health_reason"] == "failed")
+        assert failed["repository_name"] == repo.name
+        assert failed["application_name"] == app.name
+        assert summary.unhealthy_jobs == 3
 
 
 def test_enqueue_github_issue_endpoint_queues_and_suppresses_duplicate() -> None:

@@ -13,6 +13,11 @@ const scanHealth = document.querySelector("#scan-health");
 const sbomCoverage = document.querySelector("#sbom-coverage");
 const notifications = document.querySelector("#notifications");
 const maintenanceCandidates = document.querySelector("#maintenance-candidates");
+const remediationCandidates = document.querySelector("#remediation-candidates");
+const githubIssueActions = document.querySelector("#github-issue-actions");
+const remediationValidations = document.querySelector("#remediation-validations");
+const issueClosures = document.querySelector("#issue-closures");
+const jobHealth = document.querySelector("#job-health");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -70,6 +75,7 @@ function renderMetrics(summary) {
     ["expired_vex", "Expired VEX", "warn"],
     ["missing_active_sbom", "Missing SBOM", "warn"],
     ["sbom_coverage_percent", "SBOM coverage %", ""],
+    ["unhealthy_jobs", "Unhealthy jobs", "danger"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -226,6 +232,66 @@ function renderMaintenanceCandidates(page) {
     : `<tr><td colspan="5">No maintenance candidates</td></tr>`;
 }
 
+function renderRemediationCandidates(page) {
+  const rows = page.items || [];
+  remediationCandidates.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.component_name)}</td><td>${escapeHtml(item.fixed_version)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No fixable findings without issue</td></tr>`;
+}
+
+function renderGitHubIssueActions(page) {
+  const rows = page.items || [];
+  githubIssueActions.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.provider_id || "-")}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.vulnerability_external_id || item.component_name || "-")}</td><td>${escapeHtml(item.error || item.close_error || item.url || "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No GitHub issue actions</td></tr>`;
+}
+
+function renderRemediationValidations(page) {
+  const rows = page.items || [];
+  remediationValidations.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.validation_status)}</td><td>${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.validation_scan_status || "-")}</td><td>${escapeHtml(item.validation_error || "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No remediation validations</td></tr>`;
+}
+
+function renderIssueClosures(page) {
+  const rows = page.items || [];
+  issueClosures.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.close_state)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.provider_id || "-")}</td><td>${escapeHtml(item.close_error || item.github_issue_closed_at || "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No issue closure backlog</td></tr>`;
+}
+
+function renderJobHealth(page) {
+  const rows = page.items || [];
+  jobHealth.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.job_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.health_reason)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.last_error || formatDateTime(item.run_after))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No unhealthy jobs</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -240,6 +306,11 @@ async function refresh() {
   sbomCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   notifications.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   maintenanceCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  remediationCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  githubIssueActions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  remediationValidations.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  issueClosures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  jobHealth.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -256,6 +327,11 @@ async function refresh() {
       sbomCoveragePage,
       notificationPage,
       maintenancePage,
+      remediationCandidatePage,
+      githubIssueActionPage,
+      remediationValidationPage,
+      issueClosurePage,
+      jobHealthPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -271,6 +347,11 @@ async function refresh() {
       loadJson("/sbom-coverage?missing=true&limit=10"),
       loadJson("/notifications?limit=10"),
       loadJson("/maintenance/applications?limit=10"),
+      loadJson("/remediation/candidates?limit=10"),
+      loadJson("/remediation/issues?limit=10"),
+      loadJson("/remediation/validations?limit=10"),
+      loadJson("/remediation/closures?limit=10"),
+      loadJson("/job-health?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -285,6 +366,11 @@ async function refresh() {
     renderSbomCoverage(sbomCoveragePage);
     renderNotifications(notificationPage);
     renderMaintenanceCandidates(maintenancePage);
+    renderRemediationCandidates(remediationCandidatePage);
+    renderGitHubIssueActions(githubIssueActionPage);
+    renderRemediationValidations(remediationValidationPage);
+    renderIssueClosures(issueClosurePage);
+    renderJobHealth(jobHealthPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -299,6 +385,11 @@ async function refresh() {
     sbomCoverage.innerHTML = `<tr><td colspan="5">Unable to load SBOM coverage</td></tr>`;
     notifications.innerHTML = `<tr><td colspan="5">Unable to load notifications</td></tr>`;
     maintenanceCandidates.innerHTML = `<tr><td colspan="5">Unable to load maintenance candidates</td></tr>`;
+    remediationCandidates.innerHTML = `<tr><td colspan="5">Unable to load remediation candidates</td></tr>`;
+    githubIssueActions.innerHTML = `<tr><td colspan="5">Unable to load GitHub issue actions</td></tr>`;
+    remediationValidations.innerHTML = `<tr><td colspan="5">Unable to load remediation validations</td></tr>`;
+    issueClosures.innerHTML = `<tr><td colspan="5">Unable to load issue closures</td></tr>`;
+    jobHealth.innerHTML = `<tr><td colspan="5">Unable to load job health</td></tr>`;
   }
 }
 
