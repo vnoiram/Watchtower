@@ -36,6 +36,7 @@ from api.app.services.jobs import enqueue_job, lock_next_job, mark_job_failed, m
 from api.app.services.notifications import deliver_notification, enqueue_finding_notifications
 from api.app.services.registry import detect_applications
 from api.app.services.remediation import (
+    enqueue_ai_fix_requests,
     enqueue_github_issue_requests,
     process_github_issue_closures,
     process_github_issue_actions,
@@ -471,6 +472,21 @@ def run_issue_create_job(db: Session, job: Job) -> None:
         )
 
 
+def run_ai_fix_job(db: Session, job: Job) -> None:
+    payload = job.payload or {}
+    finding_ids = _uuid_list_from_payload(payload, "finding_ids", "finding_id")
+    application_id = payload.get("application_id") or job.application_id
+    if not finding_ids and not application_id:
+        raise RuntimeError("ai fix job requires finding_ids or application_id")
+
+    actions = enqueue_ai_fix_requests(
+        db,
+        finding_ids=finding_ids,
+        application_id=UUID(str(application_id)) if application_id else None,
+    )
+    logger.info("ai fix actions queued job_id=%s action_count=%s", job.id, len(actions))
+
+
 def repository_sync_owner_from_payload(payload: dict) -> str | None:
     owner = payload.get("owner")
     if owner:
@@ -515,6 +531,8 @@ def handle_job(db: Session, job: Job) -> None:
         run_notification_job(db, job)
     elif job.job_type == JobType.issue_create:
         run_issue_create_job(db, job)
+    elif job.job_type == JobType.ai_fix:
+        run_ai_fix_job(db, job)
     elif job.job_type == JobType.repository_sync:
         run_repository_sync_job(db, job)
     else:
