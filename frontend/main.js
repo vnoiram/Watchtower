@@ -44,6 +44,7 @@ const scheduledScanCoverage = document.querySelector("#scheduled-scan-coverage")
 const dailyScanSlo = document.querySelector("#daily-scan-slo");
 const resolutionCandidates = document.querySelector("#resolution-candidates");
 const backupReadiness = document.querySelector("#backup-readiness");
+const backupEvidence = document.querySelector("#backup-evidence");
 const notificationSlo = document.querySelector("#notification-slo");
 const remediationPrs = document.querySelector("#remediation-prs");
 const remediationBacklog = document.querySelector("#remediation-backlog");
@@ -57,8 +58,11 @@ const autoMergeScope = document.querySelector("#auto-merge-scope");
 const dataProtection = document.querySelector("#data-protection");
 const retentionReview = document.querySelector("#retention-review");
 const artifactSbomCoverage = document.querySelector("#artifact-sbom-coverage");
+const containerCoverage = document.querySelector("#container-coverage");
 const licenseReview = document.querySelector("#license-review");
 const securityFindings = document.querySelector("#security-findings");
+const secretScanCoverage = document.querySelector("#secret-scan-coverage");
+const sastCoverage = document.querySelector("#sast-coverage");
 const duplicateReview = document.querySelector("#duplicate-review");
 const reopenRisk = document.querySelector("#reopen-risk");
 const qualityKpis = document.querySelector("#quality-kpis");
@@ -67,6 +71,7 @@ const runtimeEol = document.querySelector("#runtime-eol");
 const auditReview = document.querySelector("#audit-review");
 const rbacReview = document.querySelector("#rbac-review");
 const restoreReadiness = document.querySelector("#restore-readiness");
+const restoreEvidence = document.querySelector("#restore-evidence");
 const riskAcceptance = document.querySelector("#risk-acceptance");
 const rolloutGaps = document.querySelector("#rollout-gaps");
 const githubHealth = document.querySelector("#github-health");
@@ -213,6 +218,11 @@ function renderMetrics(summary) {
     ["daily_scan_slo_breaches", "Daily scan SLO", "danger"],
     ["issue_slo_breaches", "Issue SLO", "danger"],
     ["auto_resolution_gap_items", "Auto-resolution gaps", "warn"],
+    ["secret_scan_gap_items", "Secret scan gaps", "warn"],
+    ["sast_coverage_gap_items", "SAST gaps", "warn"],
+    ["container_coverage_gap_items", "Container gaps", "warn"],
+    ["backup_evidence_gap_items", "Backup evidence", "warn"],
+    ["restore_evidence_gap_items", "Restore evidence", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -935,6 +945,18 @@ function renderArtifactSbomCoverage(page) {
     : `<tr><td colspan="5">No artifact SBOM gaps</td></tr>`;
 }
 
+function renderContainerCoverage(page) {
+  const rows = page.items || [];
+  containerCoverage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml((item.artifact_types || []).join(", ") || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No container coverage gaps</td></tr>`;
+}
+
 function renderLicenseReview(page) {
   const rows = page.items || [];
   licenseReview.innerHTML = rows.length
@@ -957,6 +979,18 @@ function renderSecurityFindings(page) {
         )
         .join("")
     : `<tr><td colspan="5">No security findings</td></tr>`;
+}
+
+function renderSecurityScanCoverage(target, page, emptyText) {
+  const rows = page.items || [];
+  target.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.finding_count)} ${escapeHtml(item.max_severity || "")}</td><td>${escapeHtml(item.latest_scan_status || "missing")} ${escapeHtml(item.latest_scan_tool || "")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">${emptyText}</td></tr>`;
 }
 
 function renderDuplicateReview(page) {
@@ -1050,6 +1084,18 @@ function renderRestoreReadiness(rows) {
         )
         .join("")
     : `<tr><td colspan="4">No restore readiness checks</td></tr>`;
+}
+
+function renderOperationEvidence(target, page, emptyText) {
+  const rows = page.items || [];
+  target.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.evidence_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.action || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">${emptyText}</td></tr>`;
 }
 
 function renderRiskAcceptance(page) {
@@ -1658,6 +1704,7 @@ async function refresh() {
   dailyScanSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   resolutionCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   backupReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  backupEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   notificationSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationPrs.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   fixableGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1675,8 +1722,11 @@ async function refresh() {
   dataProtection.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   retentionReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   artifactSbomCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  containerCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   licenseReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   securityFindings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  secretScanCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  sastCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   duplicateReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   reopenRisk.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   qualityKpis.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
@@ -1685,6 +1735,7 @@ async function refresh() {
   auditReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   rbacReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   restoreReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  restoreEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   riskAcceptance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   rolloutGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   githubHealth.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
@@ -1780,6 +1831,7 @@ async function refresh() {
       dailyScanSloPage,
       resolutionCandidatePage,
       backupReadinessPage,
+      backupEvidencePage,
       notificationSloPage,
       remediationPrPage,
       fixableGapPage,
@@ -1797,8 +1849,11 @@ async function refresh() {
       dataProtectionPage,
       retentionReviewPage,
       artifactSbomCoveragePage,
+      containerCoveragePage,
       licenseReviewPage,
       securityFindingPage,
+      secretScanCoveragePage,
+      sastCoveragePage,
       duplicateReviewPage,
       reopenRiskPage,
       qualityKpiPage,
@@ -1807,6 +1862,7 @@ async function refresh() {
       auditReviewPage,
       rbacReviewPage,
       restoreReadinessPage,
+      restoreEvidencePage,
       riskAcceptancePage,
       rolloutGapPage,
       githubHealthPage,
@@ -1901,6 +1957,7 @@ async function refresh() {
       loadJson("/scans/daily-slo?breached=true&limit=10"),
       loadJson("/findings/resolution-candidates?limit=10"),
       loadJson("/operations/backup-readiness"),
+      loadJson("/operations/backup-evidence?limit=10"),
       loadJson("/notifications/slo?breached=true&limit=10"),
       loadJson("/remediation/prs?limit=10"),
       loadJson("/remediation/fixable-gaps?limit=10"),
@@ -1918,8 +1975,11 @@ async function refresh() {
       loadJson("/security/data-protection"),
       loadJson("/storage/retention"),
       loadJson("/artifacts/sbom-coverage?missing=true&limit=10"),
+      loadJson("/artifacts/container-coverage?limit=10"),
       loadJson("/components/licenses?limit=10"),
       loadJson("/security/findings?limit=10"),
+      loadJson("/security/secret-scan-coverage?limit=10"),
+      loadJson("/security/sast-coverage?limit=10"),
       loadJson("/quality/duplicates?limit=10"),
       loadJson("/quality/reopen-risk?limit=10"),
       loadJson("/kpis/quality"),
@@ -1928,6 +1988,7 @@ async function refresh() {
       loadJson("/audit/review?limit=10"),
       loadJson("/security/rbac-review"),
       loadJson("/operations/restore-readiness"),
+      loadJson("/operations/restore-evidence?limit=10"),
       loadJson("/governance/risk-acceptance?limit=10"),
       loadJson("/rollout/gaps?limit=10"),
       loadJson("/integrations/github-health"),
@@ -2021,6 +2082,7 @@ async function refresh() {
     renderDailyScanSlo(dailyScanSloPage);
     renderResolutionCandidates(resolutionCandidatePage);
     renderBackupReadiness(backupReadinessPage);
+    renderOperationEvidence(backupEvidence, backupEvidencePage, "No backup evidence records");
     renderNotificationSlo(notificationSloPage);
     renderRemediationPrs(remediationPrPage);
     renderFixableGaps(fixableGapPage);
@@ -2038,8 +2100,11 @@ async function refresh() {
     renderDataProtection(dataProtectionPage);
     renderRetentionReview(retentionReviewPage);
     renderArtifactSbomCoverage(artifactSbomCoveragePage);
+    renderContainerCoverage(containerCoveragePage);
     renderLicenseReview(licenseReviewPage);
     renderSecurityFindings(securityFindingPage);
+    renderSecurityScanCoverage(secretScanCoverage, secretScanCoveragePage, "No secret scan coverage gaps");
+    renderSecurityScanCoverage(sastCoverage, sastCoveragePage, "No SAST coverage gaps");
     renderDuplicateReview(duplicateReviewPage);
     renderReopenRisk(reopenRiskPage);
     renderQualityKpis(qualityKpiPage);
@@ -2048,6 +2113,7 @@ async function refresh() {
     renderAuditReview(auditReviewPage);
     renderRbacReview(rbacReviewPage);
     renderRestoreReadiness(restoreReadinessPage);
+    renderOperationEvidence(restoreEvidence, restoreEvidencePage, "No restore evidence records");
     renderRiskAcceptance(riskAcceptancePage);
     renderRolloutGaps(rolloutGapPage);
     renderGithubHealth(githubHealthPage);
@@ -2141,6 +2207,7 @@ async function refresh() {
     dailyScanSlo.innerHTML = `<tr><td colspan="5">Unable to load daily scan SLO</td></tr>`;
     resolutionCandidates.innerHTML = `<tr><td colspan="5">Unable to load resolution candidates</td></tr>`;
     backupReadiness.innerHTML = `<tr><td colspan="4">Unable to load backup readiness</td></tr>`;
+    backupEvidence.innerHTML = `<tr><td colspan="5">Unable to load backup evidence</td></tr>`;
     notificationSlo.innerHTML = `<tr><td colspan="5">Unable to load notification SLO</td></tr>`;
     remediationPrs.innerHTML = `<tr><td colspan="5">Unable to load PR/CI status</td></tr>`;
     fixableGaps.innerHTML = `<tr><td colspan="5">Unable to load fixable gaps</td></tr>`;
@@ -2158,8 +2225,11 @@ async function refresh() {
     dataProtection.innerHTML = `<tr><td colspan="5">Unable to load data protection</td></tr>`;
     retentionReview.innerHTML = `<tr><td colspan="4">Unable to load retention review</td></tr>`;
     artifactSbomCoverage.innerHTML = `<tr><td colspan="5">Unable to load artifact SBOM coverage</td></tr>`;
+    containerCoverage.innerHTML = `<tr><td colspan="5">Unable to load container coverage</td></tr>`;
     licenseReview.innerHTML = `<tr><td colspan="5">Unable to load license review</td></tr>`;
     securityFindings.innerHTML = `<tr><td colspan="5">Unable to load security findings</td></tr>`;
+    secretScanCoverage.innerHTML = `<tr><td colspan="5">Unable to load secret scan coverage</td></tr>`;
+    sastCoverage.innerHTML = `<tr><td colspan="5">Unable to load SAST coverage</td></tr>`;
     duplicateReview.innerHTML = `<tr><td colspan="5">Unable to load duplicate review</td></tr>`;
     reopenRisk.innerHTML = `<tr><td colspan="5">Unable to load reopen risk</td></tr>`;
     qualityKpis.innerHTML = `<tr><td colspan="4">Unable to load quality KPIs</td></tr>`;
@@ -2168,6 +2238,7 @@ async function refresh() {
     auditReview.innerHTML = `<tr><td colspan="5">Unable to load audit review</td></tr>`;
     rbacReview.innerHTML = `<tr><td colspan="4">Unable to load RBAC review</td></tr>`;
     restoreReadiness.innerHTML = `<tr><td colspan="4">Unable to load restore readiness</td></tr>`;
+    restoreEvidence.innerHTML = `<tr><td colspan="5">Unable to load restore evidence</td></tr>`;
     riskAcceptance.innerHTML = `<tr><td colspan="5">Unable to load risk acceptance review</td></tr>`;
     rolloutGaps.innerHTML = `<tr><td colspan="5">Unable to load rollout gaps</td></tr>`;
     githubHealth.innerHTML = `<tr><td colspan="4">Unable to load GitHub integration health</td></tr>`;

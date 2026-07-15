@@ -1761,6 +1761,51 @@ class CredentialFailureOut(BaseModel):
     created_at: datetime
 
 
+class SecurityScanCoverageOut(BaseModel):
+    gap_type: str
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_tool: str | None = None
+    latest_scan_created_at: datetime | None = None
+    has_scan_evidence: bool
+    finding_count: int
+    max_severity: str | None = None
+    detail: str
+
+
+class ContainerCoverageOut(BaseModel):
+    gap_type: str
+    application_id: UUID
+    application_name: str
+    application_type: models.ApplicationType
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    has_container_artifact: bool
+    has_container_sbom: bool
+    artifact_types: list[str]
+    detail: str
+
+
+class OperationEvidenceOut(BaseModel):
+    evidence_type: str
+    status: str
+    count: int
+    action: str | None = None
+    resource_type: str | None = None
+    resource_id: str | None = None
+    latest_evidence_at: datetime | None = None
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1808,3 +1853,8 @@ class DashboardSummary(BaseModel):
     daily_scan_slo_breaches: int
     issue_slo_breaches: int
     auto_resolution_gap_items: int
+    secret_scan_gap_items: int
+    sast_coverage_gap_items: int
+    container_coverage_gap_items: int
+    backup_evidence_gap_items: int
+    restore_evidence_gap_items: int

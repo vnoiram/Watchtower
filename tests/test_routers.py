@@ -42,7 +42,7 @@ from api.app.routers.application_detection import list_application_detection
 from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
 from api.app.routers.audit import list_audit_evidence_gaps, list_audit_review
-from api.app.routers.artifacts import list_artifact_sbom_coverage, list_artifacts
+from api.app.routers.artifacts import list_artifact_sbom_coverage, list_artifacts, list_container_coverage
 from api.app.routers.auto_merge import (
     automation_guardrails,
     list_auto_merge_dry_runs,
@@ -92,9 +92,11 @@ from api.app.routers.operations import (
     backup_readiness,
     control_evidence,
     daily_operations,
+    list_backup_evidence,
     list_credential_failures,
     list_failure_signals,
     list_manual_actions,
+    list_restore_evidence,
     list_scheduler_drift,
     monthly_review,
     operational_workload,
@@ -150,6 +152,8 @@ from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
 from api.app.routers.security import (
     data_protection,
     list_exploit_intel,
+    list_sast_coverage,
+    list_secret_scan_coverage,
     list_secrets_review,
     list_security_findings,
     rbac_review,
@@ -1274,6 +1278,50 @@ def test_backup_readiness_reports_storage_artifact_and_cleanup_state() -> None:
         assert by_check["cleanup_backlog"].count == 1
 
 
+def test_list_backup_evidence_reports_recent_audit_storage_gaps_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "backup-evidence")
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        db.add(scan)
+        db.flush()
+        db.add(
+            Sbom(
+                application_id=app.id,
+                scan_id=scan.id,
+                sbom_digest="backup-evidence",
+                storage_key="",
+                active=True,
+                sbom_kind="source",
+            )
+        )
+        db.add(
+            AuditLog(
+                actor="operator",
+                role="admin",
+                action="backup.verify",
+                resource_type="backup",
+                resource_id="backup-1",
+                metadata_json={},
+                created_at=now_utc(),
+            )
+        )
+        db.flush()
+
+        settings = Settings(minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket="")
+        page = list_backup_evidence(db=db, settings=settings, _=None)
+        audit_page = list_backup_evidence(evidence_type="backup_audit", status="ok", db=db, settings=settings, _=None)
+        summary = dashboard_summary(db=db, settings=settings, _=None)
+        by_type = {item["evidence_type"]: item for item in page.items}
+
+        assert by_type["object_storage"]["status"] == "fail"
+        assert by_type["sbom_storage_keys"]["status"] == "fail"
+        assert by_type["backup_audit_30d"]["status"] == "ok"
+        assert audit_page.items[0]["action"] == "backup.verify"
+        assert summary.backup_evidence_gap_items >= 2
+
+
 def test_list_notification_slo_reports_breaches_and_dashboard_count() -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
@@ -1864,6 +1912,38 @@ def test_list_artifact_sbom_coverage_reports_artifact_sbom_sources() -> None:
         assert [item["application_name"] for item in missing_page.items] == [missing.name]
 
 
+def test_list_container_coverage_reports_missing_container_artifacts_and_failures() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "container-coverage")
+        missing = create_application(db, repo, "container-missing")
+        missing.application_type = ApplicationType.container
+        failed = create_application(db, repo, "container-failed")
+        failed.application_type = ApplicationType.container
+        scan = Scan(
+            application_id=failed.id,
+            scan_type="container",
+            tool="trivy",
+            status=ScanStatus.failed,
+            error_message="registry timeout",
+            result_summary={"artifacts": {"container_image": {"storage_key": "image.json"}}},
+        )
+        db.add(scan)
+        db.flush()
+
+        page = list_container_coverage(db=db, _=None)
+        filtered = list_container_coverage(gap_type="failed_container_scan", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["application_name"], item["gap_type"]) for item in page.items}
+
+        assert ("container-missing", "missing_container_artifact") in gaps
+        assert ("container-missing", "missing_container_sbom") in gaps
+        assert ("container-failed", "missing_container_sbom") in gaps
+        assert ("container-failed", "failed_container_scan") in gaps
+        assert filtered.items[0]["detail"] == "registry timeout"
+        assert summary.container_coverage_gap_items == 4
+
+
 def test_list_license_review_reports_missing_unknown_and_copyleft_components() -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
@@ -2358,6 +2438,61 @@ def test_restore_readiness_reports_storage_artifacts_and_restore_exercise() -> N
         assert by_check["source_sbom_artifacts"].status == "warn"
         assert by_check["restore_exercise_30d"].status == "ok"
         assert by_check["restore_exercise_30d"].count == 1
+
+
+def test_list_restore_evidence_reports_recent_audit_stale_gap_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "restore-evidence")
+        app = create_application(db, repo)
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={"artifacts": {"source_sbom": {"storage_key": "source.json"}}},
+        )
+        old_restore = AuditLog(
+            actor="admin",
+            role="admin",
+            action="restore.verify",
+            resource_type="backup",
+            resource_id="old-restore",
+            metadata_json={},
+            created_at=now_utc() - timedelta(days=45),
+        )
+        recent_restore = AuditLog(
+            actor="admin",
+            role="admin",
+            action="backup.restore.verify",
+            resource_type="backup",
+            resource_id="restore-2",
+            metadata_json={},
+            created_at=now_utc(),
+        )
+        db.add_all([scan, old_restore, recent_restore])
+        db.flush()
+        db.add(
+            Sbom(
+                application_id=app.id,
+                scan_id=scan.id,
+                sbom_digest="restore-evidence",
+                storage_key="restore-evidence.json",
+                active=True,
+                sbom_kind="source",
+            )
+        )
+        db.flush()
+
+        settings = Settings(minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket="")
+        page = list_restore_evidence(db=db, settings=settings, _=None)
+        audit_page = list_restore_evidence(evidence_type="restore_audit", status="ok", db=db, settings=settings, _=None)
+        summary = dashboard_summary(db=db, settings=settings, _=None)
+        by_type = {item["evidence_type"]: item for item in page.items}
+
+        assert by_type["object_storage"]["status"] == "fail"
+        assert by_type["restore_audit_30d"]["status"] == "ok"
+        assert audit_page.items[0]["action"] == "backup.restore.verify"
+        assert "old-restore" not in {item["resource_id"] for item in audit_page.items}
+        assert summary.restore_evidence_gap_items >= 1
 
 
 def test_list_risk_acceptance_review_reports_accepted_risk_and_vex_filters() -> None:
@@ -3257,6 +3392,82 @@ def test_list_secrets_review_reports_scan_and_metadata_without_secret_values() -
         rendered = " ".join(str(item.get("detail")) for item in page.items)
         assert "SUPER_SECRET_VALUE" not in rendered
         assert "AUDIT_SECRET_VALUE" not in rendered
+
+
+def test_list_secret_scan_coverage_reports_missing_findings_failures_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "secret-coverage")
+        missing = create_application(db, repo, "secret-missing")
+        finding_app = create_application(db, repo, "secret-finding")
+        failed = create_application(db, repo, "secret-failed")
+        db.add_all(
+            [
+                Scan(application_id=missing.id, status=ScanStatus.succeeded, result_summary={}),
+                Scan(
+                    application_id=finding_app.id,
+                    status=ScanStatus.succeeded,
+                    tool="gitleaks",
+                    result_summary={"secrets": [{"severity": "critical", "title": "token", "path": ".env"}]},
+                ),
+                Scan(
+                    application_id=failed.id,
+                    status=ScanStatus.partially_succeeded,
+                    tool="gitleaks",
+                    result_summary={"scanner_failures": [{"scanner": "gitleaks", "error": "timeout"}]},
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_secret_scan_coverage(db=db, _=None)
+        filtered = list_secret_scan_coverage(gap_type="secret_findings_present", severity="critical", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["application_name"], item["gap_type"]) for item in page.items}
+
+        assert ("secret-missing", "missing_secret_scan") in gaps
+        assert ("secret-finding", "secret_findings_present") in gaps
+        assert ("secret-failed", "scanner_failure") in gaps
+        assert filtered.items[0]["application_name"] == "secret-finding"
+        assert summary.secret_scan_gap_items == 3
+
+
+def test_list_sast_coverage_reports_missing_findings_failures_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "sast-coverage")
+        missing = create_application(db, repo, "sast-missing")
+        finding_app = create_application(db, repo, "sast-finding")
+        failed = create_application(db, repo, "sast-failed")
+        db.add_all(
+            [
+                Scan(application_id=missing.id, status=ScanStatus.succeeded, result_summary={}),
+                Scan(
+                    application_id=finding_app.id,
+                    status=ScanStatus.succeeded,
+                    tool="semgrep",
+                    result_summary={"sast": [{"severity": "high", "rule_id": "sql-injection"}]},
+                ),
+                Scan(
+                    application_id=failed.id,
+                    status=ScanStatus.partially_succeeded,
+                    tool="semgrep",
+                    result_summary={"scanner_failures": [{"scanner": "semgrep", "error": "ruleset fetch failed"}]},
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_sast_coverage(db=db, _=None)
+        filtered = list_sast_coverage(gap_type="sast_findings_present", severity="high", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["application_name"], item["gap_type"]) for item in page.items}
+
+        assert ("sast-missing", "missing_sast_scan") in gaps
+        assert ("sast-finding", "sast_findings_present") in gaps
+        assert ("sast-failed", "scanner_failure") in gaps
+        assert filtered.items[0]["application_name"] == "sast-finding"
+        assert summary.sast_coverage_gap_items == 3
 
 
 def test_worker_posture_reports_timeout_isolated_and_credential_issues() -> None:
