@@ -24,6 +24,11 @@ const aiFixCandidates = document.querySelector("#ai-fix-candidates");
 const autoMergeEligibility = document.querySelector("#auto-merge-eligibility");
 const isolatedLane = document.querySelector("#isolated-lane");
 const slaFindings = document.querySelector("#sla-findings");
+const auditLogs = document.querySelector("#audit-logs");
+const operationsReadiness = document.querySelector("#operations-readiness");
+const dailyOperations = document.querySelector("#daily-operations");
+const kpiSummary = document.querySelector("#kpi-summary");
+const repositoryRollout = document.querySelector("#repository-rollout");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -84,6 +89,8 @@ function renderMetrics(summary) {
     ["unhealthy_jobs", "Unhealthy jobs", "danger"],
     ["sla_breached_findings", "SLA breaches", "danger"],
     ["isolated_applications", "Isolated apps", "warn"],
+    ["scan_failure_rate_percent", "Scan failure %", "warn"],
+    ["notification_failure_count", "Notification failures", "danger"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -372,6 +379,63 @@ function renderSlaFindings(page) {
     : `<tr><td colspan="5">No SLA breaches</td></tr>`;
 }
 
+function renderAuditLogs(page) {
+  const rows = page.items || [];
+  auditLogs.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.action)}</td><td>${escapeHtml(item.resource_type)}</td><td>${escapeHtml(item.actor)}</td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(formatDateTime(item.created_at))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No audit logs</td></tr>`;
+}
+
+function renderOperationsReadiness(rows) {
+  operationsReadiness.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.configured ? "configured" : "missing")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No readiness checks</td></tr>`;
+}
+
+function renderDailyOperations(rows) {
+  dailyOperations.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No daily checks</td></tr>`;
+}
+
+function renderKpiSummary(rows) {
+  kpiSummary.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.metric)}</td><td>${escapeHtml(item.value)}</td><td>${escapeHtml(item.unit)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No KPI metrics</td></tr>`;
+}
+
+function renderRepositoryRollout(page) {
+  const rows = page.items || [];
+  repositoryRollout.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.provider)}</td><td>${escapeHtml(item.application_count)}</td><td>${escapeHtml(item.active_sbom_coverage_percent)}</td><td>${escapeHtml(item.open_critical_high_count)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No repositories</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -397,6 +461,11 @@ async function refresh() {
   autoMergeEligibility.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   isolatedLane.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   slaFindings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  auditLogs.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  operationsReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  dailyOperations.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  kpiSummary.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  repositoryRollout.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -424,6 +493,11 @@ async function refresh() {
       autoMergePage,
       isolatedLanePage,
       slaFindingPage,
+      auditLogPage,
+      readinessPage,
+      dailyPage,
+      kpiPage,
+      rolloutPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -450,6 +524,11 @@ async function refresh() {
       loadJson("/auto-merge/eligibility?limit=10"),
       loadJson("/isolated-lane?limit=10"),
       loadJson("/sla/findings?breached=true&limit=10"),
+      loadJson("/audit-logs?limit=10"),
+      loadJson("/operations/readiness"),
+      loadJson("/operations/daily"),
+      loadJson("/kpis/summary"),
+      loadJson("/rollout/repositories?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -475,6 +554,11 @@ async function refresh() {
     renderAutoMergeEligibility(autoMergePage);
     renderIsolatedLane(isolatedLanePage);
     renderSlaFindings(slaFindingPage);
+    renderAuditLogs(auditLogPage);
+    renderOperationsReadiness(readinessPage);
+    renderDailyOperations(dailyPage);
+    renderKpiSummary(kpiPage);
+    renderRepositoryRollout(rolloutPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -500,6 +584,11 @@ async function refresh() {
     autoMergeEligibility.innerHTML = `<tr><td colspan="5">Unable to load auto merge eligibility</td></tr>`;
     isolatedLane.innerHTML = `<tr><td colspan="5">Unable to load isolated lane</td></tr>`;
     slaFindings.innerHTML = `<tr><td colspan="5">Unable to load SLA findings</td></tr>`;
+    auditLogs.innerHTML = `<tr><td colspan="5">Unable to load audit logs</td></tr>`;
+    operationsReadiness.innerHTML = `<tr><td colspan="4">Unable to load operations readiness</td></tr>`;
+    dailyOperations.innerHTML = `<tr><td colspan="4">Unable to load daily operations</td></tr>`;
+    kpiSummary.innerHTML = `<tr><td colspan="4">Unable to load KPI summary</td></tr>`;
+    repositoryRollout.innerHTML = `<tr><td colspan="5">Unable to load repository rollout</td></tr>`;
   }
 }
 
