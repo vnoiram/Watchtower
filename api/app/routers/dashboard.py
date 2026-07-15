@@ -10,6 +10,7 @@ from api.app.database import get_db
 from api.app.deps import Principal, get_principal
 from api.app.routers.auto_merge import automation_guardrail_count
 from api.app.routers.artifacts import container_coverage_count
+from api.app.routers.application_detection import application_input_coverage_count, container_input_coverage_count
 from api.app.routers.governance import exposure_review_count, quarterly_review_count
 from api.app.routers.integrations import github_integration_issue_count, github_permission_issue_count
 from api.app.routers.isolated_lane import (
@@ -53,12 +54,14 @@ from api.app.routers.rollout import (
 )
 from api.app.routers.repository_sync import import_failure_count
 from api.app.routers.repositories import repository_classification_gap_count
-from api.app.routers.scans import daily_scan_slo_breach_count
+from api.app.routers.scans import daily_scan_slo_breach_count, raw_scan_artifact_gap_count
 from api.app.routers.scanners import scanner_database_freshness_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import rbac_review_count, sast_coverage_count, secret_scan_coverage_count
 from api.app.routers.sla import count_sla_breached_findings
+from api.app.routers.sboms import sbom_normalization_quality_count
 from api.app.routers.storage import retention_review_count, storage_encryption_count, storage_pressure_count
+from api.app.routers.vulnerabilities import vulnerability_reevaluation_gap_count
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -148,6 +151,11 @@ def dashboard_summary(
     false_positive_review_items = false_positive_review_count(db)
     worker_hardening_items = worker_hardening_count(db, settings)
     storage_encryption_items = storage_encryption_count(db, settings)
+    input_coverage_gap_items = application_input_coverage_count(db)
+    container_input_gap_items = container_input_coverage_count(db)
+    sbom_normalization_gap_items = sbom_normalization_quality_count(db)
+    raw_artifact_gap_items = raw_scan_artifact_gap_count(db)
+    vulnerability_reevaluation_gap_items = vulnerability_reevaluation_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -210,4 +218,9 @@ def dashboard_summary(
         false_positive_review_items=false_positive_review_items,
         worker_hardening_items=worker_hardening_items,
         storage_encryption_items=storage_encryption_items,
+        input_coverage_gap_items=input_coverage_gap_items,
+        container_input_gap_items=container_input_gap_items,
+        sbom_normalization_gap_items=sbom_normalization_gap_items,
+        raw_artifact_gap_items=raw_artifact_gap_items,
+        vulnerability_reevaluation_gap_items=vulnerability_reevaluation_gap_items,
     )

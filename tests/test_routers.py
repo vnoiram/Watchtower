@@ -38,7 +38,11 @@ from api.app.models import (
     now_utc,
 )
 from api.app.routers.audit_logs import list_audit_logs
-from api.app.routers.application_detection import list_application_detection
+from api.app.routers.application_detection import (
+    list_application_detection,
+    list_application_input_coverage,
+    list_container_input_coverage,
+)
 from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
 from api.app.routers.audit import list_audit_evidence_gaps, list_audit_review
@@ -148,7 +152,7 @@ from api.app.routers.rollout import (
     rollout_baseline,
 )
 from api.app.routers.scan_health import list_scan_health
-from api.app.routers.scans import list_daily_scan_slo, list_scan_evidence_quality
+from api.app.routers.scans import list_daily_scan_slo, list_raw_scan_artifacts, list_scan_evidence_quality
 from api.app.routers.scanner_inventory import list_scanner_inventory
 from api.app.routers.scanners import list_scanner_database_freshness, list_scanner_failures
 from api.app.routers.scanner_versions import list_scanner_versions
@@ -163,12 +167,16 @@ from api.app.routers.security import (
     rbac_review,
 )
 from api.app.routers.sbom_coverage import list_sbom_coverage
-from api.app.routers.sboms import list_sboms
+from api.app.routers.sboms import list_sbom_normalization_quality, list_sboms
 from api.app.routers.sla import list_sla_findings
 from api.app.routers.storage import list_storage_cleanup_candidates, retention_review, storage_encryption_posture, storage_pressure
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_invalidation_candidates, list_vex_statements
-from api.app.routers.vulnerabilities import list_vulnerabilities, list_vulnerability_impact
+from api.app.routers.vulnerabilities import (
+    list_vulnerabilities,
+    list_vulnerability_impact,
+    list_vulnerability_reevaluation_coverage,
+)
 from worker.runner import upsert_detected_applications
 
 
@@ -5067,3 +5075,173 @@ def test_storage_encryption_posture_reports_tls_metadata_and_backup_audit() -> N
         assert by_check["artifact_encryption_metadata"].status == "ok"
         assert by_check["backup_encryption_audit"].status == "ok"
         assert summary.storage_encryption_items == 0
+
+
+def test_list_application_input_coverage_reports_manifest_lockfile_and_package_manager_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "input-coverage")
+        package_app = create_application(db, repo, "package-app")
+        create_application(db, repo, "unknown-app")
+        db.add(
+            Technology(
+                application_id=package_app.id,
+                category="package-manager",
+                name="npm",
+                detection_source="package.json",
+            )
+        )
+        db.flush()
+
+        page = list_application_input_coverage(db=db, _=None)
+        lockfile_page = list_application_input_coverage(gap_type="missing_lockfile", ecosystem="npm", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["application_name"], item["gap_type"]) for item in page.items}
+
+        assert ("package-app", "missing_lockfile") in gaps
+        assert ("unknown-app", "missing_manifest") in gaps
+        assert ("unknown-app", "unknown_package_manager") in gaps
+        assert lockfile_page.items[0]["application_id"] == str(package_app.id)
+        assert summary.input_coverage_gap_items == len(page.items)
+
+
+def test_list_container_input_coverage_reports_type_and_scan_artifact_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "container-inputs")
+        docker_app = create_application(db, repo, "docker-app")
+        container_app = create_application(db, repo, "container-app")
+        container_app.application_type = ApplicationType.container
+        db.add_all(
+            [
+                Technology(application_id=docker_app.id, category="runtime", name="docker", detection_source="Dockerfile"),
+                Scan(
+                    application_id=docker_app.id,
+                    status=ScanStatus.succeeded,
+                    result_summary={"artifacts": {"source_sbom": {"storage_key": "source.json"}}},
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_container_input_coverage(db=db, _=None)
+        scan_gap_page = list_container_input_coverage(gap_type="container_input_without_container_scan", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["application_name"], item["gap_type"]) for item in page.items}
+
+        assert ("docker-app", "dockerfile_without_container_app") in gaps
+        assert ("docker-app", "container_input_without_container_scan") in gaps
+        assert ("container-app", "container_app_without_dockerfile") in gaps
+        assert scan_gap_page.items[0]["application_id"] == str(docker_app.id)
+        assert summary.container_input_gap_items == len(page.items)
+
+
+def test_list_sbom_normalization_quality_reports_component_metadata_gaps_and_duplicates() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "sbom-normalization")
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        db.add(scan)
+        db.flush()
+        sbom = Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="norm", storage_key="norm.json", active=True)
+        invalid = Component(purl="invalid", ecosystem=None, name="invalid", version=None)
+        duplicate_a = Component(purl="pkg:pypi/dup-a@1", ecosystem="pypi", name="dup", version="1")
+        duplicate_b = Component(purl="pkg:pypi/dup-b@1", ecosystem="pypi", name="dup", version="1")
+        db.add_all([sbom, invalid, duplicate_a, duplicate_b])
+        db.flush()
+        db.add_all(
+            [
+                SbomComponent(sbom_id=sbom.id, component_id=invalid.id),
+                SbomComponent(sbom_id=sbom.id, component_id=duplicate_a.id),
+                SbomComponent(sbom_id=sbom.id, component_id=duplicate_b.id),
+            ]
+        )
+        db.flush()
+
+        page = list_sbom_normalization_quality(db=db, _=None)
+        missing_hash_page = list_sbom_normalization_quality(gap_type="missing_hash", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["component_name"], item["gap_type"]) for item in page.items}
+
+        assert ("invalid", "invalid_purl") in gaps
+        assert ("invalid", "missing_ecosystem") in gaps
+        assert ("dup", "duplicate_identity") in gaps
+        assert len(missing_hash_page.items) == 3
+        assert summary.sbom_normalization_gap_items == len(page.items)
+
+
+def test_list_raw_scan_artifacts_reports_missing_storage_digest_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "raw-artifacts")
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Scan(application_id=app.id, status=ScanStatus.failed, result_summary={}),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    result_summary={"artifacts": {"osv": {"storage_key": "osv.json"}}},
+                ),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    result_summary={
+                        "artifacts": {
+                            "source_sbom": {"storage_key": "encrypted/source.json", "digest": "sha", "encrypted": True}
+                        }
+                    },
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_raw_scan_artifacts(db=db, _=None)
+        osv_page = list_raw_scan_artifacts(artifact_type="osv", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {item["gap_type"] for item in page.items}
+
+        assert "missing_raw_artifact" in gaps
+        assert "missing_digest" in gaps
+        assert "complete" in gaps
+        assert osv_page.items[0]["gap_type"] == "missing_digest"
+        assert summary.raw_artifact_gap_items == 2
+
+
+def test_list_vulnerability_reevaluation_coverage_reports_stale_and_modified_vulnerability_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "reevaluation")
+        app = create_application(db, repo)
+        old_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=10))
+        latest_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        component = Component(purl="pkg:pypi/reeval@1", ecosystem="pypi", name="reeval", version="1")
+        vulnerability = Vulnerability(
+            source="osv",
+            external_id="OSV-REEVAL",
+            severity=Severity.high,
+            modified_at=now_utc() - timedelta(days=1),
+        )
+        db.add_all([old_scan, latest_scan, component, vulnerability])
+        db.flush()
+        finding = Finding(
+            application_id=app.id,
+            component_id=component.id,
+            vulnerability_id=vulnerability.id,
+            status=FindingStatus.open,
+            severity=Severity.high,
+            last_seen_scan_id=old_scan.id,
+        )
+        db.add(finding)
+        db.flush()
+
+        page = list_vulnerability_reevaluation_coverage(db=db, _=None)
+        high_page = list_vulnerability_reevaluation_coverage(severity=Severity.high, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {item["gap_type"] for item in page.items}
+
+        assert "stale_last_seen_scan" in gaps
+        assert "vulnerability_updated_after_scan" in gaps
+        assert high_page.items[0]["finding_id"] == str(finding.id)
+        assert summary.vulnerability_reevaluation_gap_items == len(page.items)
