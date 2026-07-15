@@ -56,6 +56,42 @@ def list_repository_sync(
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
+@router.get("/lag", response_model=schemas.CursorPage)
+def list_repository_sync_lag(
+    limit: int = 50,
+    lag_type: str | None = None,
+    provider: models.RepositoryProvider | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = repository_sync_lag_items(db)
+    if lag_type:
+        items = [item for item in items if item["lag_type"] == lag_type]
+    if provider:
+        items = [item for item in items if item["provider"] == provider.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def repository_sync_lag_items(db: Session) -> list[dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    items = []
+    repositories = db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc()))
+    for repository in repositories:
+        latest_scan = _latest_repository_scan(db, repository.id)
+        context = (repository, latest_scan)
+        if repository.last_synced_at is None:
+            items.append(_lag_item("never_synced", *context, detail="Repository has no sync timestamp"))
+        elif repository.last_synced_at < _matching_datetime(cutoff, repository.last_synced_at):
+            items.append(_lag_item("stale_sync", *context, detail="Repository sync is older than 30 days"))
+        if repository.pushed_at and repository.last_synced_at and repository.pushed_at > _matching_datetime(repository.last_synced_at, repository.pushed_at):
+            items.append(_lag_item("pushed_after_sync", *context, detail="Repository push is newer than last sync"))
+        if repository.pushed_at and latest_scan and repository.pushed_at > _matching_datetime(latest_scan.created_at, repository.pushed_at):
+            items.append(_lag_item("pushed_after_scan", *context, detail="Repository push is newer than latest scan"))
+        if repository.provider == models.RepositoryProvider.github and not repository.provider_repository_id:
+            items.append(_lag_item("missing_provider_repository_id", *context, detail="GitHub repository has no provider_repository_id"))
+    return items
+
+
 def _latest_sync_jobs(db: Session) -> dict:
     jobs = db.execute(
         select(models.Job)
@@ -82,6 +118,35 @@ def _sync_reasons(repository: models.Repository, job: models.Job | None, cutoff:
     if repository.fork:
         reasons.append("fork")
     return reasons
+
+
+def _latest_repository_scan(db: Session, repository_id) -> models.Scan | None:
+    return db.scalar(
+        select(models.Scan)
+        .join(models.Application, models.Scan.application_id == models.Application.id)
+        .where(models.Application.repository_id == repository_id)
+        .order_by(models.Scan.created_at.desc(), models.Scan.id.desc())
+    )
+
+
+def _lag_item(
+    lag_type: str,
+    repository: models.Repository,
+    latest_scan: models.Scan | None,
+    detail: str,
+) -> dict:
+    return schemas.RepositorySyncLagOut(
+        lag_type=lag_type,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        provider=repository.provider,
+        last_synced_at=repository.last_synced_at,
+        pushed_at=repository.pushed_at,
+        latest_scan_id=latest_scan.id if latest_scan else None,
+        latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+        detail=detail,
+    ).model_dump(mode="json")
 
 
 def _matching_datetime(reference: datetime, value: datetime) -> datetime:

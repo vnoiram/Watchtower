@@ -1525,6 +1525,67 @@ class InitialInventoryOut(BaseModel):
     detail: str
 
 
+class QueuePressureOut(BaseModel):
+    job_type: models.JobType
+    status: models.JobStatus
+    count: int
+    stale_count: int
+    overdue_count: int
+    retry_exhausted_count: int
+    oldest_age_hours: int
+    detail: str
+
+
+class SchedulerDriftOut(BaseModel):
+    drift_type: str
+    job_type: models.JobType | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    latest_job_id: UUID | None = None
+    latest_job_status: models.JobStatus | None = None
+    latest_job_created_at: datetime | None = None
+    count: int
+    detail: str
+
+
+class StoragePressureOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    estimated_bytes: int
+    detail: str
+
+
+class RepositorySyncLagOut(BaseModel):
+    lag_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider: models.RepositoryProvider
+    last_synced_at: datetime | None = None
+    pushed_at: datetime | None = None
+    latest_scan_id: UUID | None = None
+    latest_scan_created_at: datetime | None = None
+    detail: str
+
+
+class CredentialFailureOut(BaseModel):
+    failure_type: str
+    source: str
+    source_id: str
+    status: str
+    detail: str
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    created_at: datetime
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1562,3 +1623,5 @@ class DashboardSummary(BaseModel):
     automation_guardrail_items: int
     rollback_readiness_items: int
     rollout_wave_gap_items: int
+    queue_pressure_items: int
+    storage_pressure_items: int

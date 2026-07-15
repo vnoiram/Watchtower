@@ -22,6 +22,7 @@ from api.app.routers.operations import (
     manual_workload_count,
     monthly_review_count,
     phase_readiness_count,
+    queue_pressure_count,
     rollback_readiness_count,
 )
 from api.app.routers.quality import reopen_risk_count
@@ -30,7 +31,7 @@ from api.app.routers.rollout import application_readiness_count, rollout_gap_cou
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import rbac_review_count
 from api.app.routers.sla import count_sla_breached_findings
-from api.app.routers.storage import retention_review_count
+from api.app.routers.storage import retention_review_count, storage_pressure_count
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -95,6 +96,8 @@ def dashboard_summary(
     control_evidence_items = control_evidence_count(db)
     automation_guardrail_items = automation_guardrail_count(db)
     rollback_readiness_items = rollback_readiness_count(db)
+    queue_pressure_items = queue_pressure_count(db)
+    storage_pressure_items = storage_pressure_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -132,4 +135,6 @@ def dashboard_summary(
         control_evidence_items=control_evidence_items,
         automation_guardrail_items=automation_guardrail_items,
         rollback_readiness_items=rollback_readiness_items,
+        queue_pressure_items=queue_pressure_items,
+        storage_pressure_items=storage_pressure_items,
     )

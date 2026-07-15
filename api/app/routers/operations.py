@@ -378,6 +378,46 @@ def rollback_readiness(
     return rollback_readiness_items(db)
 
 
+@router.get("/queue-pressure", response_model=list[schemas.QueuePressureOut])
+def queue_pressure(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return queue_pressure_items(db)
+
+
+@router.get("/scheduler-drift", response_model=schemas.CursorPage)
+def list_scheduler_drift(
+    limit: int = 50,
+    drift_type: str | None = None,
+    job_type: models.JobType | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = scheduler_drift_items(db)
+    if drift_type:
+        items = [item for item in items if item["drift_type"] == drift_type]
+    if job_type:
+        items = [item for item in items if item["job_type"] == job_type.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/credential-failures", response_model=schemas.CursorPage)
+def list_credential_failures(
+    limit: int = 50,
+    source: str | None = None,
+    failure_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = credential_failure_items(db)
+    if source:
+        items = [item for item in items if item["source"] == source]
+    if failure_type:
+        items = [item for item in items if item["failure_type"] == failure_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def failure_signal_count(db: Session) -> int:
     return len(failure_signal_items(db))
 
@@ -396,6 +436,10 @@ def control_evidence_count(db: Session) -> int:
 
 def rollback_readiness_count(db: Session) -> int:
     return sum(item.count for item in rollback_readiness_items(db) if item.status != "ok")
+
+
+def queue_pressure_count(db: Session) -> int:
+    return sum(item.stale_count + item.overdue_count + item.retry_exhausted_count for item in queue_pressure_items(db))
 
 
 def manual_action_count(db: Session, days: int = 30) -> int:
@@ -726,6 +770,116 @@ def rollback_readiness_items(db: Session) -> list[schemas.RollbackReadinessOut]:
     ]
 
 
+def queue_pressure_items(db: Session) -> list[schemas.QueuePressureOut]:
+    now = datetime.now(timezone.utc)
+    jobs = list(db.scalars(select(models.Job)))
+    items = []
+    for job_type in models.JobType:
+        for status in models.JobStatus:
+            rows = [job for job in jobs if job.job_type == job_type and job.status == status]
+            if not rows:
+                continue
+            stale = [
+                job
+                for job in rows
+                if status == models.JobStatus.running
+                and job.started_at
+                and _before(job.started_at, now - timedelta(hours=24))
+            ]
+            overdue = [
+                job
+                for job in rows
+                if status == models.JobStatus.queued and _before(job.run_after, now - timedelta(hours=24))
+            ]
+            retry_exhausted = [
+                job
+                for job in rows
+                if status in {models.JobStatus.failed, models.JobStatus.timed_out, models.JobStatus.cancelled}
+                and job.attempts >= job.max_attempts
+            ]
+            oldest = max(_age_hours(job.created_at, now) for job in rows)
+            items.append(
+                schemas.QueuePressureOut(
+                    job_type=job_type,
+                    status=status,
+                    count=len(rows),
+                    stale_count=len(stale),
+                    overdue_count=len(overdue),
+                    retry_exhausted_count=len(retry_exhausted),
+                    oldest_age_hours=oldest,
+                    detail="Job queue pressure by type and status",
+                )
+            )
+    return items
+
+
+def scheduler_drift_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    recent_cutoff = now - timedelta(hours=24)
+    stale_cutoff = now - timedelta(days=30)
+    items = []
+    latest_jobs = _latest_jobs_by_type(db)
+    for job_type in [models.JobType.repository_sync, models.JobType.scan, models.JobType.remediation_validation]:
+        job = latest_jobs.get(job_type)
+        if job is None or _before(job.created_at, recent_cutoff):
+            items.append(
+                _scheduler_drift(
+                    "missing_recent_job",
+                    job_type,
+                    None,
+                    None,
+                    job,
+                    1,
+                    f"No {job_type.value} job created in the last 24 hours",
+                )
+            )
+    queued = list(
+        db.scalars(
+            select(models.Job)
+            .where(models.Job.status == models.JobStatus.queued)
+            .order_by(models.Job.run_after.asc(), models.Job.id.asc())
+        )
+    )
+    for job in queued:
+        if _before(job.run_after, recent_cutoff):
+            repository = db.get(models.Repository, job.repository_id) if job.repository_id else None
+            application = db.get(models.Application, job.application_id) if job.application_id else None
+            items.append(_scheduler_drift("overdue_queued_job", job.job_type, application, repository, job, 1, "Queued job is overdue by more than 24 hours"))
+    latest_schedule_scans = _latest_schedule_scan_by_application(db)
+    for application, repository in db.execute(
+        select(models.Application, models.Repository)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(models.Application.lifecycle != models.Lifecycle.archived)
+        .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+    ):
+        scan = latest_schedule_scans.get(application.id)
+        if scan is None or _before(scan.created_at, stale_cutoff):
+            items.append(_scheduler_drift("missing_scheduled_scan", models.JobType.scan, application, repository, None, 1, "Active application has no scheduled scan in the last 30 days"))
+    return items
+
+
+def credential_failure_items(db: Session) -> list[dict]:
+    items = []
+    for item in failure_signal_items(db):
+        if _credential_failure_match(item["signal_type"], item["detail"]):
+            items.append(_credential_failure(item["signal_type"], item))
+    for audit_log in db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())):
+        detail = f"{audit_log.action} {audit_log.metadata_json or {}}"
+        failure_type = _classify_failure(detail, default="worker_failure")
+        if _credential_failure_match(failure_type, detail):
+            items.append(
+                schemas.CredentialFailureOut(
+                    failure_type=failure_type,
+                    source="audit_log",
+                    source_id=str(audit_log.id),
+                    status=audit_log.action,
+                    detail=detail,
+                    created_at=audit_log.created_at,
+                ).model_dump(mode="json")
+            )
+    return sorted(items, key=lambda item: item["created_at"], reverse=True)
+
+
 def manual_workload_count(db: Session) -> int:
     return sum(row.count for row in _workload_rows(db))
 
@@ -830,13 +984,14 @@ def _notification_failure_signals(db: Session) -> list[dict]:
     items = []
     notifications = db.scalars(select(models.Notification).where(models.Notification.status == "failed"))
     for notification in notifications:
+        detail = " ".join(part for part in [notification.subject, notification.body] if part)
         items.append(
             _failure_signal(
-                _classify_failure(notification.body, default="worker_failure"),
+                _classify_failure(detail, default="worker_failure"),
                 "notification",
                 str(notification.id),
                 notification.status,
-                notification.subject,
+                detail,
                 notification.created_at,
             )
         )
@@ -988,6 +1143,31 @@ def _rollback(check: str, nonzero_status: str, count: int, detail: str) -> schem
     )
 
 
+def _scheduler_drift(
+    drift_type: str,
+    job_type: models.JobType,
+    application: models.Application | None,
+    repository: models.Repository | None,
+    job: models.Job | None,
+    count: int,
+    detail: str,
+) -> dict:
+    return schemas.SchedulerDriftOut(
+        drift_type=drift_type,
+        job_type=job_type,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        repository_id=repository.id if repository else None,
+        repository_owner=repository.owner if repository else None,
+        repository_name=repository.name if repository else None,
+        latest_job_id=job.id if job else None,
+        latest_job_status=job.status if job else None,
+        latest_job_created_at=job.created_at if job else None,
+        count=count,
+        detail=detail,
+    ).model_dump(mode="json")
+
+
 def _count(db: Session, stmt) -> int:
     subquery = stmt.subquery()
     return db.scalar(select(func.count()).select_from(subquery)) or 0
@@ -1057,6 +1237,55 @@ def _application_id_for_action(db: Session, action: models.RemediationAction):
 
 def _has_scan_after(scans: list[models.Scan], application_id, created_at: datetime) -> bool:
     return any(scan.application_id == application_id and _after_cutoff(scan.created_at, created_at) for scan in scans)
+
+
+def _age_hours(value: datetime, now: datetime) -> int:
+    if value.tzinfo is None:
+        now = now.replace(tzinfo=None)
+    elif now.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return max(int((now - value).total_seconds() // 3600), 0)
+
+
+def _latest_jobs_by_type(db: Session) -> dict[models.JobType, models.Job]:
+    latest = {}
+    jobs = db.scalars(select(models.Job).order_by(models.Job.created_at.desc(), models.Job.id.desc()))
+    for job in jobs:
+        latest.setdefault(job.job_type, job)
+    return latest
+
+
+def _latest_schedule_scan_by_application(db: Session) -> dict:
+    latest = {}
+    scans = db.scalars(
+        select(models.Scan)
+        .where(models.Scan.trigger_type == models.TriggerType.schedule)
+        .order_by(models.Scan.created_at.desc(), models.Scan.id.desc())
+    )
+    for scan in scans:
+        latest.setdefault(scan.application_id, scan)
+    return latest
+
+
+def _credential_failure_match(failure_type: str, detail: str | None) -> bool:
+    text = f"{failure_type} {detail or ''}".lower()
+    return any(token in text for token in ["auth", "credential", "token", "permission", "401", "403", "rate limit"])
+
+
+def _credential_failure(failure_type: str, item: dict) -> dict:
+    return schemas.CredentialFailureOut(
+        failure_type=failure_type,
+        source=item["source"],
+        source_id=item["source_id"],
+        status=item["status"],
+        detail=item["detail"],
+        repository_id=item.get("repository_id"),
+        repository_owner=item.get("repository_owner"),
+        repository_name=item.get("repository_name"),
+        application_id=item.get("application_id"),
+        application_name=item.get("application_name"),
+        created_at=item["created_at"],
+    ).model_dump(mode="json")
 
 
 def _recent_restore_logs(db: Session) -> list[models.AuditLog]:
