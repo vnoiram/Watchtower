@@ -1104,6 +1104,85 @@ class QuarterlyReviewOut(BaseModel):
     detail: str
 
 
+class RolloutBaselineOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    target: int | None = None
+    percent: float | None = None
+    detail: str
+
+
+class ApplicationReadinessOut(BaseModel):
+    issue_type: str
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    owner: str | None = None
+    criticality: str
+    lifecycle: models.Lifecycle
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    has_active_source_sbom: bool
+    detail: str
+
+
+class ScanTargetOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    target_percent: float | None = None
+    actual_percent: float | None = None
+    detail: str
+
+
+class RemediationCoverageOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    risk_score: float
+    fixed_version: str
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    has_issue_or_pr: bool
+    action_id: UUID | None = None
+    action_type: str | None = None
+    action_status: str | None = None
+    provider: str | None = None
+    url: str | None = None
+    coverage_percent: float
+
+
+class ResolutionVerificationOut(BaseModel):
+    issue_type: str
+    finding_id: UUID
+    severity: models.Severity
+    finding_status: models.FindingStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    action_id: UUID
+    action_type: str
+    action_status: str
+    validation_status: str
+    validation_scan_id: UUID | None = None
+    validation_scan_status: models.ScanStatus | None = None
+    latest_rescan_id: UUID | None = None
+    latest_rescan_status: models.ScanStatus | None = None
+    close_state: str | None = None
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1133,3 +1212,5 @@ class DashboardSummary(BaseModel):
     failure_signal_items: int
     isolated_safeguard_items: int
     quarterly_review_items: int
+    application_readiness_items: int
+    remediation_coverage_items: int

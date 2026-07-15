@@ -73,12 +73,14 @@ from api.app.routers.operations import (
     operational_workload,
     operations_readiness,
     restore_readiness,
+    scan_targets,
     worker_posture,
     weekly_review,
 )
 from api.app.routers.quality import list_duplicate_review, list_reopen_risk
 from api.app.routers.remediation import (
     list_remediation_backlog,
+    list_remediation_coverage,
     list_dependency_updates,
     list_github_issue_actions,
     list_issue_closures,
@@ -86,10 +88,16 @@ from api.app.routers.remediation import (
     list_remediation_rescans,
     list_remediation_candidates,
     list_remediation_validations,
+    list_resolution_verification,
 )
 from api.app.routers.remediation_actions import list_remediation_actions
 from api.app.routers.repository_sync import list_repository_sync
-from api.app.routers.rollout import list_repository_rollout, list_rollout_gaps
+from api.app.routers.rollout import (
+    list_application_readiness,
+    list_repository_rollout,
+    list_rollout_gaps,
+    rollout_baseline,
+)
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.scanner_inventory import list_scanner_inventory
 from api.app.routers.scanners import list_scanner_failures
@@ -2272,6 +2280,83 @@ def test_list_rollout_gaps_reports_deployment_blockers_and_dashboard_count() -> 
         assert finding.status == FindingStatus.open
 
 
+def test_rollout_baseline_reports_inventory_visibility_and_classification() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        visible = create_repository(db, "visible")
+        visible.visibility = "private"
+        missing_visibility = create_repository(db, "missing-visibility")
+        missing_visibility.visibility = None
+        missing_visibility.archived = True
+        fork = create_repository(db, "fork")
+        fork.visibility = "public"
+        fork.fork = True
+        db.flush()
+
+        rows = rollout_baseline(db=db, _=None)
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["repository_inventory"].count == 3
+        assert by_check["repository_inventory"].target == 54
+        assert by_check["visibility_known"].count == 1
+        assert by_check["visibility_known"].status == "warn"
+        assert by_check["classification_known"].count == 0
+        assert by_check["archived_repositories"].count == 1
+        assert by_check["fork_repositories"].count == 1
+
+
+def test_list_application_readiness_reports_active_application_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "readiness")
+        app = create_application(db, repo, "readiness-app")
+        app.criticality = "unknown-tier"
+        archived = create_application(db, repo, "archived-app")
+        archived.lifecycle = Lifecycle.archived
+        db.flush()
+
+        page = list_application_readiness(db=db, _=None)
+        owner_page = list_application_readiness(issue_type="missing_owner", db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        issues = {item["issue_type"] for item in page.items}
+        assert issues == {"missing_owner", "unknown_criticality", "missing_active_source_sbom", "stale_scan"}
+        assert all(item["application_name"] == app.name for item in page.items)
+        assert [item["application_name"] for item in owner_page.items] == [app.name]
+        assert archived.name not in {item["application_name"] for item in page.items}
+        assert summary.application_readiness_items == 4
+
+
+def test_scan_targets_reports_success_rate_failures_partials_and_stale_apps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "scan-targets")
+        covered = create_application(db, repo, "covered")
+        stale = create_application(db, repo, "stale")
+        db.add_all(
+            [
+                Scan(application_id=covered.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Scan(application_id=covered.id, status=ScanStatus.failed, created_at=now_utc()),
+                Scan(application_id=covered.id, status=ScanStatus.partially_succeeded, created_at=now_utc()),
+                Scan(
+                    application_id=stale.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc() - timedelta(days=31),
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = scan_targets(db=db, _=None)
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["daily_scan_success_rate"].actual_percent == 50.0
+        assert by_check["daily_scan_success_rate"].status == "warn"
+        assert by_check["failed_scans"].count == 1
+        assert by_check["partial_scans"].count == 1
+        assert by_check["stale_active_applications"].count == 1
+
+
 def test_github_integration_health_reports_configuration_and_failure_classes() -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
@@ -2403,6 +2488,87 @@ def test_list_dependency_updates_reports_renovate_dependabot_and_ci_filters() ->
         assert by_source["renovate"]["ci_passed"] is False
         assert by_source["dependabot"]["ci_passed"] is True
         assert [item["action_id"] for item in failed_page.items] == [str(renovate.id)]
+
+
+def test_list_remediation_coverage_reports_missing_actions_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "coverage")
+        app = create_application(db, repo)
+        covered = create_finding(db, app, severity=Severity.critical, risk_score=9.5)
+        missing = create_finding(db, app, severity=Severity.high, risk_score=8.0)
+        db.add(
+            RemediationAction(
+                finding_id=covered.id,
+                action_type="github_issue",
+                status="created",
+                provider="github",
+                url="https://github.com/local/demo/issues/1",
+            )
+        )
+        db.flush()
+
+        page = list_remediation_coverage(db=db, _=None)
+        missing_page = list_remediation_coverage(missing_action=True, severity=Severity.high, db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_finding = {item["finding_id"]: item for item in page.items}
+        assert by_finding[str(covered.id)]["has_issue_or_pr"] is True
+        assert by_finding[str(missing.id)]["has_issue_or_pr"] is False
+        assert by_finding[str(covered.id)]["coverage_percent"] == 50.0
+        assert [item["finding_id"] for item in missing_page.items] == [str(missing.id)]
+        assert summary.remediation_coverage_items == 1
+
+
+def test_list_resolution_verification_reports_rescan_validation_and_close_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "resolution-verification")
+        missing_app = create_application(db, repo, "missing-rescan-app")
+        failed_app = create_application(db, repo, "failed-validation-app")
+        close_app = create_application(db, repo, "missing-close-app")
+        missing_rescan = create_finding(db, missing_app, severity=Severity.critical)
+        failed_validation = create_finding(db, failed_app, severity=Severity.high)
+        missing_close = create_finding(db, close_app, severity=Severity.medium, status=FindingStatus.resolved)
+        missing_close.resolved_at = now_utc()
+        missing_rescan_action = RemediationAction(
+            finding_id=missing_rescan.id,
+            action_type="ai_fix",
+            status="created",
+            provider="watchtower",
+            created_at=now_utc() - timedelta(days=2),
+        )
+        failed_scan = Scan(application_id=failed_app.id, status=ScanStatus.failed, created_at=now_utc())
+        close_scan = Scan(application_id=close_app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add_all([missing_rescan_action, failed_scan, close_scan])
+        db.flush()
+        failed_validation_action = RemediationAction(
+            finding_id=failed_validation.id,
+            action_type="ai_fix",
+            status="failed",
+            provider="watchtower",
+            metadata_json={"validation_status": "failed", "validation_scan_id": str(failed_scan.id)},
+        )
+        missing_close_action = RemediationAction(
+            finding_id=missing_close.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            created_at=now_utc() - timedelta(days=1),
+            metadata_json={"validation_status": "succeeded", "validation_scan_id": str(close_scan.id)},
+        )
+        db.add_all([failed_validation_action, missing_close_action])
+        db.flush()
+
+        page = list_resolution_verification(db=db, _=None)
+        close_page = list_resolution_verification(issue_type="missing_issue_close", db=db, _=None)
+
+        issues = {(item["issue_type"], item["finding_id"]) for item in page.items}
+        assert ("missing_rescan", str(missing_rescan.id)) in issues
+        assert ("failed_validation", str(failed_validation.id)) in issues
+        assert ("missing_issue_close", str(missing_close.id)) in issues
+        assert [item["finding_id"] for item in close_page.items] == [str(missing_close.id)]
+        assert close_page.items[0]["close_state"] == "pending_close"
 
 
 def test_list_failure_signals_reports_classified_operations_and_dashboard_count() -> None:
