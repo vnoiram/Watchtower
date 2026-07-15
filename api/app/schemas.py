@@ -982,6 +982,67 @@ class RolloutGapOut(BaseModel):
     detail: str
 
 
+class GitHubIntegrationHealthOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class WebhookIntakeOut(BaseModel):
+    job_id: UUID
+    event: str | None = None
+    repository: str | None = None
+    status: models.JobStatus
+    error: str | None = None
+    duplicate_candidate: bool
+    created_at: datetime
+
+
+class ScannerFailureOut(BaseModel):
+    scan_id: UUID
+    tool: str | None = None
+    failure_type: str
+    error: str
+    status: models.ScanStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    created_at: datetime
+
+
+class DependencyUpdateOut(BaseModel):
+    action_id: UUID
+    provider: str | None = None
+    update_source: str
+    action_status: str
+    ci_passed: bool | None = None
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    branch: str | None = None
+    url: str | None = None
+    detail: str
+
+
+class FailureSignalOut(BaseModel):
+    signal_type: str
+    source: str
+    source_id: str
+    status: str
+    detail: str
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    created_at: datetime
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1007,3 +1068,5 @@ class DashboardSummary(BaseModel):
     reopen_risk_items: int
     rbac_review_items: int
     rollout_gap_items: int
+    github_integration_issues: int
+    failure_signal_items: int

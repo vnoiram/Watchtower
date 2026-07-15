@@ -304,6 +304,26 @@ def list_manual_actions(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/failure-signals", response_model=schemas.CursorPage)
+def list_failure_signals(
+    limit: int = 50,
+    signal_type: str | None = None,
+    source: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = failure_signal_items(db)
+    if signal_type:
+        items = [item for item in items if item["signal_type"] == signal_type]
+    if source:
+        items = [item for item in items if item["source"] == source]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def failure_signal_count(db: Session) -> int:
+    return len(failure_signal_items(db))
+
+
 def manual_action_count(db: Session, days: int = 30) -> int:
     return len(manual_action_items(db, days=days))
 
@@ -334,6 +354,15 @@ def manual_action_items(db: Session, days: int = 30) -> list[dict]:
     return items
 
 
+def failure_signal_items(db: Session) -> list[dict]:
+    items = []
+    items.extend(_job_failure_signals(db))
+    items.extend(_scan_failure_signals(db))
+    items.extend(_remediation_failure_signals(db))
+    items.extend(_notification_failure_signals(db))
+    return sorted(items, key=lambda item: item["created_at"], reverse=True)
+
+
 def manual_workload_count(db: Session) -> int:
     return sum(row.count for row in _workload_rows(db))
 
@@ -357,6 +386,140 @@ def _workload_rows(db: Session) -> list[schemas.OperationalWorkloadOut]:
         _workload("failed_remediation_actions", failed_remediation, "fail", "Remediation actions that failed"),
         _workload("close_failed_issue_actions", close_failed_issues, "fail", "GitHub issue close attempts that failed"),
     ]
+
+
+def _job_failure_signals(db: Session) -> list[dict]:
+    items = []
+    jobs = db.scalars(
+        select(models.Job).where(models.Job.status.in_([models.JobStatus.failed, models.JobStatus.timed_out]))
+    )
+    for job in jobs:
+        detail = job.last_error or job.status.value
+        items.append(_failure_signal(_classify_failure(detail, default="worker_failure"), "job", str(job.id), job.status.value, detail, job.created_at))
+    return items
+
+
+def _scan_failure_signals(db: Session) -> list[dict]:
+    items = []
+    stmt = (
+        select(models.Scan, models.Application, models.Repository)
+        .join(models.Application, models.Scan.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(models.Scan.status.in_([models.ScanStatus.failed, models.ScanStatus.partially_succeeded, models.ScanStatus.timed_out]))
+    )
+    for scan, application, repository in db.execute(stmt):
+        failures = (scan.result_summary or {}).get("scanner_failures") or []
+        if isinstance(failures, dict):
+            failures = [failures]
+        details = [scan.error_message] if scan.error_message else []
+        if isinstance(failures, list):
+            details.extend(str(failure.get("error") if isinstance(failure, dict) else failure) for failure in failures)
+        for detail in details or [scan.status.value]:
+            items.append(
+                _failure_signal(
+                    _classify_failure(detail, default="scanner_failure"),
+                    "scan",
+                    str(scan.id),
+                    scan.status.value,
+                    detail,
+                    scan.created_at,
+                    repository=repository,
+                    application=application,
+                )
+            )
+    return items
+
+
+def _remediation_failure_signals(db: Session) -> list[dict]:
+    items = []
+    stmt = (
+        select(models.RemediationAction, models.Finding, models.Application, models.Repository)
+        .join(models.Finding, models.RemediationAction.finding_id == models.Finding.id)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+    )
+    for action, _, application, repository in db.execute(stmt):
+        metadata = action.metadata_json or {}
+        detail = metadata.get("error") or metadata.get("close_error") or metadata.get("validation_error")
+        if action.status == "skipped_duplicate":
+            detail = metadata.get("skipped_reason") or "Duplicate remediation action suppressed"
+            signal_type = "duplicate_suppression"
+        elif action.status in {"failed", "close_failed"} or detail:
+            signal_type = _classify_failure(str(detail or action.status), default="worker_failure")
+        else:
+            continue
+        items.append(
+            _failure_signal(
+                signal_type,
+                "remediation_action",
+                str(action.id),
+                action.status,
+                str(detail),
+                action.updated_at,
+                repository=repository,
+                application=application,
+            )
+        )
+    return items
+
+
+def _notification_failure_signals(db: Session) -> list[dict]:
+    items = []
+    notifications = db.scalars(select(models.Notification).where(models.Notification.status == "failed"))
+    for notification in notifications:
+        items.append(
+            _failure_signal(
+                _classify_failure(notification.body, default="worker_failure"),
+                "notification",
+                str(notification.id),
+                notification.status,
+                notification.subject,
+                notification.created_at,
+            )
+        )
+    return items
+
+
+def _classify_failure(detail: str | None, default: str) -> str:
+    text = (detail or "").lower()
+    if "rate limit" in text:
+        return "github_rate_limit"
+    if "timeout" in text or "timed out" in text:
+        return "github_timeout" if "github" in text else "worker_failure"
+    if "clone" in text:
+        return "clone_failure"
+    if "private" in text or "auth" in text or "credential" in text or "401" in text or "403" in text:
+        return "private_auth_failure"
+    if "scanner" in text or "trivy" in text or "syft" in text or "osv" in text:
+        return "scanner_failure"
+    if "minio" in text or "s3" in text or "storage" in text or "object" in text:
+        return "storage_failure"
+    return default
+
+
+def _failure_signal(
+    signal_type: str,
+    source: str,
+    source_id: str,
+    status: str,
+    detail: str,
+    created_at: datetime,
+    repository: models.Repository | None = None,
+    application: models.Application | None = None,
+) -> dict:
+    return schemas.FailureSignalOut(
+        signal_type=signal_type,
+        source=source,
+        source_id=source_id,
+        status=status,
+        detail=detail,
+        repository_id=repository.id if repository else None,
+        repository_owner=repository.owner if repository else None,
+        repository_name=repository.name if repository else None,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        created_at=created_at,
+    ).model_dump(mode="json")
 
 
 def _readiness(check: str, configured: bool, detail: str) -> schemas.OperationsReadinessOut:

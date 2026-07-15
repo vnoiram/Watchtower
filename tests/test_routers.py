@@ -57,6 +57,7 @@ from api.app.routers.governance import (
     list_risk_acceptance_review,
     list_runtime_eol,
 )
+from api.app.routers.integrations import github_integration_health, list_webhook_intake
 from api.app.routers.isolated_lane import list_isolated_lane
 from api.app.routers.job_health import list_job_health
 from api.app.routers.jobs import list_retry_candidates
@@ -66,6 +67,7 @@ from api.app.routers.notifications import list_notification_slo, list_notificati
 from api.app.routers.operations import (
     backup_readiness,
     daily_operations,
+    list_failure_signals,
     list_manual_actions,
     operational_workload,
     operations_readiness,
@@ -75,6 +77,7 @@ from api.app.routers.operations import (
 from api.app.routers.quality import list_duplicate_review, list_reopen_risk
 from api.app.routers.remediation import (
     list_remediation_backlog,
+    list_dependency_updates,
     list_github_issue_actions,
     list_issue_closures,
     list_remediation_prs,
@@ -87,6 +90,7 @@ from api.app.routers.repository_sync import list_repository_sync
 from api.app.routers.rollout import list_repository_rollout, list_rollout_gaps
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.scanner_inventory import list_scanner_inventory
+from api.app.routers.scanners import list_scanner_failures
 from api.app.routers.scanner_versions import list_scanner_versions
 from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
 from api.app.routers.security import data_protection, list_security_findings, rbac_review
@@ -2258,6 +2262,191 @@ def test_list_rollout_gaps_reports_deployment_blockers_and_dashboard_count() -> 
         assert owner_page.items[0]["application_name"] == app.name
         assert summary.rollout_gap_items == 5
         assert finding.status == FindingStatus.open
+
+
+def test_github_integration_health_reports_configuration_and_failure_classes() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        failed_sync = Job(
+            job_type=JobType.repository_sync,
+            status=JobStatus.failed,
+            last_error="GitHub API rate limit exceeded",
+        )
+        issue_action = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="failed",
+            provider="github",
+            metadata_json={"error": "github request timeout"},
+        )
+        db.add_all([failed_sync, issue_action])
+        db.flush()
+        settings = Settings(github_token=None, github_app_id=None, github_private_key=None, github_webhook_secret=None)
+
+        rows = github_integration_health(db=db, settings=settings, _=None)
+        summary = dashboard_summary(db=db, settings=settings, _=None)
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["github_auth"].status == "fail"
+        assert by_check["github_webhook_secret"].status == "warn"
+        assert by_check["repository_sync_failures"].count == 1
+        assert by_check["github_issue_failures"].count == 1
+        assert by_check["github_rate_limit"].count == 1
+        assert by_check["github_timeout"].count == 1
+        assert summary.github_integration_issues == 6
+
+
+def test_list_webhook_intake_reports_event_repository_status_and_duplicates() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        body = '{"repository": {"full_name": "local/demo"}}'
+        first = Job(
+            job_type=JobType.repository_sync,
+            status=JobStatus.queued,
+            payload={"event": "push", "body": body},
+            created_at=now_utc(),
+        )
+        duplicate = Job(
+            job_type=JobType.repository_sync,
+            status=JobStatus.failed,
+            payload={"event": "push", "body": body},
+            last_error="duplicate webhook",
+            created_at=now_utc() + timedelta(minutes=5),
+        )
+        skipped = Job(job_type=JobType.scan, status=JobStatus.queued, payload={"event": "push"})
+        db.add_all([first, duplicate, skipped])
+        db.flush()
+
+        page = list_webhook_intake(event="push", duplicate_candidate=True, db=db, _=None)
+        failed_page = list_webhook_intake(status=JobStatus.failed, db=db, _=None)
+
+        assert {item["job_id"] for item in page.items} == {str(first.id), str(duplicate.id)}
+        assert page.items[0]["repository"] == "local/demo"
+        assert all(item["duplicate_candidate"] is True for item in page.items)
+        assert [item["job_id"] for item in failed_page.items] == [str(duplicate.id)]
+
+
+def test_list_scanner_failures_reports_summary_errors_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        partial = Scan(
+            application_id=app.id,
+            status=ScanStatus.partially_succeeded,
+            tool="trivy",
+            result_summary={"scanner_failures": [{"tool": "trivy", "error": "trivy db update failed"}]},
+        )
+        failed = Scan(
+            application_id=app.id,
+            status=ScanStatus.failed,
+            tool="syft",
+            error_message="syft timeout",
+        )
+        healthy = Scan(application_id=app.id, status=ScanStatus.succeeded, tool="osv")
+        db.add_all([partial, failed, healthy])
+        db.flush()
+
+        page = list_scanner_failures(db=db, _=None)
+        trivy_page = list_scanner_failures(tool="trivy", status=ScanStatus.partially_succeeded, db=db, _=None)
+
+        by_tool = {item["tool"]: item for item in page.items}
+        assert set(by_tool) == {"syft", "trivy"}
+        assert by_tool["trivy"]["failure_type"] == "trivy_db_update"
+        assert by_tool["syft"]["failure_type"] == "timeout"
+        assert [item["scan_id"] for item in trivy_page.items] == [str(partial.id)]
+        assert trivy_page.items[0]["application_name"] == app.name
+
+
+def test_list_dependency_updates_reports_renovate_dependabot_and_ci_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        renovate_finding = create_finding(db, app, severity=Severity.high)
+        dependabot_finding = create_finding(db, app, severity=Severity.medium)
+        renovate = RemediationAction(
+            finding_id=renovate_finding.id,
+            action_type="ai_fix",
+            status="created",
+            provider="renovate",
+            branch="renovate/pkg-1",
+            metadata_json={"pull_request_url": "https://github.com/local/demo/pull/1", "ci_passed": False},
+        )
+        dependabot = RemediationAction(
+            finding_id=dependabot_finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="dependabot",
+            branch="dependabot/npm/pkg-2",
+            metadata_json={"ci_passed": True, "update_kind": "minor"},
+        )
+        db.add_all([renovate, dependabot])
+        db.flush()
+
+        page = list_dependency_updates(db=db, _=None)
+        failed_page = list_dependency_updates(provider="renovate", ci_failed=True, db=db, _=None)
+
+        by_source = {item["update_source"]: item for item in page.items}
+        assert set(by_source) == {"dependabot", "renovate"}
+        assert by_source["renovate"]["ci_passed"] is False
+        assert by_source["dependabot"]["ci_passed"] is True
+        assert [item["action_id"] for item in failed_page.items] == [str(renovate.id)]
+
+
+def test_list_failure_signals_reports_classified_operations_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical)
+        db.add_all(
+            [
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.failed,
+                    last_error="GitHub API rate limit exceeded",
+                ),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.failed,
+                    tool="syft",
+                    error_message="syft scanner failed",
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="github_issue",
+                    status="skipped_duplicate",
+                    provider="github",
+                    metadata_json={"skipped_reason": "github issue already created"},
+                ),
+                Notification(
+                    channel="slack",
+                    severity=Severity.critical,
+                    subject="failed delivery",
+                    body="webhook timeout",
+                    status="failed",
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_failure_signals(db=db, _=None)
+        duplicate_page = list_failure_signals(signal_type="duplicate_suppression", db=db, _=None)
+        summary = dashboard_summary(
+            db=db,
+            settings=Settings(github_token="token", github_webhook_secret="secret", api_token="custom"),
+            _=None,
+        )
+
+        signal_types = {item["signal_type"] for item in page.items}
+        assert {"duplicate_suppression", "github_rate_limit", "scanner_failure", "worker_failure"} <= signal_types
+        assert [item["source"] for item in duplicate_page.items] == ["remediation_action"]
+        assert duplicate_page.items[0]["application_name"] == app.name
+        assert summary.failure_signal_items == 4
 
 
 def test_list_ai_fix_actions_filters_and_returns_context() -> None:
