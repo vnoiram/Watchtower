@@ -24,6 +24,22 @@ def dashboard_summary(
     failed_jobs = db.scalar(select(func.count()).select_from(models.Job).where(models.Job.status == models.JobStatus.failed)) or 0
     expired_vex = db.scalar(select(func.count()).select_from(models.VexStatement).where(models.VexStatement.review_date < datetime.now(timezone.utc))) or 0
     stale_scans = db.scalar(select(func.count()).select_from(models.Application).where(~models.Application.scans.any(models.Scan.created_at >= cutoff))) or 0
+    missing_active_sbom = (
+        db.scalar(
+            select(func.count()).select_from(models.Application).where(
+                ~models.Application.id.in_(
+                    select(models.Sbom.application_id).where(
+                        models.Sbom.active.is_(True),
+                        models.Sbom.sbom_kind == "source",
+                    )
+                )
+            )
+        )
+        or 0
+    )
+    sbom_coverage_percent = (
+        round(((applications - missing_active_sbom) / applications) * 100, 1) if applications else 0.0
+    )
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -32,5 +48,6 @@ def dashboard_summary(
         stale_scans=stale_scans,
         failed_jobs=failed_jobs,
         expired_vex=expired_vex,
+        sbom_coverage_percent=sbom_coverage_percent,
+        missing_active_sbom=missing_active_sbom,
     )
-

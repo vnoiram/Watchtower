@@ -14,6 +14,8 @@ from api.app.models import (
     Component,
     Finding,
     FindingStatus,
+    Lifecycle,
+    Notification,
     RemediationAction,
     Repository,
     RepositoryProvider,
@@ -25,16 +27,24 @@ from api.app.models import (
     SourceClassification,
     Technology,
     TriggerType,
+    VexStatement,
+    VexStatus,
     Vulnerability,
     now_utc,
 )
 from api.app.routers.applications import list_applications
 from api.app.routers.components import list_component_applications, list_components
+from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.findings import list_findings
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
+from api.app.routers.maintenance import list_application_maintenance_candidates
+from api.app.routers.notifications import list_notifications
 from api.app.routers.remediation_actions import list_remediation_actions
+from api.app.routers.scan_health import list_scan_health
+from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sboms
 from api.app.routers.technologies import list_technologies
+from api.app.routers.vex import list_vex_statements
 from api.app.routers.vulnerabilities import list_vulnerabilities
 from worker.runner import upsert_detected_applications
 
@@ -66,7 +76,7 @@ def create_application(db: Session, repo: Repository, name: str = "demo") -> App
     app = Application(
         repository_id=repo.id,
         name=name,
-        path=".",
+        path="." if name == "demo" else name,
         application_type=ApplicationType.api,
     )
     db.add(app)
@@ -333,6 +343,199 @@ def test_list_remediation_actions_returns_context() -> None:
         assert page.items[0]["id"] == str(action.id)
         assert page.items[0]["finding_severity"] == "high"
         assert page.items[0]["application_name"] == "demo"
+
+
+def test_list_vex_statements_filters_expired_status_and_returns_context() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        expired = VexStatement(
+            finding_id=finding.id,
+            status=VexStatus.not_affected,
+            justification="component is not reachable",
+            approved_by="security",
+            review_date=now_utc() - timedelta(days=1),
+        )
+        upcoming = VexStatement(
+            finding_id=finding.id,
+            status=VexStatus.under_investigation,
+            justification="review pending",
+            approved_by="security",
+            review_date=now_utc() + timedelta(days=7),
+        )
+        db.add_all([expired, upcoming])
+        db.flush()
+
+        page = list_vex_statements(
+            expired=True,
+            status=VexStatus.not_affected,
+            finding_id=finding.id,
+            db=db,
+            _=None,
+        )
+
+        assert [item["id"] for item in page.items] == [str(expired.id)]
+        assert page.items[0]["application_name"] == app.name
+        assert page.items[0]["repository_name"] == repo.name
+        assert page.items[0]["vulnerability_external_id"] == "high-open"
+        assert page.items[0]["expired"] is True
+
+
+def test_list_scan_health_returns_failed_partial_and_stale_applications() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        failed_app = create_application(db, repo, "failed")
+        partial_app = create_application(db, repo, "partial")
+        stale_app = create_application(db, repo, "stale")
+        healthy_app = create_application(db, repo, "healthy")
+        db.add_all(
+            [
+                Scan(
+                    application_id=failed_app.id,
+                    status=ScanStatus.failed,
+                    error_message="scanner crashed",
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=partial_app.id,
+                    status=ScanStatus.partially_succeeded,
+                    result_summary={"scanner_failures": [{"scanner": "trivy"}]},
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=stale_app.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc() - timedelta(days=31),
+                ),
+                Scan(application_id=healthy_app.id, status=ScanStatus.succeeded, created_at=now_utc()),
+            ]
+        )
+        db.flush()
+
+        page = list_scan_health(db=db, _=None)
+
+        by_name = {item["application_name"]: item for item in page.items}
+        assert set(by_name) == {"failed", "partial", "stale"}
+        assert by_name["failed"]["latest_scan_error_message"] == "scanner crashed"
+        assert by_name["partial"]["scanner_failures"] == [{"scanner": "trivy"}]
+        assert by_name["stale"]["stale"] is True
+
+
+def test_list_sbom_coverage_reports_missing_and_component_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        covered_app = create_application(db, repo, "covered")
+        missing_app = create_application(db, repo, "missing")
+        scan = Scan(application_id=covered_app.id, status=ScanStatus.succeeded)
+        db.add(scan)
+        db.flush()
+        sbom = Sbom(
+            application_id=covered_app.id,
+            scan_id=scan.id,
+            sbom_digest="coverage-digest",
+            storage_key="coverage.json",
+            active=True,
+            sbom_kind="source",
+        )
+        component = Component(purl="pkg:pypi/coverage@1", ecosystem="pypi", name="coverage", version="1")
+        db.add_all([sbom, component])
+        db.flush()
+        db.add(SbomComponent(sbom_id=sbom.id, component_id=component.id))
+        db.flush()
+
+        all_page = list_sbom_coverage(db=db, _=None)
+        missing_page = list_sbom_coverage(missing=True, db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_name = {item["application_name"]: item for item in all_page.items}
+        assert by_name["covered"]["has_active_source_sbom"] is True
+        assert by_name["covered"]["component_count"] == 1
+        assert [item["application_name"] for item in missing_page.items] == [missing_app.name]
+        assert summary.missing_active_sbom == 1
+        assert summary.sbom_coverage_percent == 50.0
+
+
+def test_list_notifications_filters_and_returns_finding_context() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical)
+        matching = Notification(
+            channel="slack",
+            severity=Severity.critical,
+            subject="Critical vulnerability detected",
+            body="body",
+            status="failed",
+            metadata_json={"finding_id": str(finding.id)},
+        )
+        skipped = Notification(
+            channel="discord",
+            severity=Severity.high,
+            subject="High vulnerability detected",
+            body="body",
+            status="queued",
+            metadata_json={},
+        )
+        db.add_all([matching, skipped])
+        db.flush()
+
+        page = list_notifications(
+            status="failed",
+            channel="slack",
+            severity=Severity.critical,
+            db=db,
+            _=None,
+        )
+
+        assert [item["id"] for item in page.items] == [str(matching.id)]
+        assert page.items[0]["finding_id"] == str(finding.id)
+        assert page.items[0]["application_name"] == app.name
+        assert page.items[0]["vulnerability_external_id"] == "critical-open"
+
+
+def test_list_application_maintenance_candidates_reports_reasons() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        missing_owner = create_application(db, repo, "missing-owner")
+        unsupported = create_application(db, repo, "unsupported")
+        unsupported.owner = "team"
+        unsupported.support_status = "unsupported"
+        deprecated = create_application(db, repo, "deprecated")
+        deprecated.owner = "team"
+        deprecated.lifecycle = Lifecycle.deprecated
+        stale = create_application(db, repo, "stale")
+        stale.owner = "team"
+        healthy = create_application(db, repo, "healthy")
+        healthy.owner = "team"
+        db.add_all(
+            [
+                Scan(application_id=missing_owner.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Scan(application_id=unsupported.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Scan(application_id=deprecated.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Scan(
+                    application_id=stale.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc() - timedelta(days=31),
+                ),
+                Scan(application_id=healthy.id, status=ScanStatus.succeeded, created_at=now_utc()),
+            ]
+        )
+        db.flush()
+
+        page = list_application_maintenance_candidates(db=db, _=None)
+
+        by_name = {item["application_name"]: item for item in page.items}
+        assert set(by_name) == {"deprecated", "missing-owner", "stale", "unsupported"}
+        assert by_name["missing-owner"]["reasons"] == ["missing_owner"]
+        assert by_name["unsupported"]["reasons"] == ["unsupported"]
+        assert by_name["deprecated"]["reasons"] == ["deprecated"]
+        assert by_name["stale"]["reasons"] == ["stale_scan"]
 
 
 def test_enqueue_github_issue_endpoint_queues_and_suppresses_duplicate() -> None:

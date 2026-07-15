@@ -8,9 +8,13 @@ from api.app.routers import (
     findings,
     github,
     jobs,
+    maintenance,
+    notifications,
     remediation_actions,
     repositories,
+    sbom_coverage,
     sboms,
+    scan_health,
     scans,
     technologies,
     vex,
@@ -28,12 +32,16 @@ app.include_router(scans.router, prefix=api_prefix)
 app.include_router(findings.router, prefix=api_prefix)
 app.include_router(technologies.router, prefix=api_prefix)
 app.include_router(sboms.router, prefix=api_prefix)
+app.include_router(sbom_coverage.router, prefix=api_prefix)
 app.include_router(components.router, prefix=api_prefix)
 app.include_router(vulnerabilities.router, prefix=api_prefix)
 app.include_router(remediation_actions.router, prefix=api_prefix)
+app.include_router(notifications.router, prefix=api_prefix)
 app.include_router(dashboard.router, prefix=api_prefix)
 app.include_router(github.router, prefix=api_prefix)
 app.include_router(vex.router, prefix=api_prefix)
+app.include_router(scan_health.router, prefix=api_prefix)
+app.include_router(maintenance.router, prefix=api_prefix)
 
 
 @app.get("/healthz")

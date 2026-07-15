@@ -247,6 +247,82 @@ class VexOut(VexCreate):
     updated_at: datetime
 
 
+class VexInventoryOut(VexOut):
+    finding_status: models.FindingStatus
+    finding_severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    component_version: str | None
+    vulnerability_external_id: str
+    vulnerability_title: str | None
+    expired: bool
+
+
+class ScanHealthOut(BaseModel):
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    latest_scan_id: UUID | None
+    latest_scan_status: models.ScanStatus | None
+    latest_scan_error_message: str | None
+    scanner_failures: list[Any] = Field(default_factory=list)
+    latest_scan_created_at: datetime | None
+    latest_scan_completed_at: datetime | None
+    stale: bool
+
+
+class SbomCoverageOut(BaseModel):
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    has_active_source_sbom: bool
+    latest_sbom_id: UUID | None
+    latest_sbom_generated_at: datetime | None
+    component_count: int
+
+
+class NotificationInventoryOut(BaseModel):
+    id: UUID
+    channel: str
+    severity: models.Severity
+    subject: str
+    status: str
+    sent_at: datetime | None
+    created_at: datetime
+    finding_id: UUID | None = None
+    finding_status: models.FindingStatus | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    component_name: str | None = None
+    vulnerability_external_id: str | None = None
+
+
+class ApplicationMaintenanceOut(BaseModel):
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    owner: str | None
+    support_status: str
+    lifecycle: models.Lifecycle
+    latest_scan_id: UUID | None
+    latest_scan_status: models.ScanStatus | None
+    latest_scan_created_at: datetime | None
+    reasons: list[str] = Field(default_factory=list)
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -255,3 +331,5 @@ class DashboardSummary(BaseModel):
     stale_scans: int
     failed_jobs: int
     expired_vex: int
+    sbom_coverage_percent: float
+    missing_active_sbom: int
