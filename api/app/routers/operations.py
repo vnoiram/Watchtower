@@ -320,6 +320,15 @@ def list_failure_signals(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/worker-posture", response_model=list[schemas.WorkerPostureOut])
+def worker_posture(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    return worker_posture_items(db, settings)
+
+
 def failure_signal_count(db: Session) -> int:
     return len(failure_signal_items(db))
 
@@ -361,6 +370,32 @@ def failure_signal_items(db: Session) -> list[dict]:
     items.extend(_remediation_failure_signals(db))
     items.extend(_notification_failure_signals(db))
     return sorted(items, key=lambda item: item["created_at"], reverse=True)
+
+
+def worker_posture_items(db: Session, settings: Settings) -> list[schemas.WorkerPostureOut]:
+    now = datetime.now(timezone.utc)
+    stale_running = [
+        job
+        for job in db.scalars(select(models.Job).where(models.Job.status == models.JobStatus.running))
+        if job.started_at and _before(job.started_at, now - timedelta(seconds=settings.worker_job_timeout_seconds))
+    ]
+    timed_out = list(db.scalars(select(models.Job).where(models.Job.status == models.JobStatus.timed_out)))
+    isolated_scan_failures = _isolated_scan_failures(db)
+    credential_signals = [
+        item for item in failure_signal_items(db) if item["signal_type"] == "private_auth_failure"
+    ]
+    return [
+        _worker_check(
+            "job_timeout",
+            "ok" if settings.worker_job_timeout_seconds > 0 else "fail",
+            settings.worker_job_timeout_seconds,
+            f"worker_job_timeout_seconds={settings.worker_job_timeout_seconds}",
+        ),
+        _worker_check("stale_running_jobs", "fail" if stale_running else "ok", len(stale_running), "Running jobs older than worker timeout"),
+        _worker_check("timed_out_jobs", "fail" if timed_out else "ok", len(timed_out), "Jobs with timed_out status"),
+        _worker_check("isolated_scan_failures", "warn" if isolated_scan_failures else "ok", len(isolated_scan_failures), "Failed scans for restricted or isolated lane applications"),
+        _worker_check("credential_failure_signals", "fail" if credential_signals else "ok", len(credential_signals), "Failure signals mentioning auth or credentials"),
+    ]
 
 
 def manual_workload_count(db: Session) -> int:
@@ -544,6 +579,10 @@ def _workload(item: str, count: int, nonzero_status: str, detail: str) -> schema
     )
 
 
+def _worker_check(check: str, status: str, count: int, detail: str) -> schemas.WorkerPostureOut:
+    return schemas.WorkerPostureOut(check=check, status=status, count=count, detail=detail)
+
+
 def _backup_check(check: str, status: str, count: int, detail: str) -> schemas.BackupReadinessOut:
     return schemas.BackupReadinessOut(check=check, status=status, count=count, detail=detail)
 
@@ -585,6 +624,26 @@ def _recent_restore_logs(db: Session) -> list[models.AuditLog]:
         for log in db.scalars(select(models.AuditLog).where(models.AuditLog.action.in_(actions)))
         if _after_cutoff(log.created_at, cutoff)
     ]
+
+
+def _isolated_scan_failures(db: Session) -> list[models.Scan]:
+    scans = db.scalars(
+        select(models.Scan)
+        .join(models.Application, models.Scan.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(
+            models.Scan.status.in_([models.ScanStatus.failed, models.ScanStatus.timed_out]),
+            (
+                models.Repository.provider == models.RepositoryProvider.isolated
+            )
+            | (
+                models.Repository.source_classification.in_(
+                    [models.SourceClassification.restricted, models.SourceClassification.isolated]
+                )
+            ),
+        )
+    )
+    return list(scans)
 
 
 def _manual_action_reason(audit_log: models.AuditLog) -> str | None:

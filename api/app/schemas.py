@@ -1043,6 +1043,67 @@ class FailureSignalOut(BaseModel):
     created_at: datetime
 
 
+class IsolatedSafeguardOut(BaseModel):
+    issue_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    repository_provider: models.RepositoryProvider
+    source_classification: models.SourceClassification
+    application_id: UUID
+    application_name: str
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    active_source_sbom_count: int
+    has_artifact_storage: bool
+    detail: str
+
+
+class SecretReviewOut(BaseModel):
+    source: str
+    source_id: str
+    severity: str | None = None
+    title: str
+    detail: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    created_at: datetime
+
+
+class WorkerPostureOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class ExploitIntelOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    risk_score: float
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    cvss_score: float | None = None
+    kev: bool
+    epss_signal: bool
+    detail: str
+
+
+class QuarterlyReviewOut(BaseModel):
+    item: str
+    status: str
+    count: int
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1070,3 +1131,5 @@ class DashboardSummary(BaseModel):
     rollout_gap_items: int
     github_integration_issues: int
     failure_signal_items: int
+    isolated_safeguard_items: int
+    quarterly_review_items: int

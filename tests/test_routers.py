@@ -56,9 +56,10 @@ from api.app.routers.governance import (
     list_ownership_review,
     list_risk_acceptance_review,
     list_runtime_eol,
+    quarterly_review,
 )
 from api.app.routers.integrations import github_integration_health, list_webhook_intake
-from api.app.routers.isolated_lane import list_isolated_lane
+from api.app.routers.isolated_lane import list_isolated_lane, list_isolated_safeguards
 from api.app.routers.job_health import list_job_health
 from api.app.routers.jobs import list_retry_candidates
 from api.app.routers.kpis import efficiency_kpis, kpi_summary, quality_kpis
@@ -72,6 +73,7 @@ from api.app.routers.operations import (
     operational_workload,
     operations_readiness,
     restore_readiness,
+    worker_posture,
     weekly_review,
 )
 from api.app.routers.quality import list_duplicate_review, list_reopen_risk
@@ -93,7 +95,13 @@ from api.app.routers.scanner_inventory import list_scanner_inventory
 from api.app.routers.scanners import list_scanner_failures
 from api.app.routers.scanner_versions import list_scanner_versions
 from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
-from api.app.routers.security import data_protection, list_security_findings, rbac_review
+from api.app.routers.security import (
+    data_protection,
+    list_exploit_intel,
+    list_secrets_review,
+    list_security_findings,
+    rbac_review,
+)
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sboms
 from api.app.routers.sla import list_sla_findings
@@ -2610,6 +2618,177 @@ def test_list_isolated_lane_returns_isolated_and_restricted_applications() -> No
         assert by_name[isolated_app.name]["latest_scan_status"] == "succeeded"
         assert by_name[isolated_app.name]["active_source_sbom_count"] == 1
         assert summary.isolated_applications == 2
+
+
+def test_list_isolated_safeguards_reports_missing_controls_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "restricted-safeguards")
+        repo.source_classification = SourceClassification.restricted
+        app = create_application(db, repo, "restricted-app")
+        db.flush()
+
+        page = list_isolated_safeguards(db=db, _=None)
+        filtered = list_isolated_safeguards(issue_type="missing_owner", db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        issue_types = {item["issue_type"] for item in page.items}
+        assert issue_types == {
+            "github_provider_mixed",
+            "missing_owner",
+            "missing_scan",
+            "missing_active_source_sbom",
+            "missing_artifact_storage",
+        }
+        assert all(item["application_id"] == str(app.id) for item in page.items)
+        assert filtered.items[0]["issue_type"] == "missing_owner"
+        assert summary.isolated_safeguard_items == 5
+
+
+def test_list_secrets_review_reports_scan_and_metadata_without_secret_values() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={
+                "secrets": [
+                    {
+                        "severity": "critical",
+                        "title": "Hardcoded API key",
+                        "path": ".env",
+                        "secret": "SUPER_SECRET_VALUE",
+                    }
+                ]
+            },
+        )
+        audit_log = AuditLog(
+            actor="operator",
+            role="admin",
+            action="settings.update",
+            resource_type="settings",
+            resource_id="github",
+            metadata_json={"token": "AUDIT_SECRET_VALUE"},
+        )
+        job = Job(
+            job_type=JobType.scan,
+            status=JobStatus.failed,
+            last_error="credential token detected in worker output",
+        )
+        db.add_all([scan, audit_log, job])
+        db.flush()
+
+        page = list_secrets_review(db=db, _=None)
+        filtered = list_secrets_review(source="scan", severity="critical", db=db, _=None)
+
+        assert {item["source"] for item in page.items} == {"scan", "audit", "job"}
+        assert [item["source"] for item in filtered.items] == ["scan"]
+        assert filtered.items[0]["detail"] == ".env"
+        rendered = " ".join(str(item.get("detail")) for item in page.items)
+        assert "SUPER_SECRET_VALUE" not in rendered
+        assert "AUDIT_SECRET_VALUE" not in rendered
+
+
+def test_worker_posture_reports_timeout_isolated_and_credential_issues() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "restricted-worker")
+        repo.source_classification = SourceClassification.restricted
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.running,
+                    started_at=now_utc() - timedelta(minutes=10),
+                ),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.timed_out,
+                    last_error="worker timed out",
+                ),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.failed,
+                    last_error="GitHub 401 credential failure",
+                ),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.failed,
+                    error_message="scanner failed",
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = worker_posture(
+            db=db,
+            settings=Settings(worker_job_timeout_seconds=60),
+            _=None,
+        )
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["job_timeout"].status == "ok"
+        assert by_check["stale_running_jobs"].count == 1
+        assert by_check["timed_out_jobs"].count == 1
+        assert by_check["isolated_scan_failures"].count == 1
+        assert by_check["credential_failure_signals"].count == 1
+
+
+def test_list_exploit_intel_reports_kev_epss_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        kev_finding = create_finding(db, app, severity=Severity.high, risk_score=8.0)
+        critical_finding = create_finding(db, app, severity=Severity.critical, risk_score=9.9)
+        kev_vulnerability = db.get(Vulnerability, kev_finding.vulnerability_id)
+        critical_vulnerability = db.get(Vulnerability, critical_finding.vulnerability_id)
+        assert kev_vulnerability is not None
+        assert critical_vulnerability is not None
+        kev_vulnerability.title = "CISA KEV known exploited package"
+        kev_vulnerability.references = ["https://example.test/kev"]
+        critical_vulnerability.cvss_score = 9.8
+        db.flush()
+
+        page = list_exploit_intel(db=db, _=None)
+        kev_page = list_exploit_intel(kev=True, db=db, _=None)
+        critical_page = list_exploit_intel(severity=Severity.critical, db=db, _=None)
+
+        by_id = {item["finding_id"]: item for item in page.items}
+        assert set(by_id) == {str(kev_finding.id), str(critical_finding.id)}
+        assert by_id[str(kev_finding.id)]["kev"] is True
+        assert by_id[str(critical_finding.id)]["epss_signal"] is True
+        assert [item["finding_id"] for item in kev_page.items] == [str(kev_finding.id)]
+        assert [item["finding_id"] for item in critical_page.items] == [str(critical_finding.id)]
+
+
+def test_quarterly_review_reports_governance_counts_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "quarterly")
+        repo.source_classification = SourceClassification.restricted
+        app = create_application(db, repo)
+        app.lifecycle = Lifecycle.deprecated
+        app.criticality = "unclassified"
+        app.production = True
+        app.auto_merge_enabled = True
+        db.flush()
+
+        rows = quarterly_review(db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_item = {row.item: row for row in rows}
+        assert by_item["deprecation_candidates"].count == 1
+        assert by_item["owner_tier_review"].count == 1
+        assert by_item["external_exposure_review"].count == 1
+        assert by_item["github_app_permissions_review"].count == 1
+        assert by_item["isolated_classification_review"].count == 1
+        assert by_item["auto_merge_scope_review"].count == 1
+        assert all(row.status == "warn" for row in rows)
+        assert summary.quarterly_review_items == 6
 
 
 def test_list_sla_findings_reports_breaches_and_dashboard_count() -> None:

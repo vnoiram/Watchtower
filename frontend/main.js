@@ -69,6 +69,11 @@ const webhookIntake = document.querySelector("#webhook-intake");
 const scannerFailures = document.querySelector("#scanner-failures");
 const dependencyUpdates = document.querySelector("#dependency-updates");
 const failureSignals = document.querySelector("#failure-signals");
+const isolatedSafeguards = document.querySelector("#isolated-safeguards");
+const secretsReview = document.querySelector("#secrets-review");
+const workerPosture = document.querySelector("#worker-posture");
+const exploitIntel = document.querySelector("#exploit-intel");
+const quarterlyReview = document.querySelector("#quarterly-review");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -143,6 +148,8 @@ function renderMetrics(summary) {
     ["rollout_gap_items", "Rollout gaps", "warn"],
     ["github_integration_issues", "GitHub issues", "warn"],
     ["failure_signal_items", "Failure signals", "danger"],
+    ["isolated_safeguard_items", "Isolation safeguards", "warn"],
+    ["quarterly_review_items", "Quarterly review", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -958,6 +965,64 @@ function renderFailureSignals(page) {
     : `<tr><td colspan="5">No failure signals</td></tr>`;
 }
 
+function renderIsolatedSafeguards(page) {
+  const rows = page.items || [];
+  isolatedSafeguards.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.latest_scan_status || "missing")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No isolated safeguard issues</td></tr>`;
+}
+
+function renderSecretsReview(page) {
+  const rows = page.items || [];
+  secretsReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.severity || "-")}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.detail || "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No secret review items</td></tr>`;
+}
+
+function renderWorkerPosture(rows) {
+  workerPosture.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No worker posture checks</td></tr>`;
+}
+
+function renderExploitIntel(page) {
+  const rows = page.items || [];
+  exploitIntel.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.kev ? "KEV" : item.epss_signal ? "EPSS" : "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No exploit intelligence items</td></tr>`;
+}
+
+function renderQuarterlyReview(rows) {
+  quarterlyReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.item)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No quarterly review items</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1028,6 +1093,11 @@ async function refresh() {
   scannerFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   dependencyUpdates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   failureSignals.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  isolatedSafeguards.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  secretsReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  workerPosture.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  exploitIntel.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  quarterlyReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -1100,6 +1170,11 @@ async function refresh() {
       scannerFailurePage,
       dependencyUpdatePage,
       failureSignalPage,
+      isolatedSafeguardPage,
+      secretsReviewPage,
+      workerPosturePage,
+      exploitIntelPage,
+      quarterlyReviewPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -1171,6 +1246,11 @@ async function refresh() {
       loadJson("/scanners/failures?limit=10"),
       loadJson("/remediation/dependency-updates?limit=10"),
       loadJson("/operations/failure-signals?limit=10"),
+      loadJson("/isolated-lane/safeguards?limit=10"),
+      loadJson("/security/secrets-review?limit=10"),
+      loadJson("/operations/worker-posture"),
+      loadJson("/security/exploit-intel?limit=10"),
+      loadJson("/governance/quarterly-review"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -1241,6 +1321,11 @@ async function refresh() {
     renderScannerFailures(scannerFailurePage);
     renderDependencyUpdates(dependencyUpdatePage);
     renderFailureSignals(failureSignalPage);
+    renderIsolatedSafeguards(isolatedSafeguardPage);
+    renderSecretsReview(secretsReviewPage);
+    renderWorkerPosture(workerPosturePage);
+    renderExploitIntel(exploitIntelPage);
+    renderQuarterlyReview(quarterlyReviewPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1311,6 +1396,11 @@ async function refresh() {
     scannerFailures.innerHTML = `<tr><td colspan="5">Unable to load scanner failures</td></tr>`;
     dependencyUpdates.innerHTML = `<tr><td colspan="5">Unable to load dependency updates</td></tr>`;
     failureSignals.innerHTML = `<tr><td colspan="5">Unable to load failure signals</td></tr>`;
+    isolatedSafeguards.innerHTML = `<tr><td colspan="5">Unable to load isolated safeguards</td></tr>`;
+    secretsReview.innerHTML = `<tr><td colspan="5">Unable to load secrets review</td></tr>`;
+    workerPosture.innerHTML = `<tr><td colspan="4">Unable to load worker posture</td></tr>`;
+    exploitIntel.innerHTML = `<tr><td colspan="5">Unable to load exploit intelligence</td></tr>`;
+    quarterlyReview.innerHTML = `<tr><td colspan="4">Unable to load quarterly review</td></tr>`;
   }
 }
 

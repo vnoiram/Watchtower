@@ -80,8 +80,20 @@ def list_risk_acceptance_review(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/quarterly-review", response_model=list[schemas.QuarterlyReviewOut])
+def quarterly_review(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return quarterly_review_items(db)
+
+
 def exposure_review_count(db: Session) -> int:
     return len(exposure_review_items(db))
+
+
+def quarterly_review_count(db: Session) -> int:
+    return sum(item.count for item in quarterly_review_items(db))
 
 
 def ownership_review_items(db: Session, repository_id: UUID | None = None) -> list[dict]:
@@ -354,6 +366,30 @@ def risk_acceptance_items(db: Session) -> list[dict]:
     return items
 
 
+def quarterly_review_items(db: Session) -> list[schemas.QuarterlyReviewOut]:
+    deprecated = _count_applications(
+        db,
+        lambda app: app.lifecycle in {models.Lifecycle.deprecated, models.Lifecycle.archived},
+    )
+    ownership_tier = _count_applications(db, lambda app: not app.owner or (app.criticality or "").lower() not in KNOWN_CRITICALITIES)
+    exposure = _count_applications(db, lambda app: app.internet_exposed or app.production)
+    isolated = _count_repositories(
+        db,
+        lambda repo: repo.provider == models.RepositoryProvider.isolated
+        or repo.source_classification in {models.SourceClassification.restricted, models.SourceClassification.isolated},
+    )
+    auto_merge = _count_applications(db, lambda app: app.auto_merge_enabled)
+    github_settings = _count_repositories(db, lambda repo: repo.provider == models.RepositoryProvider.github)
+    return [
+        _quarterly("deprecation_candidates", "warn", deprecated, "Deprecated or archived applications requiring quarterly review"),
+        _quarterly("owner_tier_review", "warn", ownership_tier, "Applications with missing owner or unknown tier"),
+        _quarterly("external_exposure_review", "warn", exposure, "Production or internet exposed applications"),
+        _quarterly("github_app_permissions_review", "warn", github_settings, "GitHub repositories requiring app permission review"),
+        _quarterly("isolated_classification_review", "warn", isolated, "Restricted or isolated repositories requiring classification review"),
+        _quarterly("auto_merge_scope_review", "warn", auto_merge, "Applications with auto-merge enabled"),
+    ]
+
+
 def _ownership_issues(application: models.Application) -> list[tuple[str, str]]:
     issues = []
     criticality = (application.criticality or "").lower()
@@ -368,6 +404,23 @@ def _ownership_issues(application: models.Application) -> list[tuple[str, str]]:
     if application.lifecycle in {models.Lifecycle.deprecated, models.Lifecycle.archived}:
         issues.append((application.lifecycle.value, "Application lifecycle requires governance review"))
     return issues
+
+
+def _quarterly(item: str, nonzero_status: str, count: int, detail: str) -> schemas.QuarterlyReviewOut:
+    return schemas.QuarterlyReviewOut(
+        item=item,
+        status=nonzero_status if count else "ok",
+        count=count,
+        detail=detail,
+    )
+
+
+def _count_applications(db: Session, predicate) -> int:
+    return sum(1 for application in db.scalars(select(models.Application)) if predicate(application))
+
+
+def _count_repositories(db: Session, predicate) -> int:
+    return sum(1 for repository in db.scalars(select(models.Repository)) if predicate(repository))
 
 
 def _runtime_candidate(name: str | None, category: str | None) -> bool:
