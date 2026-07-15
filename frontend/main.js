@@ -84,6 +84,11 @@ const operationalLoadKpis = document.querySelector("#operational-load-kpis");
 const remediationAging = document.querySelector("#remediation-aging");
 const toolchainPosture = document.querySelector("#toolchain-posture");
 const notificationDigest = document.querySelector("#notification-digest");
+const phaseReadiness = document.querySelector("#phase-readiness");
+const findingLifecycle = document.querySelector("#finding-lifecycle");
+const vexInvalidation = document.querySelector("#vex-invalidation");
+const repositoryDrift = document.querySelector("#repository-drift");
+const autoMergePilot = document.querySelector("#auto-merge-pilot");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -163,6 +168,7 @@ function renderMetrics(summary) {
     ["application_readiness_items", "App readiness", "warn"],
     ["remediation_coverage_items", "Remediation coverage", "danger"],
     ["monthly_review_items", "Monthly review", "warn"],
+    ["phase_readiness_items", "Phase readiness", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -1151,6 +1157,65 @@ function renderNotificationDigest(page) {
     : `<tr><td colspan="5">No notification digest issues</td></tr>`;
 }
 
+function renderPhaseReadiness(rows) {
+  phaseReadiness.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.phase)}</td><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No phase readiness checks</td></tr>`;
+}
+
+function renderFindingLifecycle(page) {
+  const rows = page.items || [];
+  findingLifecycle.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.age_days)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No finding lifecycle issues</td></tr>`;
+}
+
+function renderVexInvalidation(page) {
+  const rows = page.items || [];
+  vexInvalidation.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.expired ? "expired" : "active")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No VEX invalidation candidates</td></tr>`;
+}
+
+function renderRepositoryDrift(page) {
+  const rows = page.items || [];
+  repositoryDrift.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.provider)}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No repository drift items</td></tr>`;
+}
+
+function renderAutoMergePilot(page) {
+  const rows = page.items || [];
+  autoMergePilot.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.allowed ? "allowed" : "blocked")}</td><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.action_status)}</td><td>${escapeHtml(item.validation_scan_resolved ? "validated" : "missing validation")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No auto-merge pilot items</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1236,6 +1301,11 @@ async function refresh() {
   remediationAging.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   toolchainPosture.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   notificationDigest.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  phaseReadiness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  findingLifecycle.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  vexInvalidation.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  repositoryDrift.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  autoMergePilot.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -1323,6 +1393,11 @@ async function refresh() {
       remediationAgingPage,
       toolchainPosturePage,
       notificationDigestPage,
+      phaseReadinessPage,
+      findingLifecyclePage,
+      vexInvalidationPage,
+      repositoryDriftPage,
+      autoMergePilotPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -1409,6 +1484,11 @@ async function refresh() {
       loadJson("/remediation/aging?limit=10"),
       loadJson("/operations/toolchain-posture"),
       loadJson("/notifications/digest-readiness?limit=10"),
+      loadJson("/operations/phase-readiness"),
+      loadJson("/findings/lifecycle-review?limit=10"),
+      loadJson("/vex/invalidation-candidates?limit=10"),
+      loadJson("/rollout/repository-drift?limit=10"),
+      loadJson("/auto-merge/pilot-readiness?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -1494,6 +1574,11 @@ async function refresh() {
     renderRemediationAging(remediationAgingPage);
     renderToolchainPosture(toolchainPosturePage);
     renderNotificationDigest(notificationDigestPage);
+    renderPhaseReadiness(phaseReadinessPage);
+    renderFindingLifecycle(findingLifecyclePage);
+    renderVexInvalidation(vexInvalidationPage);
+    renderRepositoryDrift(repositoryDriftPage);
+    renderAutoMergePilot(autoMergePilotPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1579,6 +1664,11 @@ async function refresh() {
     remediationAging.innerHTML = `<tr><td colspan="5">Unable to load remediation aging</td></tr>`;
     toolchainPosture.innerHTML = `<tr><td colspan="4">Unable to load toolchain posture</td></tr>`;
     notificationDigest.innerHTML = `<tr><td colspan="5">Unable to load notification digest readiness</td></tr>`;
+    phaseReadiness.innerHTML = `<tr><td colspan="5">Unable to load phase readiness</td></tr>`;
+    findingLifecycle.innerHTML = `<tr><td colspan="5">Unable to load finding lifecycle review</td></tr>`;
+    vexInvalidation.innerHTML = `<tr><td colspan="5">Unable to load VEX invalidation candidates</td></tr>`;
+    repositoryDrift.innerHTML = `<tr><td colspan="5">Unable to load repository drift</td></tr>`;
+    autoMergePilot.innerHTML = `<tr><td colspan="5">Unable to load auto-merge pilot readiness</td></tr>`;
   }
 }
 

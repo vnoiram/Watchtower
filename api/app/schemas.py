@@ -1230,6 +1230,85 @@ class NotificationDigestReadinessOut(BaseModel):
     created_at: datetime
 
 
+class PhaseReadinessOut(BaseModel):
+    phase: str
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class FindingLifecycleReviewOut(BaseModel):
+    issue_type: str
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    age_days: int
+    updated_at: datetime
+    detail: str
+
+
+class VexInvalidationCandidateOut(BaseModel):
+    reason: str
+    vex_id: UUID
+    finding_id: UUID
+    status: models.VexStatus
+    finding_status: models.FindingStatus
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    component_version: str | None = None
+    vulnerability_external_id: str
+    review_date: datetime
+    expired: bool
+    detail: str
+
+
+class RepositoryDriftOut(BaseModel):
+    issue_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider: models.RepositoryProvider
+    source_classification: models.SourceClassification
+    application_id: UUID | None = None
+    application_name: str | None = None
+    latest_scan_id: UUID | None = None
+    latest_scan_created_at: datetime | None = None
+    count: int
+    detail: str
+
+
+class AutoMergePilotReadinessOut(BaseModel):
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    allowed: bool
+    reason: str
+    ci_passed: bool
+    validation_scan_resolved: bool
+    tier_allows: bool
+    touches_forbidden_path: bool
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1262,3 +1341,4 @@ class DashboardSummary(BaseModel):
     application_readiness_items: int
     remediation_coverage_items: int
     monthly_review_items: int
+    phase_readiness_items: int

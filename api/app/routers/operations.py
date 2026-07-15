@@ -354,12 +354,24 @@ def toolchain_posture(
     return toolchain_posture_items(db)
 
 
+@router.get("/phase-readiness", response_model=list[schemas.PhaseReadinessOut])
+def phase_readiness(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return phase_readiness_items(db)
+
+
 def failure_signal_count(db: Session) -> int:
     return len(failure_signal_items(db))
 
 
 def monthly_review_count(db: Session) -> int:
     return sum(item.count for item in monthly_review_items(db) if item.status != "ok")
+
+
+def phase_readiness_count(db: Session) -> int:
+    return sum(item.count for item in phase_readiness_items(db) if item.status != "ok")
 
 
 def manual_action_count(db: Session, days: int = 30) -> int:
@@ -518,6 +530,73 @@ def toolchain_posture_items(db: Session) -> list[schemas.ToolchainPostureOut]:
         _toolchain("stale_scanner_tools", "warn" if stale_tools else "ok", len(stale_tools), "Scanner tools not seen in the last 30 days"),
         _toolchain("scanner_failure_records", "fail" if failure_count else "ok", failure_count, "Failed, timed out, or partial scanner runs"),
         _toolchain("runtime_eol_items", "warn" if runtime_count else "ok", runtime_count, "Runtime EOL review items"),
+    ]
+
+
+def phase_readiness_items(db: Session) -> list[schemas.PhaseReadinessOut]:
+    repositories = list(db.scalars(select(models.Repository)))
+    applications = list(db.scalars(select(models.Application)))
+    scans = list(db.scalars(select(models.Scan)))
+    findings = list(db.scalars(select(models.Finding)))
+    actions = list(db.scalars(select(models.RemediationAction)))
+    active_applications = [app for app in applications if app.lifecycle != models.Lifecycle.archived]
+    active_sbom_app_ids = set(
+        db.scalars(
+            select(models.Sbom.application_id).where(
+                models.Sbom.active.is_(True),
+                models.Sbom.sbom_kind == "source",
+            )
+        )
+    )
+    latest_scan_by_app = _latest_scan_by_application(scans)
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    stale_apps = sum(
+        1
+        for app in active_applications
+        if app.id not in latest_scan_by_app
+        or _before(latest_scan_by_app[app.id].created_at, stale_cutoff)
+    )
+    open_critical_high = sum(
+        1
+        for finding in findings
+        if finding.status == models.FindingStatus.open
+        and finding.severity in {models.Severity.critical, models.Severity.high}
+    )
+    fixed_without_action = _fixed_without_issue_or_pr_count(db)
+    missing_owner = sum(1 for app in active_applications if not app.owner)
+    missing_sbom = sum(1 for app in active_applications if app.id not in active_sbom_app_ids)
+    failed_scans = sum(
+        1
+        for scan in scans
+        if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out, models.ScanStatus.partially_succeeded}
+    )
+    validation_missing = sum(
+        1
+        for action in actions
+        if action.status in {"created", "running", "pending", "open", "queued"}
+        and (action.metadata_json or {}).get("validation_status") != "succeeded"
+    )
+    vex_missing = sum(1 for vex in db.scalars(select(models.VexStatement)) if not vex.approved_by or not vex.review_date)
+    isolated_repositories = sum(
+        1
+        for repo in repositories
+        if repo.provider == models.RepositoryProvider.isolated
+        or repo.source_classification in {models.SourceClassification.restricted, models.SourceClassification.isolated}
+    )
+    auto_merge_blocked = sum(1 for action in actions if action.action_type == ACTION_TYPE_AI_FIX and action.status in {"failed", "blocked"})
+    return [
+        _phase("phase_0", "repository_visibility", sum(1 for repo in repositories if not repo.visibility), "Repositories without visibility"),
+        _phase("phase_1", "api_inventory", 0 if repositories or applications else 1, "Repository or application inventory exists"),
+        _phase("phase_2", "repository_sync", sum(1 for repo in repositories if not repo.last_synced_at), "Repositories without sync timestamp"),
+        _phase("phase_3", "application_detection", sum(1 for repo in repositories if not any(app.repository_id == repo.id for app in applications)), "Repositories without detected applications"),
+        _phase("phase_4", "sbom_coverage", missing_sbom, "Active applications without active source SBOM"),
+        _phase("phase_5", "scan_health", failed_scans + stale_apps, "Failed, partial, timed out, or stale scans"),
+        _phase("phase_6", "risk_notification", open_critical_high, "Open critical/high findings requiring notification and response"),
+        _phase("phase_7", "issue_pr_rescan", fixed_without_action + validation_missing, "Fixable findings without action or validation"),
+        _phase("phase_8", "vex_governance", vex_missing, "VEX statements missing approval or review date"),
+        _phase("phase_9", "rollout_owner_sbom", missing_owner + missing_sbom, "Active application owner or SBOM rollout gaps"),
+        _phase("phase_10", "isolated_lane", 0 if isolated_repositories else 1, "Restricted or isolated lane inventory exists"),
+        _phase("phase_11", "auto_merge_pilot", auto_merge_blocked, "Blocked or failed AI fix actions before auto-merge pilot"),
     ]
 
 
@@ -760,6 +839,16 @@ def _toolchain(check: str, status: str, count: int, detail: str) -> schemas.Tool
     return schemas.ToolchainPostureOut(check=check, status=status, count=count, detail=detail)
 
 
+def _phase(phase: str, check: str, count: int, detail: str) -> schemas.PhaseReadinessOut:
+    return schemas.PhaseReadinessOut(
+        phase=phase,
+        check=check,
+        status="warn" if count else "ok",
+        count=count,
+        detail=detail,
+    )
+
+
 def _count(db: Session, stmt) -> int:
     subquery = stmt.subquery()
     return db.scalar(select(func.count()).select_from(subquery)) or 0
@@ -788,6 +877,32 @@ def _recent_restore_logs(db: Session) -> list[models.AuditLog]:
         for log in db.scalars(select(models.AuditLog).where(models.AuditLog.action.in_(actions)))
         if _after_cutoff(log.created_at, cutoff)
     ]
+
+
+def _latest_scan_by_application(scans: list[models.Scan]) -> dict:
+    latest = {}
+    for scan in sorted(scans, key=lambda item: (item.created_at, item.id), reverse=True):
+        latest.setdefault(scan.application_id, scan)
+    return latest
+
+
+def _fixed_without_issue_or_pr_count(db: Session) -> int:
+    action_finding_ids = set()
+    for action in db.scalars(select(models.RemediationAction)):
+        metadata = action.metadata_json or {}
+        if action.action_type == "github_issue" or action.branch or action.url or metadata.get("pull_request_url"):
+            action_finding_ids.add(action.finding_id)
+    return sum(
+        1
+        for finding in db.scalars(
+            select(models.Finding).where(
+                models.Finding.status == models.FindingStatus.open,
+                models.Finding.severity.in_([models.Severity.critical, models.Severity.high]),
+                models.Finding.fixed_version.is_not(None),
+            )
+        )
+        if finding.id not in action_finding_ids
+    )
 
 
 def _isolated_scan_failures(db: Session) -> list[models.Scan]:
