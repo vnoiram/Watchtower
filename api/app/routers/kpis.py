@@ -9,6 +9,7 @@ from api.app import models, schemas
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
 from api.app.routers.auto_merge import list_auto_merge_eligibility
+from api.app.routers.quality import reopen_risk_count
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sla import count_sla_breached_findings
 
@@ -159,6 +160,66 @@ def efficiency_kpis(
     ]
 
 
+@router.get("/quality", response_model=list[schemas.KpiMetricOut])
+def quality_kpis(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    findings = list(db.scalars(select(models.Finding)))
+    vex_statements = list(db.scalars(select(models.VexStatement)))
+    actions = list(db.scalars(select(models.RemediationAction)))
+    ai_fix_actions = [action for action in actions if action.action_type == "ai_fix"]
+    false_positive = [
+        finding for finding in findings if finding.status == models.FindingStatus.false_positive
+    ]
+    expired_vex = [
+        vex
+        for vex in vex_statements
+        if _before(vex.review_date, datetime.now(timezone.utc))
+    ]
+    failed_auto_merge = [
+        action
+        for action in ai_fix_actions
+        if action.status in {"failed", "blocked"}
+        or (action.metadata_json or {}).get("auto_merge_allowed") is False
+    ]
+    ci_observed = [action for action in actions if "ci_passed" in (action.metadata_json or {})]
+    ci_failed = [action for action in ci_observed if (action.metadata_json or {}).get("ci_passed") is False]
+    reopen_count = reopen_risk_count(db)
+    return [
+        _metric(
+            "false_positive_rate_percent",
+            _percent(len(false_positive), len(findings)),
+            "percent",
+            "Findings classified as false positives among all findings",
+        ),
+        _metric(
+            "expired_vex_rate_percent",
+            _percent(len(expired_vex), len(vex_statements)),
+            "percent",
+            "Expired VEX statements among all VEX statements",
+        ),
+        _metric(
+            "auto_merge_failure_rate_percent",
+            _percent(len(failed_auto_merge), len(ai_fix_actions)),
+            "percent",
+            "AI fix actions blocked or failed for auto-merge",
+        ),
+        _metric(
+            "pr_ci_failure_rate_percent",
+            _percent(len(ci_failed), len(ci_observed)),
+            "percent",
+            "Remediation actions with failed CI among actions with CI metadata",
+        ),
+        _metric(
+            "reopen_risk_count",
+            reopen_count,
+            "count",
+            "Resolved findings seen again after resolution",
+        ),
+    ]
+
+
 def scan_failure_rate_percent(db: Session) -> float:
     scans = list(db.scalars(select(models.Scan)))
     failed = sum(1 for scan in scans if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out})
@@ -186,6 +247,14 @@ def _after_cutoff(value: datetime, cutoff: datetime) -> bool:
     if value.tzinfo is None:
         cutoff = cutoff.replace(tzinfo=None)
     return value >= cutoff
+
+
+def _before(value: datetime, reference: datetime) -> bool:
+    if value.tzinfo is None and reference.tzinfo is not None:
+        reference = reference.replace(tzinfo=None)
+    elif value.tzinfo is not None and reference.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return value < reference
 
 
 def _mean_hours(values: list[float | None]) -> float:
