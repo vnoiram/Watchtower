@@ -96,6 +96,38 @@ def list_secrets_review(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/secret-scan-coverage", response_model=schemas.CursorPage)
+def list_secret_scan_coverage(
+    limit: int = 50,
+    gap_type: str | None = None,
+    severity: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = secret_scan_coverage_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if severity:
+        items = [item for item in items if item["max_severity"] == severity]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/sast-coverage", response_model=schemas.CursorPage)
+def list_sast_coverage(
+    limit: int = 50,
+    gap_type: str | None = None,
+    severity: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = sast_coverage_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if severity:
+        items = [item for item in items if item["max_severity"] == severity]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/exploit-intel", response_model=schemas.CursorPage)
 def list_exploit_intel(
     limit: int = 50,
@@ -123,6 +155,36 @@ def rbac_review(
 
 def rbac_review_count(db: Session, settings: Settings) -> int:
     return sum(1 for item in rbac_review_items(db, settings) if item.status != "ok")
+
+
+def secret_scan_coverage_count(db: Session) -> int:
+    return len(secret_scan_coverage_items(db))
+
+
+def sast_coverage_count(db: Session) -> int:
+    return len(sast_coverage_items(db))
+
+
+def secret_scan_coverage_items(db: Session) -> list[dict]:
+    return _security_scan_coverage_items(
+        db,
+        finding_type="secret",
+        evidence_tokens={"secret", "secrets", "gitleaks", "trufflehog", "detect-secrets"},
+        missing_gap="missing_secret_scan",
+        finding_gap="secret_findings_present",
+        failure_gap="scanner_failure",
+    )
+
+
+def sast_coverage_items(db: Session) -> list[dict]:
+    return _security_scan_coverage_items(
+        db,
+        finding_type="sast",
+        evidence_tokens={"sast", "semgrep", "bandit", "gosec", "codeql", "static"},
+        missing_gap="missing_sast_scan",
+        finding_gap="sast_findings_present",
+        failure_gap="scanner_failure",
+    )
 
 
 def secrets_review_items(db: Session) -> list[dict]:
@@ -154,6 +216,72 @@ def secrets_review_items(db: Session) -> list[dict]:
             )
     for item in _secret_error_items(db):
         items.append(item)
+    return items
+
+
+def _security_scan_coverage_items(
+    db: Session,
+    *,
+    finding_type: str,
+    evidence_tokens: set[str],
+    missing_gap: str,
+    finding_gap: str,
+    failure_gap: str,
+) -> list[dict]:
+    rows = list(
+        db.execute(
+            select(models.Application, models.Repository)
+            .join(models.Repository, models.Application.repository_id == models.Repository.id)
+            .order_by(models.Application.name.asc(), models.Application.id.asc())
+        )
+    )
+    latest_scans = _latest_scan_by_application(db)
+    items = []
+    for application, repository in rows:
+        scan = latest_scans.get(application.id)
+        findings = _findings_of_type(scan.result_summary if scan else None, finding_type)
+        has_evidence = _has_scan_evidence(scan, evidence_tokens, finding_type)
+        failures = _scanner_failures_for(scan, evidence_tokens)
+        max_severity = _max_finding_severity(findings)
+        if not has_evidence:
+            items.append(
+                _security_scan_coverage_item(
+                    missing_gap,
+                    application,
+                    repository,
+                    scan,
+                    has_evidence,
+                    len(findings),
+                    max_severity,
+                    f"Latest scan has no {finding_type} evidence",
+                )
+            )
+        if findings:
+            items.append(
+                _security_scan_coverage_item(
+                    finding_gap,
+                    application,
+                    repository,
+                    scan,
+                    has_evidence,
+                    len(findings),
+                    max_severity,
+                    f"Latest scan reported {len(findings)} {finding_type} finding(s)",
+                )
+            )
+        if failures:
+            items.append(
+                _security_scan_coverage_item(
+                    failure_gap,
+                    application,
+                    repository,
+                    scan,
+                    has_evidence,
+                    len(findings),
+                    max_severity,
+                    "; ".join(failures),
+                )
+            )
     return items
 
 
@@ -372,3 +500,85 @@ def _finding_title(finding: dict) -> str:
 def _finding_detail(finding: dict) -> str | None:
     value = finding.get("detail") or finding.get("message") or finding.get("description") or finding.get("path")
     return str(value) if value else None
+
+
+def _latest_scan_by_application(db: Session) -> dict:
+    latest = {}
+    scans = db.scalars(select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.desc()))
+    for scan in scans:
+        latest.setdefault(scan.application_id, scan)
+    return latest
+
+
+def _findings_of_type(result_summary: dict[str, Any] | None, finding_type: str) -> list[dict]:
+    return [finding for current_type, finding in _security_findings(result_summary) if current_type == finding_type]
+
+
+def _has_scan_evidence(scan: models.Scan | None, evidence_tokens: set[str], finding_type: str) -> bool:
+    if not scan:
+        return False
+    summary = scan.result_summary or {}
+    if finding_type in summary:
+        return True
+    artifacts = summary.get("artifacts") or {}
+    if isinstance(artifacts, dict) and any(_matches_tokens(str(key), evidence_tokens) for key in artifacts):
+        return True
+    text = " ".join(str(value) for value in [scan.scan_type, scan.tool, summary.get("scanner"), summary.get("tool")])
+    return _matches_tokens(text, evidence_tokens)
+
+
+def _scanner_failures_for(scan: models.Scan | None, evidence_tokens: set[str]) -> list[str]:
+    if not scan:
+        return []
+    failures = (scan.result_summary or {}).get("scanner_failures") or []
+    if isinstance(failures, dict):
+        failures = [failures]
+    if not isinstance(failures, list):
+        return []
+    matched = []
+    for failure in failures:
+        if not isinstance(failure, dict):
+            continue
+        text = " ".join(str(value) for value in failure.values())
+        if _matches_tokens(text, evidence_tokens):
+            matched.append(str(failure.get("error") or failure.get("message") or failure.get("scanner") or "scanner failure"))
+    return matched
+
+
+def _matches_tokens(value: str, tokens: set[str]) -> bool:
+    normalized = value.lower()
+    return any(token in normalized for token in tokens)
+
+
+def _max_finding_severity(findings: list[dict]) -> str | None:
+    rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "unknown": 5}
+    severities = [_finding_severity(finding) or "unknown" for finding in findings]
+    return min(severities, key=lambda item: rank.get(item, 99)) if severities else None
+
+
+def _security_scan_coverage_item(
+    gap_type: str,
+    application: models.Application,
+    repository: models.Repository,
+    scan: models.Scan | None,
+    has_scan_evidence: bool,
+    finding_count: int,
+    max_severity: str | None,
+    detail: str,
+) -> dict:
+    return schemas.SecurityScanCoverageOut(
+        gap_type=gap_type,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        latest_scan_id=scan.id if scan else None,
+        latest_scan_status=scan.status if scan else None,
+        latest_scan_tool=scan.tool if scan else None,
+        latest_scan_created_at=scan.created_at if scan else None,
+        has_scan_evidence=has_scan_evidence,
+        finding_count=finding_count,
+        max_severity=max_severity,
+        detail=detail,
+    ).model_dump(mode="json")

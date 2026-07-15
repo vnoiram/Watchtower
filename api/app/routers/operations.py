@@ -241,6 +241,40 @@ def restore_readiness(
     ]
 
 
+@router.get("/backup-evidence", response_model=schemas.CursorPage)
+def list_backup_evidence(
+    limit: int = 50,
+    status: str | None = None,
+    evidence_type: str | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    items = backup_evidence_items(db, settings)
+    if status:
+        items = [item for item in items if item["status"] == status]
+    if evidence_type:
+        items = [item for item in items if item["evidence_type"] == evidence_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/restore-evidence", response_model=schemas.CursorPage)
+def list_restore_evidence(
+    limit: int = 50,
+    status: str | None = None,
+    evidence_type: str | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    items = restore_evidence_items(db, settings)
+    if status:
+        items = [item for item in items if item["status"] == status]
+    if evidence_type:
+        items = [item for item in items if item["evidence_type"] == evidence_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/weekly-review", response_model=list[schemas.WeeklyReviewOut])
 def weekly_review(
     db: Session = Depends(get_db),
@@ -438,12 +472,120 @@ def rollback_readiness_count(db: Session) -> int:
     return sum(item.count for item in rollback_readiness_items(db) if item.status != "ok")
 
 
+def backup_evidence_count(db: Session, settings: Settings) -> int:
+    return sum(max(item["count"], 1) for item in backup_evidence_items(db, settings) if item["status"] != "ok")
+
+
+def restore_evidence_count(db: Session, settings: Settings) -> int:
+    return sum(max(item["count"], 1) for item in restore_evidence_items(db, settings) if item["status"] != "ok")
+
+
 def queue_pressure_count(db: Session) -> int:
     return sum(item.stale_count + item.overdue_count + item.retry_exhausted_count for item in queue_pressure_items(db))
 
 
 def manual_action_count(db: Session, days: int = 30) -> int:
     return len(manual_action_items(db, days=days))
+
+
+def backup_evidence_items(db: Session, settings: Settings) -> list[dict]:
+    storage_configured = bool(
+        settings.minio_endpoint
+        and settings.minio_access_key
+        and settings.minio_secret_key
+        and settings.minio_bucket
+    )
+    missing_storage_keys = _count(
+        db,
+        select(models.Sbom).where(
+            (models.Sbom.storage_key.is_(None)) | (models.Sbom.storage_key == ""),
+        ),
+    )
+    source_sboms = _count(db, select(models.Sbom).where(models.Sbom.sbom_kind == "source"))
+    source_artifacts = _source_sbom_artifact_count(db)
+    logs = _recent_backup_logs(db)
+    items = [
+        _operation_evidence(
+            "object_storage",
+            "ok" if storage_configured else "fail",
+            1 if storage_configured else 0,
+            None,
+            "Object storage is configured for backup evidence" if storage_configured else "Object storage is not configured",
+        ),
+        _operation_evidence(
+            "sbom_storage_keys",
+            "ok" if not missing_storage_keys else "fail",
+            missing_storage_keys,
+            None,
+            "All SBOM records have storage keys" if not missing_storage_keys else "SBOM records are missing storage keys",
+        ),
+        _operation_evidence(
+            "source_sbom_artifacts",
+            "ok" if source_artifacts >= source_sboms else "warn",
+            max(source_sboms - source_artifacts, 0),
+            None,
+            f"Source SBOM artifacts recorded for {source_artifacts} of {source_sboms} source SBOMs",
+        ),
+        _operation_evidence(
+            "backup_audit_30d",
+            "ok" if logs else "warn",
+            len(logs),
+            logs[0] if logs else None,
+            "Backup or backup verification audit logs in the last 30 days",
+        ),
+    ]
+    items.extend(_operation_log_evidence("backup_audit", logs))
+    return items
+
+
+def restore_evidence_items(db: Session, settings: Settings) -> list[dict]:
+    storage_configured = bool(
+        settings.minio_endpoint
+        and settings.minio_access_key
+        and settings.minio_secret_key
+        and settings.minio_bucket
+    )
+    missing_storage_keys = _count(
+        db,
+        select(models.Sbom).where(
+            (models.Sbom.storage_key.is_(None)) | (models.Sbom.storage_key == ""),
+        ),
+    )
+    source_sboms = _count(db, select(models.Sbom).where(models.Sbom.sbom_kind == "source"))
+    source_artifacts = _source_sbom_artifact_count(db)
+    logs = _recent_restore_logs(db)
+    items = [
+        _operation_evidence(
+            "object_storage",
+            "ok" if storage_configured else "fail",
+            1 if storage_configured else 0,
+            None,
+            "Object storage is configured for restore evidence" if storage_configured else "Object storage is not configured",
+        ),
+        _operation_evidence(
+            "sbom_storage_keys",
+            "ok" if not missing_storage_keys else "fail",
+            missing_storage_keys,
+            None,
+            "All SBOM records have storage keys" if not missing_storage_keys else "SBOM records are missing storage keys",
+        ),
+        _operation_evidence(
+            "source_sbom_artifacts",
+            "ok" if source_artifacts >= source_sboms else "warn",
+            max(source_sboms - source_artifacts, 0),
+            None,
+            f"Source SBOM artifacts available for {source_artifacts} of {source_sboms} source SBOMs",
+        ),
+        _operation_evidence(
+            "restore_audit_30d",
+            "ok" if logs else "warn",
+            len(logs),
+            logs[0] if logs else None,
+            "Restore verification audit logs in the last 30 days",
+        ),
+    ]
+    items.extend(_operation_log_evidence("restore_audit", logs))
+    return items
 
 
 def manual_action_items(db: Session, days: int = 30) -> list[dict]:
@@ -1296,6 +1438,44 @@ def _recent_restore_logs(db: Session) -> list[models.AuditLog]:
         for log in db.scalars(select(models.AuditLog).where(models.AuditLog.action.in_(actions)))
         if _after_cutoff(log.created_at, cutoff)
     ]
+
+
+def _recent_backup_logs(db: Session) -> list[models.AuditLog]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    actions = {"backup.create", "backup.verify", "storage.backup", "backup.schedule"}
+    return [
+        log
+        for log in db.scalars(
+            select(models.AuditLog).where(models.AuditLog.action.in_(actions)).order_by(models.AuditLog.created_at.desc())
+        )
+        if _after_cutoff(log.created_at, cutoff)
+    ]
+
+
+def _operation_log_evidence(evidence_type: str, logs: list[models.AuditLog]) -> list[dict]:
+    return [
+        _operation_evidence(evidence_type, "ok", 1, log, f"{log.action} audit evidence")
+        for log in logs
+    ]
+
+
+def _operation_evidence(
+    evidence_type: str,
+    status: str,
+    count: int,
+    audit_log: models.AuditLog | None,
+    detail: str,
+) -> dict:
+    return schemas.OperationEvidenceOut(
+        evidence_type=evidence_type,
+        status=status,
+        count=count,
+        action=audit_log.action if audit_log else None,
+        resource_type=audit_log.resource_type if audit_log else None,
+        resource_id=audit_log.resource_id if audit_log else None,
+        latest_evidence_at=audit_log.created_at if audit_log else None,
+        detail=detail,
+    ).model_dump(mode="json")
 
 
 def _latest_scan_by_application(scans: list[models.Scan]) -> dict:

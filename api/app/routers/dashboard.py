@@ -9,6 +9,7 @@ from api.app.config import Settings, get_settings
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
 from api.app.routers.auto_merge import automation_guardrail_count
+from api.app.routers.artifacts import container_coverage_count
 from api.app.routers.governance import exposure_review_count, quarterly_review_count
 from api.app.routers.integrations import github_integration_issue_count
 from api.app.routers.isolated_lane import (
@@ -21,6 +22,7 @@ from api.app.routers.kpis import mvp_target_breach_count, notification_failure_c
 from api.app.routers.notifications import notification_slo_breach_count
 from api.app.routers.operations import (
     control_evidence_count,
+    backup_evidence_count,
     failure_signal_count,
     manual_action_count,
     manual_workload_count,
@@ -28,6 +30,7 @@ from api.app.routers.operations import (
     phase_readiness_count,
     queue_pressure_count,
     rollback_readiness_count,
+    restore_evidence_count,
 )
 from api.app.routers.quality import reopen_risk_count
 from api.app.routers.remediation import (
@@ -46,7 +49,7 @@ from api.app.routers.rollout import (
 )
 from api.app.routers.scans import daily_scan_slo_breach_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
-from api.app.routers.security import rbac_review_count
+from api.app.routers.security import rbac_review_count, sast_coverage_count, secret_scan_coverage_count
 from api.app.routers.sla import count_sla_breached_findings
 from api.app.routers.storage import retention_review_count, storage_pressure_count
 
@@ -123,6 +126,11 @@ def dashboard_summary(
     daily_scan_slo_breaches = daily_scan_slo_breach_count(db)
     issue_slo_breaches = issue_slo_breach_count(db)
     auto_resolution_gap_items = auto_resolution_gap_count(db)
+    secret_scan_gap_items = secret_scan_coverage_count(db)
+    sast_coverage_gap_items = sast_coverage_count(db)
+    container_coverage_gap_items = container_coverage_count(db)
+    backup_evidence_gap_items = backup_evidence_count(db, settings)
+    restore_evidence_gap_items = restore_evidence_count(db, settings)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -170,4 +178,9 @@ def dashboard_summary(
         daily_scan_slo_breaches=daily_scan_slo_breaches,
         issue_slo_breaches=issue_slo_breaches,
         auto_resolution_gap_items=auto_resolution_gap_items,
+        secret_scan_gap_items=secret_scan_gap_items,
+        sast_coverage_gap_items=sast_coverage_gap_items,
+        container_coverage_gap_items=container_coverage_gap_items,
+        backup_evidence_gap_items=backup_evidence_gap_items,
+        restore_evidence_gap_items=restore_evidence_gap_items,
     )
