@@ -26,7 +26,7 @@ from api.app.routers.operations import (
 )
 from api.app.routers.quality import reopen_risk_count
 from api.app.routers.remediation import remediation_coverage_count, stale_remediation_count
-from api.app.routers.rollout import application_readiness_count, rollout_gap_count
+from api.app.routers.rollout import application_readiness_count, rollout_gap_count, rollout_wave_gap_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import rbac_review_count
 from api.app.routers.sla import count_sla_breached_findings
@@ -83,6 +83,7 @@ def dashboard_summary(
     reopen_risk_items = reopen_risk_count(db)
     rbac_review_items = rbac_review_count(db, settings)
     rollout_gap_items = rollout_gap_count(db)
+    rollout_wave_gap_items = rollout_wave_gap_count(db)
     github_integration_issues = github_integration_issue_count(db, settings)
     failure_signal_items = failure_signal_count(db)
     isolated_safeguard_items = isolated_safeguard_count(db)
@@ -119,6 +120,7 @@ def dashboard_summary(
         reopen_risk_items=reopen_risk_items,
         rbac_review_items=rbac_review_items,
         rollout_gap_items=rollout_gap_items,
+        rollout_wave_gap_items=rollout_wave_gap_items,
         github_integration_issues=github_integration_issues,
         failure_signal_items=failure_signal_items,
         isolated_safeguard_items=isolated_safeguard_items,

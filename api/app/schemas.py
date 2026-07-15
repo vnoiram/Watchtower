@@ -1450,6 +1450,81 @@ class AutomationSuppressionOut(BaseModel):
     updated_at: datetime
 
 
+class RolloutWaveOut(BaseModel):
+    wave: str
+    repository_count: int
+    application_count: int
+    owner_completeness_percent: float
+    active_sbom_coverage_percent: float
+    fresh_scan_percent: float
+    open_critical_high_count: int
+    gap_count: int
+    detail: str
+
+
+class MvpTargetReadinessOut(BaseModel):
+    issue_type: str
+    ready: bool
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    application_count: int
+    owner_completeness_percent: float
+    active_sbom_coverage_percent: float
+    latest_scan_created_at: datetime | None = None
+    open_critical_high_count: int
+    detail: str
+
+
+class KpiEvidenceOut(BaseModel):
+    metric: str
+    record_type: str
+    record_id: str
+    included: bool
+    status: str
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    detail: str
+
+
+class EfficiencyTimelineOut(BaseModel):
+    finding_id: UUID
+    metric: str
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    first_scan_at: datetime | None = None
+    finding_created_at: datetime
+    notification_sent_at: datetime | None = None
+    first_action_at: datetime | None = None
+    resolved_at: datetime | None = None
+    duration_hours: float | None = None
+    breached: bool
+    detail: str
+
+
+class InitialInventoryOut(BaseModel):
+    issue_type: str
+    complete: bool
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    application_id: UUID | None = None
+    application_name: str | None = None
+    latest_scan_id: UUID | None = None
+    latest_scan_created_at: datetime | None = None
+    open_critical_high_count: int
+    has_notification_or_action: bool
+    has_exception: bool
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1486,3 +1561,4 @@ class DashboardSummary(BaseModel):
     control_evidence_items: int
     automation_guardrail_items: int
     rollback_readiness_items: int
+    rollout_wave_gap_items: int

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
@@ -121,12 +122,56 @@ def list_repository_drift(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/waves", response_model=list[schemas.RolloutWaveOut])
+def rollout_waves(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return rollout_wave_items(db)
+
+
+@router.get("/mvp-targets", response_model=schemas.CursorPage)
+def list_mvp_target_readiness(
+    limit: int = 50,
+    ready: bool | None = None,
+    issue_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = mvp_target_readiness_items(db)
+    if ready is not None:
+        items = [item for item in items if item["ready"] is ready]
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/initial-inventory", response_model=schemas.CursorPage)
+def list_initial_inventory(
+    limit: int = 50,
+    complete: bool | None = None,
+    issue_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = initial_inventory_items(db)
+    if complete is not None:
+        items = [item for item in items if item["complete"] is complete]
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def rollout_gap_count(db: Session) -> int:
     return len(rollout_gap_items(db))
 
 
 def application_readiness_count(db: Session) -> int:
     return len(application_readiness_items(db))
+
+
+def rollout_wave_gap_count(db: Session) -> int:
+    return sum(item.gap_count for item in rollout_wave_items(db))
 
 
 def rollout_baseline_items(db: Session) -> list[schemas.RolloutBaselineOut]:
@@ -258,6 +303,150 @@ def rollout_gap_items(db: Session) -> list[dict]:
     return items
 
 
+def rollout_wave_items(db: Session) -> list[schemas.RolloutWaveOut]:
+    repositories = _repositories_for_rollout(db)
+    by_wave = _repositories_by_wave(repositories)
+    items = []
+    for wave in ["wave_1", "wave_2", "wave_3", "wave_4"]:
+        repos = by_wave.get(wave, [])
+        applications = _applications_for_repositories(db, repos)
+        application_ids = [app.id for app in applications]
+        active_sbom_app_ids = _active_sbom_application_ids(db, application_ids)
+        scans = [scan for repo in repos for scan in _repository_scans(db, repo.id)]
+        latest_scan_by_app = _latest_scan_by_application(scans)
+        fresh_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        fresh_apps = sum(
+            1
+            for app in applications
+            if app.id in latest_scan_by_app
+            and latest_scan_by_app[app.id].created_at >= _matching_datetime(
+                fresh_cutoff, latest_scan_by_app[app.id].created_at
+            )
+        )
+        owner_count = sum(1 for app in applications if app.owner)
+        open_count = _open_critical_high_count(db, application_ids)
+        gap_count = (
+            sum(1 for repo in repos if not repo.visibility)
+            + (len(applications) - owner_count)
+            + max(len(applications) - len(active_sbom_app_ids), 0)
+            + max(len(applications) - fresh_apps, 0)
+            + open_count
+        )
+        items.append(
+            schemas.RolloutWaveOut(
+                wave=wave,
+                repository_count=len(repos),
+                application_count=len(applications),
+                owner_completeness_percent=_percent(owner_count, len(applications)),
+                active_sbom_coverage_percent=_percent(len(active_sbom_app_ids), len(applications)),
+                fresh_scan_percent=_percent(fresh_apps, len(applications)),
+                open_critical_high_count=open_count,
+                gap_count=gap_count,
+                detail="Rollout wave readiness from repository inventory, app ownership, SBOM, scans, and open critical/high findings",
+            )
+        )
+    return items
+
+
+def mvp_target_readiness_items(db: Session) -> list[dict]:
+    repositories = _mvp_target_repositories(db)
+    items = []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    for repository in repositories:
+        applications = list(db.scalars(select(models.Application).where(models.Application.repository_id == repository.id)))
+        application_ids = [app.id for app in applications]
+        active_sbom_app_ids = _active_sbom_application_ids(db, application_ids)
+        scans = _repository_scans(db, repository.id)
+        latest_scan = scans[0] if scans else None
+        open_count = _open_critical_high_count(db, application_ids)
+        owner_count = sum(1 for app in applications if app.owner)
+        checks = {
+            "missing_visibility": bool(repository.visibility),
+            "missing_application": bool(applications),
+            "missing_owner": bool(applications) and owner_count == len(applications),
+            "missing_active_source_sbom": bool(applications) and len(active_sbom_app_ids) == len(applications),
+            "stale_scan": latest_scan is not None and latest_scan.created_at >= _matching_datetime(cutoff, latest_scan.created_at),
+            "open_critical_high": open_count == 0,
+        }
+        failing = [issue for issue, ok in checks.items() if not ok]
+        issue_type = "ready" if not failing else failing[0]
+        items.append(
+            schemas.MvpTargetReadinessOut(
+                issue_type=issue_type,
+                ready=not failing,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                application_count=len(applications),
+                owner_completeness_percent=_percent(owner_count, len(applications)),
+                active_sbom_coverage_percent=_percent(len(active_sbom_app_ids), len(applications)),
+                latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+                open_critical_high_count=open_count,
+                detail="MVP target is ready" if not failing else f"MVP target has {', '.join(failing)}",
+            ).model_dump(mode="json")
+        )
+    return items
+
+
+def initial_inventory_items(db: Session) -> list[dict]:
+    items = []
+    notification_finding_ids = _notified_finding_ids(db)
+    action_finding_ids = _action_finding_ids(db)
+    exception_finding_ids = _exception_finding_ids(db)
+    repositories = _repositories_for_rollout(db)
+    for repository in repositories:
+        applications = list(db.scalars(select(models.Application).where(models.Application.repository_id == repository.id)))
+        if not applications:
+            items.append(_initial_inventory_item("missing_application", False, repository, None, None, 0, False, False, "Repository has no detected applications"))
+            continue
+        for application in applications:
+            scans = list(
+                db.scalars(
+                    select(models.Scan)
+                    .where(models.Scan.application_id == application.id)
+                    .order_by(models.Scan.created_at.desc(), models.Scan.id.desc())
+                )
+            )
+            latest_scan = scans[0] if scans else None
+            findings = list(
+                db.scalars(
+                    select(models.Finding).where(
+                        models.Finding.application_id == application.id,
+                        models.Finding.severity.in_([models.Severity.critical, models.Severity.high]),
+                    )
+                )
+            )
+            open_findings = [finding for finding in findings if finding.status == models.FindingStatus.open]
+            has_notification_or_action = any(
+                finding.id in notification_finding_ids or finding.id in action_finding_ids for finding in findings
+            )
+            has_exception = any(finding.id in exception_finding_ids for finding in findings)
+            complete = latest_scan is not None and (not open_findings or has_notification_or_action or has_exception)
+            if latest_scan is None:
+                issue_type = "missing_scan"
+                detail = "Application has no initial scan"
+            elif open_findings and not has_notification_or_action and not has_exception:
+                issue_type = "missing_triage_evidence"
+                detail = "Open critical/high findings have no notification, issue/PR, or exception evidence"
+            else:
+                issue_type = "complete"
+                detail = "Initial critical/high inventory is complete"
+            items.append(
+                _initial_inventory_item(
+                    issue_type,
+                    complete,
+                    repository,
+                    application,
+                    latest_scan,
+                    len(open_findings),
+                    has_notification_or_action,
+                    has_exception,
+                    detail,
+                )
+            )
+    return items
+
+
 def _repository_scans(db: Session, repository_id) -> list[models.Scan]:
     return list(
         db.scalars(
@@ -267,6 +456,60 @@ def _repository_scans(db: Session, repository_id) -> list[models.Scan]:
             .order_by(models.Scan.created_at.desc(), models.Scan.id.desc())
         )
     )
+
+
+def _repositories_for_rollout(db: Session) -> list[models.Repository]:
+    return list(db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc())))
+
+
+def _applications_for_repositories(db: Session, repositories: list[models.Repository]) -> list[models.Application]:
+    repository_ids = [repo.id for repo in repositories]
+    if not repository_ids:
+        return []
+    return list(db.scalars(select(models.Application).where(models.Application.repository_id.in_(repository_ids))))
+
+
+def _repositories_by_wave(repositories: list[models.Repository]) -> dict[str, list[models.Repository]]:
+    by_wave = {f"wave_{index}": [] for index in range(1, 5)}
+    unassigned = []
+    for repository in repositories:
+        wave = _explicit_wave(repository)
+        if wave:
+            by_wave[wave].append(repository)
+        else:
+            unassigned.append(repository)
+    fallback_sizes = [10, 15, 15, 14]
+    cursor = 0
+    for index, size in enumerate(fallback_sizes, start=1):
+        wave = f"wave_{index}"
+        remaining = max(size - len(by_wave[wave]), 0)
+        if remaining:
+            by_wave[wave].extend(unassigned[cursor : cursor + remaining])
+            cursor += remaining
+    if cursor < len(unassigned):
+        by_wave["wave_4"].extend(unassigned[cursor:])
+    return by_wave
+
+
+def _explicit_wave(repository: models.Repository) -> str | None:
+    for topic in repository.topics or []:
+        normalized = str(topic).lower().replace("_", "-")
+        for index in range(1, 5):
+            if normalized in {f"wave-{index}", f"rollout-wave-{index}"}:
+                return f"wave_{index}"
+    return None
+
+
+def _mvp_target_repositories(db: Session) -> list[models.Repository]:
+    repositories = _repositories_for_rollout(db)
+    explicit = [
+        repo
+        for repo in repositories
+        if {str(topic).lower() for topic in (repo.topics or [])} & {"mvp", "mvp-target", "wave-1", "wave_1"}
+    ]
+    if explicit:
+        return explicit[:10]
+    return [repo for repo in repositories if not repo.archived][:10]
 
 
 def _latest_scan_by_application(scans: list[models.Scan]) -> dict:
@@ -307,6 +550,63 @@ def _open_critical_high_counts_by_application(db: Session, application_ids: list
     for finding in findings:
         counts[finding.application_id] = counts.get(finding.application_id, 0) + 1
     return counts
+
+
+def _notified_finding_ids(db: Session) -> set:
+    finding_ids = set()
+    for notification in db.scalars(select(models.Notification).where(models.Notification.status == "sent")):
+        finding_id = (notification.metadata_json or {}).get("finding_id")
+        if not finding_id:
+            continue
+        try:
+            finding_ids.add(UUID(str(finding_id)))
+        except ValueError:
+            continue
+    return finding_ids
+
+
+def _action_finding_ids(db: Session) -> set:
+    return {action.finding_id for action in db.scalars(select(models.RemediationAction)) if action.action_type or action.url or action.branch}
+
+
+def _exception_finding_ids(db: Session) -> set:
+    vex_ids = set(db.scalars(select(models.VexStatement.finding_id)))
+    exception_ids = set(
+        db.scalars(
+            select(models.Finding.id).where(
+                models.Finding.status.in_([models.FindingStatus.accepted_risk, models.FindingStatus.false_positive])
+            )
+        )
+    )
+    return vex_ids | exception_ids
+
+
+def _initial_inventory_item(
+    issue_type: str,
+    complete: bool,
+    repository: models.Repository,
+    application: models.Application | None,
+    latest_scan: models.Scan | None,
+    open_critical_high_count: int,
+    has_notification_or_action: bool,
+    has_exception: bool,
+    detail: str,
+) -> dict:
+    return schemas.InitialInventoryOut(
+        issue_type=issue_type,
+        complete=complete,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        latest_scan_id=latest_scan.id if latest_scan else None,
+        latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+        open_critical_high_count=open_critical_high_count,
+        has_notification_or_action=has_notification_or_action,
+        has_exception=has_exception,
+        detail=detail,
+    ).model_dump(mode="json")
 
 
 def _active_sbom_application_ids(db: Session, application_ids: list) -> set:
