@@ -18,6 +18,12 @@ const githubIssueActions = document.querySelector("#github-issue-actions");
 const remediationValidations = document.querySelector("#remediation-validations");
 const issueClosures = document.querySelector("#issue-closures");
 const jobHealth = document.querySelector("#job-health");
+const scanArtifacts = document.querySelector("#scan-artifacts");
+const aiFixActions = document.querySelector("#ai-fix-actions");
+const aiFixCandidates = document.querySelector("#ai-fix-candidates");
+const autoMergeEligibility = document.querySelector("#auto-merge-eligibility");
+const isolatedLane = document.querySelector("#isolated-lane");
+const slaFindings = document.querySelector("#sla-findings");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -76,6 +82,8 @@ function renderMetrics(summary) {
     ["missing_active_sbom", "Missing SBOM", "warn"],
     ["sbom_coverage_percent", "SBOM coverage %", ""],
     ["unhealthy_jobs", "Unhealthy jobs", "danger"],
+    ["sla_breached_findings", "SLA breaches", "danger"],
+    ["isolated_applications", "Isolated apps", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -292,6 +300,78 @@ function renderJobHealth(page) {
     : `<tr><td colspan="5">No unhealthy jobs</td></tr>`;
 }
 
+function renderScanArtifacts(page) {
+  const rows = page.items || [];
+  scanArtifacts.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.artifact_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.scan_status)}</td><td>${escapeHtml(item.storage_key)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scan artifacts</td></tr>`;
+}
+
+function renderAiFixActions(page) {
+  const rows = page.items || [];
+  aiFixActions.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.finding_severity || "-")}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.vulnerability_external_id || item.component_name || "-")}</td><td>${escapeHtml(item.requested_fixed_version || item.fixed_version || "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No AI fix actions</td></tr>`;
+}
+
+function renderAiFixCandidates(page) {
+  const rows = page.items || [];
+  aiFixCandidates.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.component_name)}</td><td>${escapeHtml(item.fixed_version)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No AI fix candidates</td></tr>`;
+}
+
+function renderAutoMergeEligibility(page) {
+  const rows = page.items || [];
+  autoMergeEligibility.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.allowed ? "allowed" : "blocked")}</td><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.update_kind)}</td><td>${escapeHtml(item.validation_scan_resolved ? "validated" : "not validated")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No auto merge candidates</td></tr>`;
+}
+
+function renderIsolatedLane(page) {
+  const rows = page.items || [];
+  isolatedLane.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.repository_provider)}</td><td>${escapeHtml(item.source_classification)}</td><td>${escapeHtml(item.latest_scan_status || "missing")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No isolated lane applications</td></tr>`;
+}
+
+function renderSlaFindings(page) {
+  const rows = page.items || [];
+  slaFindings.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.age_days)}/${escapeHtml(item.sla_days)}</td><td>${escapeHtml(item.breached ? "breached" : "within SLA")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No SLA breaches</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -311,6 +391,12 @@ async function refresh() {
   remediationValidations.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   issueClosures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   jobHealth.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scanArtifacts.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  aiFixActions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  aiFixCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  autoMergeEligibility.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  isolatedLane.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  slaFindings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -332,6 +418,12 @@ async function refresh() {
       remediationValidationPage,
       issueClosurePage,
       jobHealthPage,
+      artifactPage,
+      aiFixActionPage,
+      aiFixCandidatePage,
+      autoMergePage,
+      isolatedLanePage,
+      slaFindingPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -352,6 +444,12 @@ async function refresh() {
       loadJson("/remediation/validations?limit=10"),
       loadJson("/remediation/closures?limit=10"),
       loadJson("/job-health?limit=10"),
+      loadJson("/artifacts?limit=10"),
+      loadJson("/ai-fix?limit=10"),
+      loadJson("/ai-fix/candidates?limit=10"),
+      loadJson("/auto-merge/eligibility?limit=10"),
+      loadJson("/isolated-lane?limit=10"),
+      loadJson("/sla/findings?breached=true&limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -371,6 +469,12 @@ async function refresh() {
     renderRemediationValidations(remediationValidationPage);
     renderIssueClosures(issueClosurePage);
     renderJobHealth(jobHealthPage);
+    renderScanArtifacts(artifactPage);
+    renderAiFixActions(aiFixActionPage);
+    renderAiFixCandidates(aiFixCandidatePage);
+    renderAutoMergeEligibility(autoMergePage);
+    renderIsolatedLane(isolatedLanePage);
+    renderSlaFindings(slaFindingPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -390,6 +494,12 @@ async function refresh() {
     remediationValidations.innerHTML = `<tr><td colspan="5">Unable to load remediation validations</td></tr>`;
     issueClosures.innerHTML = `<tr><td colspan="5">Unable to load issue closures</td></tr>`;
     jobHealth.innerHTML = `<tr><td colspan="5">Unable to load job health</td></tr>`;
+    scanArtifacts.innerHTML = `<tr><td colspan="5">Unable to load scan artifacts</td></tr>`;
+    aiFixActions.innerHTML = `<tr><td colspan="5">Unable to load AI fix actions</td></tr>`;
+    aiFixCandidates.innerHTML = `<tr><td colspan="5">Unable to load AI fix candidates</td></tr>`;
+    autoMergeEligibility.innerHTML = `<tr><td colspan="5">Unable to load auto merge eligibility</td></tr>`;
+    isolatedLane.innerHTML = `<tr><td colspan="5">Unable to load isolated lane</td></tr>`;
+    slaFindings.innerHTML = `<tr><td colspan="5">Unable to load SLA findings</td></tr>`;
   }
 }
 

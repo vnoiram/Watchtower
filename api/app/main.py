@@ -2,11 +2,15 @@ from fastapi import FastAPI
 
 from api.app.errors import install_exception_handlers
 from api.app.routers import (
+    ai_fix,
     applications,
+    artifacts,
+    auto_merge,
     components,
     dashboard,
     findings,
     github,
+    isolated_lane,
     job_health,
     jobs,
     maintenance,
@@ -18,6 +22,7 @@ from api.app.routers import (
     sboms,
     scan_health,
     scans,
+    sla,
     technologies,
     vex,
     vulnerabilities,
@@ -29,6 +34,7 @@ install_exception_handlers(app)
 api_prefix = "/v1"
 app.include_router(repositories.router, prefix=api_prefix)
 app.include_router(applications.router, prefix=api_prefix)
+app.include_router(artifacts.router, prefix=api_prefix)
 app.include_router(jobs.router, prefix=api_prefix)
 app.include_router(scans.router, prefix=api_prefix)
 app.include_router(findings.router, prefix=api_prefix)
@@ -39,6 +45,8 @@ app.include_router(components.router, prefix=api_prefix)
 app.include_router(vulnerabilities.router, prefix=api_prefix)
 app.include_router(remediation_actions.router, prefix=api_prefix)
 app.include_router(remediation.router, prefix=api_prefix)
+app.include_router(ai_fix.router, prefix=api_prefix)
+app.include_router(auto_merge.router, prefix=api_prefix)
 app.include_router(notifications.router, prefix=api_prefix)
 app.include_router(dashboard.router, prefix=api_prefix)
 app.include_router(github.router, prefix=api_prefix)
@@ -46,6 +54,8 @@ app.include_router(vex.router, prefix=api_prefix)
 app.include_router(scan_health.router, prefix=api_prefix)
 app.include_router(maintenance.router, prefix=api_prefix)
 app.include_router(job_health.router, prefix=api_prefix)
+app.include_router(isolated_lane.router, prefix=api_prefix)
+app.include_router(sla.router, prefix=api_prefix)
 
 
 @app.get("/healthz")

@@ -276,6 +276,85 @@ class IssueClosureOut(BaseModel):
     github_issue_closed_at: str | None = None
 
 
+class ArtifactInventoryOut(BaseModel):
+    scan_id: UUID
+    scan_status: models.ScanStatus
+    scan_created_at: datetime
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    artifact_type: str
+    storage_key: str
+    digest: str | None = None
+    sbom_id: UUID | None = None
+    sbom_kind: str | None = None
+
+
+class AiFixActionOut(RemediationActionOut):
+    requested_fixed_version: str | None = None
+
+
+class AiFixCandidateOut(RemediationCandidateOut):
+    pass
+
+
+class AutoMergeEligibilityOut(BaseModel):
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    finding_severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    allowed: bool
+    reason: str
+    dry_run: bool
+    update_kind: str
+    ci_passed: bool
+    validation_scan_resolved: bool
+    tier_allows: bool
+    touches_forbidden_path: bool
+
+
+class IsolatedLaneOut(BaseModel):
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    repository_provider: models.RepositoryProvider
+    source_classification: models.SourceClassification
+    application_id: UUID
+    application_name: str
+    application_path: str
+    latest_scan_id: UUID | None
+    latest_scan_status: models.ScanStatus | None
+    latest_scan_created_at: datetime | None
+    active_source_sbom_count: int
+
+
+class SlaFindingOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus
+    risk_score: float
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    vulnerability_external_id: str
+    component_name: str
+    created_at: datetime
+    age_days: int
+    sla_days: int
+    due_at: datetime
+    breached: bool
+
+
 class VexCreate(BaseModel):
     finding_id: UUID
     status: models.VexStatus
@@ -405,3 +484,5 @@ class DashboardSummary(BaseModel):
     sbom_coverage_percent: float
     missing_active_sbom: int
     unhealthy_jobs: int
+    sla_breached_findings: int
+    isolated_applications: int

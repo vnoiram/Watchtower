@@ -36,10 +36,14 @@ from api.app.models import (
     now_utc,
 )
 from api.app.routers.applications import list_applications
+from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
+from api.app.routers.artifacts import list_artifacts
+from api.app.routers.auto_merge import list_auto_merge_eligibility
 from api.app.routers.components import list_component_applications, list_components
 from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.findings import list_findings
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
+from api.app.routers.isolated_lane import list_isolated_lane
 from api.app.routers.job_health import list_job_health
 from api.app.routers.maintenance import list_application_maintenance_candidates
 from api.app.routers.notifications import list_notifications
@@ -53,6 +57,7 @@ from api.app.routers.remediation_actions import list_remediation_actions
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sboms
+from api.app.routers.sla import list_sla_findings
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_statements
 from api.app.routers.vulnerabilities import list_vulnerabilities
@@ -749,6 +754,228 @@ def test_list_job_health_reports_unhealthy_jobs_and_summary_count() -> None:
         assert failed["repository_name"] == repo.name
         assert failed["application_name"] == app.name
         assert summary.unhealthy_jobs == 3
+
+
+def test_list_artifacts_returns_scan_artifact_context_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={
+                "artifacts": {
+                    "source_sbom": {"storage_key": "source.cdx.json", "digest": "sha-source"},
+                    "osv": {"storage_key": "osv.json", "digest": "sha-osv"},
+                }
+            },
+        )
+        db.add(scan)
+        db.flush()
+        sbom = Sbom(
+            application_id=app.id,
+            scan_id=scan.id,
+            sbom_digest="sha-source",
+            storage_key="source.cdx.json",
+            active=True,
+        )
+        db.add(sbom)
+        db.flush()
+
+        page = list_artifacts(artifact_type="source_sbom", repository_id=repo.id, db=db, _=None)
+
+        assert len(page.items) == 1
+        assert page.items[0]["artifact_type"] == "source_sbom"
+        assert page.items[0]["storage_key"] == "source.cdx.json"
+        assert page.items[0]["digest"] == "sha-source"
+        assert page.items[0]["sbom_id"] == str(sbom.id)
+        assert page.items[0]["application_name"] == app.name
+
+
+def test_list_ai_fix_actions_filters_and_returns_context() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        matching = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="queued",
+            provider="watchtower",
+            fixed_version="1.0.1",
+            metadata_json={"fixed_version": "1.0.1"},
+        )
+        skipped = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="queued",
+            provider="github",
+            metadata_json={},
+        )
+        db.add_all([matching, skipped])
+        db.flush()
+
+        page = list_ai_fix_actions(
+            status="queued",
+            severity=Severity.high,
+            application_id=app.id,
+            db=db,
+            _=None,
+        )
+
+        assert [item["id"] for item in page.items] == [str(matching.id)]
+        assert page.items[0]["application_name"] == app.name
+        assert page.items[0]["requested_fixed_version"] == "1.0.1"
+        assert page.items[0]["vulnerability_external_id"] == "high-open"
+
+
+def test_list_ai_fix_candidates_excludes_existing_open_ai_fix_action() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        candidate = create_finding(db, app, severity=Severity.critical, risk_score=9.8)
+        with_action = create_finding(db, app, severity=Severity.high, risk_score=8.0)
+        db.add(
+            RemediationAction(
+                finding_id=with_action.id,
+                action_type="ai_fix",
+                status="queued",
+                provider="watchtower",
+                metadata_json={"finding_id": str(with_action.id)},
+            )
+        )
+        db.flush()
+
+        page = list_ai_fix_candidates(db=db, _=None)
+
+        assert [item["finding_id"] for item in page.items] == [str(candidate.id)]
+        assert page.items[0]["fixed_version"] == "1.0.1"
+        assert page.items[0]["repository_name"] == repo.name
+
+
+def test_list_auto_merge_eligibility_uses_policy_inputs() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        app.auto_merge_enabled = True
+        app.production = False
+        app.criticality = "medium"
+        finding = create_finding(db, app, severity=Severity.high)
+        eligible = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="created",
+            provider="watchtower",
+            metadata_json={
+                "update_kind": "patch",
+                "ci_passed": True,
+                "validation_status": "succeeded",
+                "touches_forbidden_path": False,
+            },
+        )
+        db.add(eligible)
+        db.flush()
+
+        page = list_auto_merge_eligibility(db=db, _=None)
+
+        assert page.items[0]["action_id"] == str(eligible.id)
+        assert page.items[0]["allowed"] is True
+        assert page.items[0]["reason"] == "eligible"
+        assert page.items[0]["tier_allows"] is True
+        assert page.items[0]["validation_scan_resolved"] is True
+
+
+def test_list_auto_merge_eligibility_blocks_forbidden_path() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        app.auto_merge_enabled = True
+        finding = create_finding(db, app, severity=Severity.high)
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="created",
+            provider="watchtower",
+            metadata_json={
+                "update_kind": "minor",
+                "ci_passed": True,
+                "validation_status": "succeeded",
+                "tier_allows": True,
+                "touches_forbidden_path": True,
+            },
+        )
+        db.add(action)
+        db.flush()
+
+        page = list_auto_merge_eligibility(db=db, _=None)
+
+        assert page.items[0]["allowed"] is False
+        assert page.items[0]["reason"] == "change touches a forbidden path"
+
+
+def test_list_isolated_lane_returns_isolated_and_restricted_applications() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        isolated_repo = create_repository(db, "isolated")
+        isolated_repo.provider = RepositoryProvider.isolated
+        isolated_repo.source_classification = SourceClassification.isolated
+        restricted_repo = create_repository(db, "restricted")
+        restricted_repo.source_classification = SourceClassification.restricted
+        regular_repo = create_repository(db, "regular")
+        isolated_app = create_application(db, isolated_repo, "isolated-app")
+        restricted_app = create_application(db, restricted_repo, "restricted-app")
+        regular_app = create_application(db, regular_repo, "regular-app")
+        scan = Scan(application_id=isolated_app.id, status=ScanStatus.succeeded)
+        db.add(scan)
+        db.flush()
+        db.add(
+            Sbom(
+                application_id=isolated_app.id,
+                scan_id=scan.id,
+                sbom_digest="isolated-sbom",
+                storage_key="isolated.json",
+                active=True,
+                sbom_kind="source",
+            )
+        )
+        db.flush()
+
+        page = list_isolated_lane(db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_name = {item["application_name"]: item for item in page.items}
+        assert set(by_name) == {isolated_app.name, restricted_app.name}
+        assert regular_app.name not in by_name
+        assert by_name[isolated_app.name]["latest_scan_status"] == "succeeded"
+        assert by_name[isolated_app.name]["active_source_sbom_count"] == 1
+        assert summary.isolated_applications == 2
+
+
+def test_list_sla_findings_reports_breaches_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        breached = create_finding(db, app, severity=Severity.critical, risk_score=9.8)
+        breached.created_at = now_utc() - timedelta(days=8)
+        within = create_finding(db, app, severity=Severity.high, risk_score=8.0)
+        within.created_at = now_utc() - timedelta(days=3)
+        resolved = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
+        resolved.created_at = now_utc() - timedelta(days=60)
+        db.flush()
+
+        page = list_sla_findings(breached=True, db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        assert [item["finding_id"] for item in page.items] == [str(breached.id)]
+        assert page.items[0]["sla_days"] == 7
+        assert page.items[0]["breached"] is True
+        assert summary.sla_breached_findings == 1
 
 
 def test_enqueue_github_issue_endpoint_queues_and_suppresses_duplicate() -> None:
