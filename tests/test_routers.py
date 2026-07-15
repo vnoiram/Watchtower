@@ -69,10 +69,10 @@ from api.app.routers.governance import (
     list_runtime_eol,
     quarterly_review,
 )
-from api.app.routers.integrations import github_integration_health, list_webhook_intake
+from api.app.routers.integrations import github_integration_health, list_github_permissions, list_webhook_intake
 from api.app.routers.isolated_lane import list_isolated_lane, list_isolated_safeguards, list_isolated_scan_health
 from api.app.routers.job_health import list_job_health
-from api.app.routers.jobs import list_job_backlog, list_retry_candidates
+from api.app.routers.jobs import list_job_backlog, list_job_concurrency_risks, list_retry_candidates
 from api.app.routers.kpis import (
     efficiency_kpis,
     kpi_summary,
@@ -130,7 +130,8 @@ from api.app.routers.remediation import (
     list_resolution_verification,
 )
 from api.app.routers.remediation_actions import list_remediation_actions
-from api.app.routers.repository_sync import list_repository_sync
+from api.app.routers.repositories import list_repository_classification_review
+from api.app.routers.repository_sync import list_import_failures, list_repository_sync
 from api.app.routers.repository_sync import list_repository_sync_lag
 from api.app.routers.rollout import (
     list_application_readiness,
@@ -146,7 +147,7 @@ from api.app.routers.rollout import (
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.scans import list_daily_scan_slo, list_scan_evidence_quality
 from api.app.routers.scanner_inventory import list_scanner_inventory
-from api.app.routers.scanners import list_scanner_failures
+from api.app.routers.scanners import list_scanner_database_freshness, list_scanner_failures
 from api.app.routers.scanner_versions import list_scanner_versions
 from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
 from api.app.routers.security import (
@@ -4761,3 +4762,164 @@ def test_list_auto_resolution_evidence_reports_complete_and_gap_records() -> Non
         assert by_finding[str(gap.id)]["complete"] is False
         assert filtered.items[0]["finding_id"] == str(gap.id)
         assert summary.auto_resolution_gap_items >= 1
+
+
+def test_list_job_concurrency_risks_reports_duplicates_stale_locks_and_retry_exhausted() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "job-concurrency")
+        app = create_application(db, repo)
+        payload = {"repository_id": str(repo.id)}
+        duplicate_a = Job(job_type=JobType.scan, status=JobStatus.queued, repository_id=repo.id, payload=payload)
+        duplicate_b = Job(job_type=JobType.scan, status=JobStatus.running, repository_id=repo.id, payload=payload)
+        stale = Job(
+            job_type=JobType.notification,
+            status=JobStatus.running,
+            application_id=app.id,
+            locked_by="worker-1",
+            locked_at=now_utc() - timedelta(hours=2),
+            started_at=now_utc() - timedelta(hours=2),
+        )
+        exhausted = Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, attempts=3, max_attempts=3)
+        db.add_all([duplicate_a, duplicate_b, stale, exhausted])
+        db.flush()
+
+        page = list_job_concurrency_risks(db=db, _=None)
+        filtered = list_job_concurrency_risks(risk_type="duplicate_active_job", job_type=JobType.scan, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        risks = {(item["risk_type"], item["job_id"]) for item in page.items}
+
+        assert ("duplicate_active_job", str(duplicate_a.id)) in risks
+        assert ("duplicate_active_job", str(duplicate_b.id)) in risks
+        assert ("stale_lock", str(stale.id)) in risks
+        assert ("retry_exhausted", str(exhausted.id)) in risks
+        assert len(filtered.items) == 2
+        assert summary.job_concurrency_risk_items == 4
+
+
+def test_list_import_failures_classifies_clone_auth_timeout_and_rate_limit() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "import-failures")
+        private_repo = create_repository(db, "private-import")
+        private_repo.visibility = "private"
+        private_repo.source_classification = SourceClassification.private
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, last_error="git clone failed"),
+                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=private_repo.id, last_error="401 credential rejected"),
+                Job(job_type=JobType.scan, status=JobStatus.timed_out, application_id=app.id, last_error="clone timed out"),
+                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, last_error="GitHub rate limit exceeded"),
+            ]
+        )
+        db.flush()
+
+        page = list_import_failures(db=db, _=None)
+        private_page = list_import_failures(source_classification=SourceClassification.private, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        failure_types = {item["failure_type"] for item in page.items}
+
+        assert {"clone_failed", "auth_failed", "timeout", "rate_limit"} <= failure_types
+        assert "auth_failed" in {item["failure_type"] for item in private_page.items}
+        assert summary.import_failure_items == 4
+
+
+def test_list_scanner_database_freshness_reports_missing_stale_and_update_failures() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "scanner-db")
+        app = create_application(db, repo)
+        missing = Scan(application_id=app.id, status=ScanStatus.succeeded, tool="trivy", result_summary={})
+        stale = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            tool="osv",
+            result_summary={"database_updated_at": (now_utc() - timedelta(days=45)).isoformat()},
+        )
+        failed = Scan(
+            application_id=app.id,
+            status=ScanStatus.partially_succeeded,
+            tool="trivy",
+            result_summary={
+                "database_updated_at": now_utc().isoformat(),
+                "scanner_failures": [{"scanner": "trivy", "error": "trivy db update failed"}],
+            },
+        )
+        db.add_all([missing, stale, failed])
+        db.flush()
+
+        page = list_scanner_database_freshness(db=db, _=None)
+        filtered = list_scanner_database_freshness(gap_type="stale_db", tool="osv", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {item["gap_type"] for item in page.items}
+
+        assert {"missing_db_metadata", "stale_db", "db_update_failed"} <= gaps
+        assert filtered.items[0]["database_age_days"] >= 44
+        assert summary.scanner_database_freshness_items == 3
+
+
+def test_list_repository_classification_review_reports_mismatches_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        missing_visibility = create_repository(db, "missing-visibility")
+        public_private = create_repository(db, "public-private")
+        public_private.visibility = "public"
+        public_private.source_classification = SourceClassification.private
+        isolated_mismatch = create_repository(db, "isolated-mismatch")
+        isolated_mismatch.visibility = "private"
+        isolated_mismatch.source_classification = SourceClassification.isolated
+        archived_repo = create_repository(db, "archived-active")
+        archived_repo.visibility = "private"
+        archived_repo.archived = True
+        create_application(db, archived_repo, "still-active")
+        db.flush()
+
+        page = list_repository_classification_review(db=db, _=None)
+        filtered = list_repository_classification_review(gap_type="classification_mismatch", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["repository_name"], item["gap_type"]) for item in page.items}
+
+        assert (missing_visibility.name, "missing_visibility") in gaps
+        assert (public_private.name, "classification_mismatch") in gaps
+        assert (isolated_mismatch.name, "isolated_provider_mismatch") in gaps
+        assert (archived_repo.name, "archived_active_app") in gaps
+        assert filtered.items[0]["repository_name"] == public_private.name
+        assert summary.repository_classification_gap_items == 4
+
+
+def test_list_github_permissions_reports_configuration_audit_and_auth_failures_without_secret_values() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "github-permissions")
+        db.add_all(
+            [
+                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, last_error="403 permission denied"),
+                AuditLog(
+                    actor="admin",
+                    role="admin",
+                    action="github.permissions.update",
+                    resource_type="github_app",
+                    resource_id="app-1",
+                    metadata_json={"permission": "contents:read", "token": "SUPER_SECRET_TOKEN"},
+                ),
+            ]
+        )
+        db.flush()
+        settings = Settings(api_token="change-me", github_token="secret-pat", github_webhook_secret=None)
+
+        page = list_github_permissions(db=db, settings=settings, _=None)
+        filtered = list_github_permissions(check="github_pat_configured", status="warn", db=db, settings=settings, _=None)
+        summary = dashboard_summary(db=db, settings=settings, _=None)
+        by_check = {item["check"]: item for item in page.items}
+
+        assert by_check["github_app_credentials"]["status"] == "warn"
+        assert by_check["github_pat_configured"]["status"] == "warn"
+        assert by_check["github_webhook_secret"]["status"] == "warn"
+        assert by_check["default_api_token"]["status"] == "fail"
+        assert by_check["github_auth_failures"]["count"] == 1
+        assert filtered.items[0]["check"] == "github_pat_configured"
+        assert summary.github_permission_issue_items >= 5
+        rendered = " ".join(str(item.get("detail")) for item in page.items)
+        assert "secret-pat" not in rendered
+        assert "SUPER_SECRET_TOKEN" not in rendered

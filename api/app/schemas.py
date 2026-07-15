@@ -1806,6 +1806,85 @@ class OperationEvidenceOut(BaseModel):
     detail: str
 
 
+class JobConcurrencyRiskOut(BaseModel):
+    risk_type: str
+    job_id: UUID
+    job_type: models.JobType
+    status: models.JobStatus
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    duplicate_count: int
+    locked_by: str | None = None
+    locked_at: datetime | None = None
+    attempts: int
+    max_attempts: int
+    detail: str
+    created_at: datetime
+
+
+class ImportFailureOut(BaseModel):
+    failure_type: str
+    source: str
+    source_id: str
+    status: str
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    provider: models.RepositoryProvider | None = None
+    source_classification: models.SourceClassification | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    error: str | None = None
+    created_at: datetime
+
+
+class ScannerDatabaseFreshnessOut(BaseModel):
+    gap_type: str
+    scan_id: UUID
+    tool: str | None = None
+    status: models.ScanStatus
+    database_updated_at: datetime | None = None
+    database_age_days: int | None = None
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    detail: str
+    created_at: datetime
+
+
+class RepositoryClassificationReviewOut(BaseModel):
+    gap_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider: models.RepositoryProvider
+    visibility: str | None = None
+    source_classification: models.SourceClassification
+    archived: bool
+    fork: bool
+    application_id: UUID | None = None
+    application_name: str | None = None
+    detail: str
+
+
+class GitHubPermissionPostureOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    action: str | None = None
+    actor: str | None = None
+    role: str | None = None
+    resource_type: str | None = None
+    resource_id: str | None = None
+    created_at: datetime | None = None
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1858,3 +1937,8 @@ class DashboardSummary(BaseModel):
     container_coverage_gap_items: int
     backup_evidence_gap_items: int
     restore_evidence_gap_items: int
+    job_concurrency_risk_items: int
+    import_failure_items: int
+    scanner_database_freshness_items: int
+    repository_classification_gap_items: int
+    github_permission_issue_items: int

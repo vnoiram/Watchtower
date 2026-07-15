@@ -72,6 +72,70 @@ def list_repository_sync_lag(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/import-failures", response_model=schemas.CursorPage)
+def list_import_failures(
+    limit: int = 50,
+    failure_type: str | None = None,
+    provider: models.RepositoryProvider | None = None,
+    source_classification: models.SourceClassification | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = import_failure_items(db)
+    if failure_type:
+        items = [item for item in items if item["failure_type"] == failure_type]
+    if provider:
+        items = [item for item in items if item["provider"] == provider.value]
+    if source_classification:
+        items = [item for item in items if item["source_classification"] == source_classification.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def import_failure_count(db: Session) -> int:
+    return len(import_failure_items(db))
+
+
+def import_failure_items(db: Session) -> list[dict]:
+    repositories = {repo.id: repo for repo in db.scalars(select(models.Repository))}
+    applications = {app.id: app for app in db.scalars(select(models.Application))}
+    items = []
+    stmt = (
+        select(models.Job)
+        .where(
+            models.Job.job_type.in_([models.JobType.repository_sync, models.JobType.scan]),
+            models.Job.status.in_([models.JobStatus.failed, models.JobStatus.timed_out, models.JobStatus.cancelled]),
+        )
+        .order_by(models.Job.created_at.desc(), models.Job.id.asc())
+    )
+    for job in db.scalars(stmt):
+        error = job.last_error or ""
+        failure_type = _import_failure_type(error)
+        if not failure_type:
+            continue
+        application = applications.get(job.application_id) if job.application_id else None
+        repository = repositories.get(job.repository_id) if job.repository_id else None
+        if not repository and application:
+            repository = repositories.get(application.repository_id)
+        items.append(
+            schemas.ImportFailureOut(
+                failure_type=failure_type,
+                source="job",
+                source_id=str(job.id),
+                status=job.status.value,
+                repository_id=repository.id if repository else None,
+                repository_owner=repository.owner if repository else None,
+                repository_name=repository.name if repository else None,
+                provider=repository.provider if repository else None,
+                source_classification=repository.source_classification if repository else None,
+                application_id=application.id if application else None,
+                application_name=application.name if application else None,
+                error=error,
+                created_at=job.created_at,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
 def repository_sync_lag_items(db: Session) -> list[dict]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     items = []
@@ -90,6 +154,19 @@ def repository_sync_lag_items(db: Session) -> list[dict]:
         if repository.provider == models.RepositoryProvider.github and not repository.provider_repository_id:
             items.append(_lag_item("missing_provider_repository_id", *context, detail="GitHub repository has no provider_repository_id"))
     return items
+
+
+def _import_failure_type(error: str) -> str | None:
+    text = error.lower()
+    if "rate limit" in text or "secondary rate" in text:
+        return "rate_limit"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "auth" in text or "credential" in text or "permission" in text or "401" in text or "403" in text:
+        return "auth_failed"
+    if "clone" in text or "git clone" in text:
+        return "clone_failed"
+    return None
 
 
 def _latest_sync_jobs(db: Session) -> dict:

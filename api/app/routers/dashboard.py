@@ -11,13 +11,14 @@ from api.app.deps import Principal, get_principal
 from api.app.routers.auto_merge import automation_guardrail_count
 from api.app.routers.artifacts import container_coverage_count
 from api.app.routers.governance import exposure_review_count, quarterly_review_count
-from api.app.routers.integrations import github_integration_issue_count
+from api.app.routers.integrations import github_integration_issue_count, github_permission_issue_count
 from api.app.routers.isolated_lane import (
     count_isolated_applications,
     isolated_safeguard_count,
     isolated_scan_health_count,
 )
 from api.app.routers.job_health import job_health_reason
+from api.app.routers.jobs import job_concurrency_risk_count
 from api.app.routers.kpis import mvp_target_breach_count, notification_failure_count, scan_failure_rate_percent
 from api.app.routers.notifications import notification_slo_breach_count
 from api.app.routers.operations import (
@@ -47,7 +48,10 @@ from api.app.routers.rollout import (
     rollout_gap_count,
     rollout_wave_gap_count,
 )
+from api.app.routers.repository_sync import import_failure_count
+from api.app.routers.repositories import repository_classification_gap_count
 from api.app.routers.scans import daily_scan_slo_breach_count
+from api.app.routers.scanners import scanner_database_freshness_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import rbac_review_count, sast_coverage_count, secret_scan_coverage_count
 from api.app.routers.sla import count_sla_breached_findings
@@ -131,6 +135,11 @@ def dashboard_summary(
     container_coverage_gap_items = container_coverage_count(db)
     backup_evidence_gap_items = backup_evidence_count(db, settings)
     restore_evidence_gap_items = restore_evidence_count(db, settings)
+    job_concurrency_risk_items = job_concurrency_risk_count(db)
+    import_failure_items = import_failure_count(db)
+    scanner_database_freshness_items = scanner_database_freshness_count(db)
+    repository_classification_gap_items = repository_classification_gap_count(db)
+    github_permission_issue_items = github_permission_issue_count(db, settings)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -183,4 +192,9 @@ def dashboard_summary(
         container_coverage_gap_items=container_coverage_gap_items,
         backup_evidence_gap_items=backup_evidence_gap_items,
         restore_evidence_gap_items=restore_evidence_gap_items,
+        job_concurrency_risk_items=job_concurrency_risk_items,
+        import_failure_items=import_failure_items,
+        scanner_database_freshness_items=scanner_database_freshness_items,
+        repository_classification_gap_items=repository_classification_gap_items,
+        github_permission_issue_items=github_permission_issue_items,
     )
