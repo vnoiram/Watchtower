@@ -68,7 +68,14 @@ from api.app.routers.integrations import github_integration_health, list_webhook
 from api.app.routers.isolated_lane import list_isolated_lane, list_isolated_safeguards
 from api.app.routers.job_health import list_job_health
 from api.app.routers.jobs import list_job_backlog, list_retry_candidates
-from api.app.routers.kpis import efficiency_kpis, kpi_summary, operational_load_kpis, quality_kpis
+from api.app.routers.kpis import (
+    efficiency_kpis,
+    kpi_summary,
+    list_efficiency_timeline,
+    list_kpi_evidence,
+    operational_load_kpis,
+    quality_kpis,
+)
 from api.app.routers.maintenance import list_application_maintenance_candidates
 from api.app.routers.notifications import (
     list_notification_digest_readiness,
@@ -111,9 +118,12 @@ from api.app.routers.remediation_actions import list_remediation_actions
 from api.app.routers.repository_sync import list_repository_sync
 from api.app.routers.rollout import (
     list_application_readiness,
+    list_initial_inventory,
+    list_mvp_target_readiness,
     list_repository_rollout,
     list_rollout_gaps,
     list_repository_drift,
+    rollout_waves,
     rollout_baseline,
 )
 from api.app.routers.scan_health import list_scan_health
@@ -3949,3 +3959,135 @@ def test_list_automation_suppressions_reports_skip_block_and_policy_reasons() ->
 
         assert {"duplicate", "blocked", "policy"} <= reasons
         assert filtered.items[0]["duplicate_of"] == "issue-1"
+
+
+def test_rollout_waves_reports_explicit_and_fallback_progress() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        wave_repo = create_repository(db, "wave-explicit")
+        wave_repo.topics = ["wave-2"]
+        create_repository(db, "wave-fallback")
+        app = create_application(db, wave_repo, "wave-app")
+        app.owner = "team"
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add(scan)
+        db.flush()
+        db.add(Sbom(application_id=app.id, scan_id=scan.id, sbom_kind="source", sbom_digest="wave", storage_key="wave.json", active=True))
+        create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
+        db.flush()
+
+        rows = rollout_waves(db=db, _=None)
+        by_wave = {row.wave: row for row in rows}
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert by_wave["wave_2"].repository_count == 1
+        assert by_wave["wave_2"].application_count == 1
+        assert by_wave["wave_2"].active_sbom_coverage_percent == 100.0
+        assert by_wave["wave_2"].open_critical_high_count == 1
+        assert by_wave["wave_1"].repository_count == 1
+        assert summary.rollout_wave_gap_items >= 1
+
+
+def test_list_mvp_target_readiness_prefers_topics_and_filters_issues() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        ready_repo = create_repository(db, "mvp-ready")
+        ready_repo.visibility = "private"
+        ready_repo.topics = ["mvp-target"]
+        ready_app = create_application(db, ready_repo, "ready")
+        ready_app.owner = "team"
+        ready_scan = Scan(application_id=ready_app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add(ready_scan)
+        db.flush()
+        db.add(Sbom(application_id=ready_app.id, scan_id=ready_scan.id, sbom_kind="source", sbom_digest="ready", storage_key="ready.json", active=True))
+
+        missing_repo = create_repository(db, "mvp-missing")
+        missing_repo.visibility = None
+        missing_repo.topics = ["mvp"]
+        db.flush()
+
+        page = list_mvp_target_readiness(db=db, _=None)
+        filtered = list_mvp_target_readiness(ready=False, issue_type="missing_visibility", db=db, _=None)
+        by_name = {item["repository_name"]: item for item in page.items}
+
+        assert by_name["mvp-ready"]["ready"] is True
+        assert by_name["mvp-missing"]["issue_type"] == "missing_visibility"
+        assert filtered.items[0]["repository_name"] == "mvp-missing"
+
+
+def test_list_kpi_evidence_reports_metric_records_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "kpi-evidence")
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add(scan)
+        db.flush()
+        db.add(Sbom(application_id=app.id, scan_id=scan.id, sbom_kind="source", sbom_digest="kpi", storage_key="kpi.json", active=True))
+        finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
+        db.add_all(
+            [
+                Notification(channel="slack", severity=Severity.high, subject="sent", body="sent", status="sent", sent_at=now_utc(), metadata_json={"finding_id": str(finding.id)}),
+                RemediationAction(finding_id=finding.id, action_type="ai_fix", status="succeeded", metadata_json={"ci_passed": True, "validation_status": "succeeded"}),
+            ]
+        )
+        db.flush()
+
+        page = list_kpi_evidence(db=db, _=None)
+        filtered = list_kpi_evidence(metric="pr_ci_success", included=True, status="passed", db=db, _=None)
+        metrics = {item["metric"] for item in page.items}
+
+        assert {"sbom_coverage", "daily_scan_coverage", "notification_success", "ai_fix_success", "pr_ci_success"} <= metrics
+        assert filtered.items[0]["application_name"] == app.name
+
+
+def test_list_efficiency_timeline_reports_durations_and_breaches() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "efficiency-timeline")
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(hours=3))
+        db.add(scan)
+        db.flush()
+        finding = create_finding(db, app, severity=Severity.critical, status=FindingStatus.resolved)
+        finding.first_seen_scan_id = scan.id
+        finding.created_at = now_utc() - timedelta(hours=2)
+        finding.resolved_at = now_utc()
+        db.add(Notification(channel="slack", severity=Severity.critical, subject="sent", body="sent", status="sent", sent_at=now_utc() - timedelta(hours=1), metadata_json={"finding_id": str(finding.id)}))
+        db.add(RemediationAction(finding_id=finding.id, action_type="github_issue", status="created"))
+        db.flush()
+
+        page = list_efficiency_timeline(db=db, _=None)
+        filtered = list_efficiency_timeline(metric="mttn", severity=Severity.critical, breached=False, db=db, _=None)
+        by_metric = {item["metric"]: item for item in page.items}
+
+        assert by_metric["mttd"]["duration_hours"] == 1.0
+        assert by_metric["mttn"]["duration_hours"] == 1.0
+        assert by_metric["mttr"]["duration_hours"] == 2.0
+        assert filtered.items[0]["finding_id"] == str(finding.id)
+
+
+def test_list_initial_inventory_reports_completion_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "initial-inventory")
+        complete_app = create_application(db, repo, "inventory-complete")
+        missing_app = create_application(db, repo, "inventory-missing")
+        db.add_all(
+            [
+                Scan(application_id=complete_app.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Scan(application_id=missing_app.id, status=ScanStatus.succeeded, created_at=now_utc()),
+            ]
+        )
+        complete_finding = create_finding(db, complete_app, severity=Severity.critical, status=FindingStatus.open)
+        create_finding(db, missing_app, severity=Severity.high, status=FindingStatus.open)
+        db.add(Notification(channel="slack", severity=Severity.critical, subject="sent", body="sent", status="sent", sent_at=now_utc(), metadata_json={"finding_id": str(complete_finding.id)}))
+        db.flush()
+
+        page = list_initial_inventory(db=db, _=None)
+        filtered = list_initial_inventory(complete=False, issue_type="missing_triage_evidence", db=db, _=None)
+        by_app = {item["application_name"]: item for item in page.items}
+
+        assert by_app["inventory-complete"]["complete"] is True
+        assert by_app["inventory-missing"]["complete"] is False
+        assert filtered.items[0]["application_name"] == "inventory-missing"

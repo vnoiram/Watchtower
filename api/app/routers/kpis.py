@@ -242,6 +242,44 @@ def operational_load_kpis(
     ]
 
 
+@router.get("/evidence", response_model=schemas.CursorPage)
+def list_kpi_evidence(
+    limit: int = 50,
+    metric: str | None = None,
+    included: bool | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = kpi_evidence_items(db)
+    if metric:
+        items = [item for item in items if item["metric"] == metric]
+    if included is not None:
+        items = [item for item in items if item["included"] is included]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/timeline", response_model=schemas.CursorPage)
+def list_efficiency_timeline(
+    limit: int = 50,
+    metric: str | None = None,
+    severity: models.Severity | None = None,
+    breached: bool | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = efficiency_timeline_items(db)
+    if metric:
+        items = [item for item in items if item["metric"] == metric]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if breached is not None:
+        items = [item for item in items if item["breached"] is breached]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def scan_failure_rate_percent(db: Session) -> float:
     scans = list(db.scalars(select(models.Scan)))
     failed = sum(1 for scan in scans if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out})
@@ -257,8 +295,122 @@ def notification_failure_count(db: Session) -> int:
     )
 
 
+def kpi_evidence_items(db: Session) -> list[dict]:
+    items = []
+    daily_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    active_sbom_app_ids = set(
+        db.scalars(
+            select(models.Sbom.application_id).where(
+                models.Sbom.active.is_(True),
+                models.Sbom.sbom_kind == "source",
+            )
+        )
+    )
+    latest_scan_by_app = _latest_scan_by_application(list(db.scalars(select(models.Scan))))
+    for application, repository in db.execute(
+        select(models.Application, models.Repository)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+    ):
+        has_sbom = application.id in active_sbom_app_ids
+        items.append(_kpi_evidence("sbom_coverage", "application", str(application.id), has_sbom, "covered" if has_sbom else "missing", application, repository, "Application active source SBOM coverage"))
+        latest_scan = latest_scan_by_app.get(application.id)
+        daily = latest_scan is not None and _after_cutoff(latest_scan.created_at, daily_cutoff)
+        items.append(_kpi_evidence("daily_scan_coverage", "application", str(application.id), daily, "covered" if daily else "missing", application, repository, "Application scanned in the last 24 hours"))
+
+    for notification in db.scalars(select(models.Notification).order_by(models.Notification.created_at.desc(), models.Notification.id.asc())):
+        finding, application, repository = _notification_context(db, notification)
+        included = notification.status == "sent"
+        if notification.status in {"sent", "failed"}:
+            items.append(_kpi_evidence("notification_success", "notification", str(notification.id), included, notification.status, application, repository, "Terminal notification delivery record"))
+
+    for action, finding, application, repository in _action_context_rows(db):
+        metadata = action.metadata_json or {}
+        ai_success = action.action_type == "ai_fix" and (
+            action.status in {"succeeded", "merged", "closed"} or metadata.get("validation_status") == "succeeded"
+        )
+        if action.action_type == "ai_fix":
+            items.append(_kpi_evidence("ai_fix_success", "remediation_action", str(action.id), ai_success, action.status, application, repository, "AI fix action success evidence"))
+        if "ci_passed" in metadata:
+            ci_success = metadata.get("ci_passed") is True
+            items.append(_kpi_evidence("pr_ci_success", "remediation_action", str(action.id), ci_success, "passed" if ci_success else "failed", application, repository, "PR CI result evidence"))
+        if finding.fixed_version and finding.severity in {models.Severity.critical, models.Severity.high}:
+            created = action.action_type in {"github_issue", "ai_fix"} or bool(action.url or action.branch)
+            items.append(_kpi_evidence("auto_pr_creation", "remediation_action", str(action.id), created, action.status, application, repository, "Fixable critical/high finding remediation action evidence"))
+    return items
+
+
+def efficiency_timeline_items(db: Session) -> list[dict]:
+    items = []
+    notifications_by_finding = _sent_notifications_by_finding(db)
+    actions_by_finding = _first_actions_by_finding(db)
+    rows = db.execute(
+        select(models.Finding, models.Application, models.Repository)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Finding.created_at.desc(), models.Finding.id.asc())
+    )
+    for finding, application, repository in rows:
+        first_scan = db.get(models.Scan, finding.first_seen_scan_id) if finding.first_seen_scan_id else None
+        notification = notifications_by_finding.get(finding.id)
+        action = actions_by_finding.get(finding.id)
+        for metric, start_at, end_at, threshold in [
+            ("mttd", first_scan.created_at if first_scan else None, finding.created_at, 24),
+            ("mttn", finding.created_at, notification.sent_at if notification else None, 4 if finding.severity == models.Severity.critical else 24),
+            ("mttr", finding.created_at, finding.resolved_at, 168 if finding.severity in {models.Severity.critical, models.Severity.high} else 720),
+        ]:
+            duration = _hours_between(start_at, end_at) if start_at and end_at else None
+            breached = duration is None or duration > threshold
+            items.append(
+                schemas.EfficiencyTimelineOut(
+                    finding_id=finding.id,
+                    metric=metric,
+                    severity=finding.severity,
+                    application_id=application.id,
+                    application_name=application.name,
+                    repository_id=repository.id,
+                    repository_owner=repository.owner,
+                    repository_name=repository.name,
+                    first_scan_at=first_scan.created_at if first_scan else None,
+                    finding_created_at=finding.created_at,
+                    notification_sent_at=notification.sent_at if notification else None,
+                    first_action_at=action.created_at if action else None,
+                    resolved_at=finding.resolved_at,
+                    duration_hours=duration,
+                    breached=breached,
+                    detail="Timeline evidence is within threshold" if not breached else "Timeline evidence is missing or past threshold",
+                ).model_dump(mode="json")
+            )
+    return items
+
+
 def _metric(metric: str, value: float, unit: str, detail: str) -> schemas.KpiMetricOut:
     return schemas.KpiMetricOut(metric=metric, value=value, unit=unit, detail=detail)
+
+
+def _kpi_evidence(
+    metric: str,
+    record_type: str,
+    record_id: str,
+    included: bool,
+    status: str,
+    application: models.Application | None,
+    repository: models.Repository | None,
+    detail: str,
+) -> dict:
+    return schemas.KpiEvidenceOut(
+        metric=metric,
+        record_type=record_type,
+        record_id=record_id,
+        included=included,
+        status=status,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        repository_id=repository.id if repository else None,
+        repository_owner=repository.owner if repository else None,
+        repository_name=repository.name if repository else None,
+        detail=detail,
+    ).model_dump(mode="json")
 
 
 def _percent(numerator: int, denominator: int) -> float:
@@ -282,6 +434,61 @@ def _before(value: datetime, reference: datetime) -> bool:
 def _mean_hours(values: list[float | None]) -> float:
     present = [value for value in values if value is not None]
     return round(sum(present) / len(present), 1) if present else 0.0
+
+
+def _latest_scan_by_application(scans: list[models.Scan]) -> dict:
+    latest = {}
+    for scan in sorted(scans, key=lambda item: (_sort_datetime(item.created_at), item.id), reverse=True):
+        latest.setdefault(scan.application_id, scan)
+    return latest
+
+
+def _sort_datetime(value: datetime) -> datetime:
+    return value.replace(tzinfo=None) if value.tzinfo else value
+
+
+def _notification_context(
+    db: Session,
+    notification: models.Notification,
+) -> tuple[models.Finding | None, models.Application | None, models.Repository | None]:
+    finding_id = (notification.metadata_json or {}).get("finding_id")
+    if not finding_id:
+        return None, None, None
+    try:
+        finding = db.get(models.Finding, UUID(str(finding_id)))
+    except ValueError:
+        return None, None, None
+    application = db.get(models.Application, finding.application_id) if finding else None
+    repository = db.get(models.Repository, application.repository_id) if application else None
+    return finding, application, repository
+
+
+def _action_context_rows(db: Session):
+    return db.execute(
+        select(models.RemediationAction, models.Finding, models.Application, models.Repository)
+        .join(models.Finding, models.RemediationAction.finding_id == models.Finding.id)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc())
+    )
+
+
+def _sent_notifications_by_finding(db: Session) -> dict[UUID, models.Notification]:
+    notifications = {}
+    for notification in db.scalars(
+        select(models.Notification).where(models.Notification.status == "sent").order_by(models.Notification.sent_at.asc())
+    ):
+        finding, _, _ = _notification_context(db, notification)
+        if finding:
+            notifications.setdefault(finding.id, notification)
+    return notifications
+
+
+def _first_actions_by_finding(db: Session) -> dict[UUID, models.RemediationAction]:
+    actions = {}
+    for action in db.scalars(select(models.RemediationAction).order_by(models.RemediationAction.created_at.asc(), models.RemediationAction.id.asc())):
+        actions.setdefault(action.finding_id, action)
+    return actions
 
 
 def _scan_to_finding_hours(db: Session, finding: models.Finding) -> float | None:

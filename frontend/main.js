@@ -99,6 +99,11 @@ const policyViolations = document.querySelector("#policy-violations");
 const dryRunDecisions = document.querySelector("#dry-run-decisions");
 const rollbackReadiness = document.querySelector("#rollback-readiness");
 const automationSuppressions = document.querySelector("#automation-suppressions");
+const rolloutWaves = document.querySelector("#rollout-waves");
+const mvpTargets = document.querySelector("#mvp-targets");
+const kpiEvidence = document.querySelector("#kpi-evidence");
+const efficiencyTimeline = document.querySelector("#efficiency-timeline");
+const initialInventory = document.querySelector("#initial-inventory");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -182,6 +187,7 @@ function renderMetrics(summary) {
     ["control_evidence_items", "Control evidence", "warn"],
     ["automation_guardrail_items", "Automation guards", "warn"],
     ["rollback_readiness_items", "Rollback readiness", "warn"],
+    ["rollout_wave_gap_items", "Wave gaps", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -1346,6 +1352,65 @@ function renderAutomationSuppressions(page) {
     : `<tr><td colspan="5">No automation suppressions</td></tr>`;
 }
 
+function renderRolloutWaves(rows) {
+  rolloutWaves.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.wave)}</td><td>${escapeHtml(item.repository_count)}</td><td>${escapeHtml(item.active_sbom_coverage_percent)}%</td><td>${escapeHtml(item.fresh_scan_percent)}%</td><td>${escapeHtml(item.gap_count)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No rollout wave records</td></tr>`;
+}
+
+function renderMvpTargets(page) {
+  const rows = page.items || [];
+  mvpTargets.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.ready ? "ready" : item.issue_type)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.application_count)}</td><td>${escapeHtml(item.active_sbom_coverage_percent)}%</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No MVP target records</td></tr>`;
+}
+
+function renderKpiEvidence(page) {
+  const rows = page.items || [];
+  kpiEvidence.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.metric)}</td><td>${escapeHtml(item.included ? "included" : "excluded")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name || item.record_type)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No KPI evidence records</td></tr>`;
+}
+
+function renderEfficiencyTimeline(page) {
+  const rows = page.items || [];
+  efficiencyTimeline.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.metric)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.duration_hours ?? "-")}</td><td>${escapeHtml(item.breached ? "breached" : "ok")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No efficiency timeline records</td></tr>`;
+}
+
+function renderInitialInventory(page) {
+  const rows = page.items || [];
+  initialInventory.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.complete ? "complete" : item.issue_type)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.open_critical_high_count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No initial inventory records</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1446,6 +1511,11 @@ async function refresh() {
   dryRunDecisions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   rollbackReadiness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   automationSuppressions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  rolloutWaves.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  mvpTargets.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  kpiEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  efficiencyTimeline.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  initialInventory.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -1548,6 +1618,11 @@ async function refresh() {
       dryRunDecisionPage,
       rollbackReadinessPage,
       automationSuppressionPage,
+      rolloutWavePage,
+      mvpTargetPage,
+      kpiEvidencePage,
+      efficiencyTimelinePage,
+      initialInventoryPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -1649,6 +1724,11 @@ async function refresh() {
       loadJson("/auto-merge/dry-runs?limit=10"),
       loadJson("/operations/rollback-readiness"),
       loadJson("/remediation/suppressions?limit=10"),
+      loadJson("/rollout/waves"),
+      loadJson("/rollout/mvp-targets?limit=10"),
+      loadJson("/kpis/evidence?limit=10"),
+      loadJson("/kpis/timeline?limit=10"),
+      loadJson("/rollout/initial-inventory?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -1749,6 +1829,11 @@ async function refresh() {
     renderDryRunDecisions(dryRunDecisionPage);
     renderRollbackReadiness(rollbackReadinessPage);
     renderAutomationSuppressions(automationSuppressionPage);
+    renderRolloutWaves(rolloutWavePage);
+    renderMvpTargets(mvpTargetPage);
+    renderKpiEvidence(kpiEvidencePage);
+    renderEfficiencyTimeline(efficiencyTimelinePage);
+    renderInitialInventory(initialInventoryPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1849,6 +1934,11 @@ async function refresh() {
     dryRunDecisions.innerHTML = `<tr><td colspan="5">Unable to load dry-run decisions</td></tr>`;
     rollbackReadiness.innerHTML = `<tr><td colspan="5">Unable to load rollback readiness</td></tr>`;
     automationSuppressions.innerHTML = `<tr><td colspan="5">Unable to load automation suppressions</td></tr>`;
+    rolloutWaves.innerHTML = `<tr><td colspan="5">Unable to load rollout waves</td></tr>`;
+    mvpTargets.innerHTML = `<tr><td colspan="5">Unable to load MVP targets</td></tr>`;
+    kpiEvidence.innerHTML = `<tr><td colspan="5">Unable to load KPI evidence</td></tr>`;
+    efficiencyTimeline.innerHTML = `<tr><td colspan="5">Unable to load efficiency timeline</td></tr>`;
+    initialInventory.innerHTML = `<tr><td colspan="5">Unable to load initial inventory</td></tr>`;
   }
 }
 
