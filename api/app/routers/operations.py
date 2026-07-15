@@ -9,9 +9,11 @@ from api.app.config import Settings, get_settings
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
 from api.app.routers.job_health import job_health_reason
+from api.app.routers.remediation import stale_remediation_count
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.sla import count_sla_breached_findings
 from api.app.routers.storage import list_storage_cleanup_candidates
+from api.app.services.remediation import ACTION_TYPE_AI_FIX
 
 router = APIRouter(prefix="/operations", tags=["operations"])
 
@@ -189,6 +191,53 @@ def backup_readiness(
     ]
 
 
+@router.get("/weekly-review", response_model=list[schemas.WeeklyReviewOut])
+def weekly_review(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    now = datetime.now(timezone.utc)
+    upcoming_cutoff = now + timedelta(days=7)
+    medium_open = _count(
+        db,
+        select(models.Finding).where(
+            models.Finding.status == models.FindingStatus.open,
+            models.Finding.severity == models.Severity.medium,
+        ),
+    )
+    expired_vex = sum(1 for vex in db.scalars(select(models.VexStatement)) if _before(vex.review_date, now))
+    upcoming_vex = sum(
+        1
+        for vex in db.scalars(select(models.VexStatement))
+        if not _before(vex.review_date, now) and _before(vex.review_date, upcoming_cutoff)
+    )
+    false_positive = _count(
+        db,
+        select(models.Finding).where(models.Finding.status == models.FindingStatus.false_positive),
+    )
+    failed_ai_fix = _count(
+        db,
+        select(models.RemediationAction).where(
+            models.RemediationAction.action_type == ACTION_TYPE_AI_FIX,
+            models.RemediationAction.status == "failed",
+        ),
+    )
+    scanner_version_missing = _count(
+        db,
+        select(models.Scan).where(models.Scan.tool.is_not(None), models.Scan.tool_version.is_(None)),
+    )
+    stale_prs = stale_remediation_count(db)
+    return [
+        _weekly("medium_findings", "warn", medium_open, "Open medium findings awaiting weekly review"),
+        _weekly("expired_vex", "warn", expired_vex, "VEX statements past review date"),
+        _weekly("upcoming_vex", "warn", upcoming_vex, "VEX statements due in the next 7 days"),
+        _weekly("false_positive", "warn", false_positive, "False positive findings to sample review"),
+        _weekly("auto_fix_failed", "fail", failed_ai_fix, "AI fix remediation actions that failed"),
+        _weekly("scanner_version_missing", "warn", scanner_version_missing, "Scanner runs without tool version"),
+        _weekly("stale_prs", "fail", stale_prs, "Stale or failed remediation actions"),
+    ]
+
+
 def manual_workload_count(db: Session) -> int:
     return sum(row.count for row in _workload_rows(db))
 
@@ -240,6 +289,15 @@ def _backup_check(check: str, status: str, count: int, detail: str) -> schemas.B
     return schemas.BackupReadinessOut(check=check, status=status, count=count, detail=detail)
 
 
+def _weekly(item: str, nonzero_status: str, count: int, detail: str) -> schemas.WeeklyReviewOut:
+    return schemas.WeeklyReviewOut(
+        item=item,
+        status=nonzero_status if count else "ok",
+        count=count,
+        detail=detail,
+    )
+
+
 def _count(db: Session, stmt) -> int:
     subquery = stmt.subquery()
     return db.scalar(select(func.count()).select_from(subquery)) or 0
@@ -270,3 +328,11 @@ def _after_cutoff(value: datetime, cutoff: datetime) -> bool:
     if value.tzinfo is None:
         cutoff = cutoff.replace(tzinfo=None)
     return value >= cutoff
+
+
+def _before(value: datetime, reference: datetime) -> bool:
+    if value.tzinfo is None:
+        reference = reference.replace(tzinfo=None)
+    elif reference.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return value < reference

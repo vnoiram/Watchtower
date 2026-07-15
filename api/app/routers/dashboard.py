@@ -10,7 +10,9 @@ from api.app.deps import Principal, get_principal
 from api.app.routers.isolated_lane import count_isolated_applications
 from api.app.routers.job_health import job_health_reason
 from api.app.routers.kpis import notification_failure_count, scan_failure_rate_percent
+from api.app.routers.notifications import notification_slo_breach_count
 from api.app.routers.operations import manual_workload_count
+from api.app.routers.remediation import stale_remediation_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.sla import count_sla_breached_findings
 
@@ -54,6 +56,8 @@ def dashboard_summary(
     notification_failures = notification_failure_count(db)
     manual_workload_items = manual_workload_count(db)
     missing_scheduled_scans = missing_scheduled_scan_count(db)
+    notification_slo_breaches = notification_slo_breach_count(db)
+    stale_remediation_items = stale_remediation_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -71,4 +75,6 @@ def dashboard_summary(
         notification_failure_count=notification_failures,
         manual_workload_items=manual_workload_items,
         missing_scheduled_scans=missing_scheduled_scans,
+        notification_slo_breaches=notification_slo_breaches,
+        stale_remediation_items=stale_remediation_items,
     )

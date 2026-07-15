@@ -660,6 +660,86 @@ class BackupReadinessOut(BaseModel):
     detail: str
 
 
+class NotificationSloOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    finding_created_at: datetime
+    deadline_at: datetime
+    notified_at: datetime | None = None
+    breached: bool
+    status: str
+
+
+class RemediationPrOut(BaseModel):
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider_id: str | None = None
+    branch: str | None = None
+    url: str | None = None
+    ci_passed: bool | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RemediationBacklogOut(BaseModel):
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    age_days: int
+    reason: str
+    detail: str | None = None
+    updated_at: datetime
+
+
+class RemediationRescanOut(BaseModel):
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    validation_status: str
+    validation_scan_id: UUID | None = None
+    validation_scan_status: models.ScanStatus | None = None
+    latest_rescan_id: UUID | None = None
+    latest_rescan_status: models.ScanStatus | None = None
+    latest_rescan_created_at: datetime | None = None
+    missing_rescan: bool
+
+
+class WeeklyReviewOut(BaseModel):
+    item: str
+    status: str
+    count: int
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -677,3 +757,5 @@ class DashboardSummary(BaseModel):
     notification_failure_count: int
     manual_workload_items: int
     missing_scheduled_scans: int
+    notification_slo_breaches: int
+    stale_remediation_items: int
