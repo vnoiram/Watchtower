@@ -8,6 +8,11 @@ const sboms = document.querySelector("#sboms");
 const components = document.querySelector("#components");
 const vulnerabilities = document.querySelector("#vulnerabilities");
 const remediationActions = document.querySelector("#remediation-actions");
+const vexReviews = document.querySelector("#vex-reviews");
+const scanHealth = document.querySelector("#scan-health");
+const sbomCoverage = document.querySelector("#sbom-coverage");
+const notifications = document.querySelector("#notifications");
+const maintenanceCandidates = document.querySelector("#maintenance-candidates");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -63,6 +68,8 @@ function renderMetrics(summary) {
     ["stale_scans", "Stale scans", "warn"],
     ["failed_jobs", "Failed jobs", "danger"],
     ["expired_vex", "Expired VEX", "warn"],
+    ["missing_active_sbom", "Missing SBOM", "warn"],
+    ["sbom_coverage_percent", "SBOM coverage %", ""],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -159,6 +166,66 @@ function renderRemediationActions(page) {
     : `<tr><td colspan="4">No remediation actions</td></tr>`;
 }
 
+function renderVexReviews(page) {
+  const rows = page.items || [];
+  vexReviews.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.component_name)} ${escapeHtml(item.component_version || "")}</td><td>${escapeHtml(formatDateTime(item.review_date))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No VEX reviews due</td></tr>`;
+}
+
+function renderScanHealth(page) {
+  const rows = page.items || [];
+  scanHealth.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.latest_scan_status || "missing")}</td><td>${escapeHtml(item.scanner_failures.length)}</td><td>${escapeHtml(item.latest_scan_error_message || (item.stale ? "stale" : "-"))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scan health issues</td></tr>`;
+}
+
+function renderSbomCoverage(page) {
+  const rows = page.items || [];
+  sbomCoverage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.has_active_source_sbom ? "covered" : "missing")}</td><td>${escapeHtml(item.component_count)}</td><td>${escapeHtml(item.latest_sbom_generated_at ? formatDateTime(item.latest_sbom_generated_at) : "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No SBOM coverage gaps</td></tr>`;
+}
+
+function renderNotifications(page) {
+  const rows = page.items || [];
+  notifications.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.channel)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.vulnerability_external_id || item.subject)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No notifications</td></tr>`;
+}
+
+function renderMaintenanceCandidates(page) {
+  const rows = page.items || [];
+  maintenanceCandidates.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.owner || "-")}</td><td>${escapeHtml(item.lifecycle)}</td><td>${escapeHtml(item.reasons.join(", "))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No maintenance candidates</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -168,6 +235,11 @@ async function refresh() {
   components.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   vulnerabilities.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   remediationActions.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  vexReviews.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scanHealth.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  sbomCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  notifications.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  maintenanceCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -179,6 +251,11 @@ async function refresh() {
       componentPage,
       vulnerabilityPage,
       remediationActionPage,
+      vexPage,
+      scanHealthPage,
+      sbomCoveragePage,
+      notificationPage,
+      maintenancePage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -189,6 +266,11 @@ async function refresh() {
       loadJson("/components?limit=10"),
       loadJson("/vulnerabilities?limit=10"),
       loadJson("/remediation-actions?limit=10"),
+      loadJson("/vex?expired=true&limit=10"),
+      loadJson("/scan-health?limit=10"),
+      loadJson("/sbom-coverage?missing=true&limit=10"),
+      loadJson("/notifications?limit=10"),
+      loadJson("/maintenance/applications?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -198,6 +280,11 @@ async function refresh() {
     renderComponents(componentPage);
     renderVulnerabilities(vulnerabilityPage);
     renderRemediationActions(remediationActionPage);
+    renderVexReviews(vexPage);
+    renderScanHealth(scanHealthPage);
+    renderSbomCoverage(sbomCoveragePage);
+    renderNotifications(notificationPage);
+    renderMaintenanceCandidates(maintenancePage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -207,6 +294,11 @@ async function refresh() {
     components.innerHTML = `<tr><td colspan="4">Unable to load components</td></tr>`;
     vulnerabilities.innerHTML = `<tr><td colspan="4">Unable to load vulnerabilities</td></tr>`;
     remediationActions.innerHTML = `<tr><td colspan="4">Unable to load remediation actions</td></tr>`;
+    vexReviews.innerHTML = `<tr><td colspan="5">Unable to load VEX reviews</td></tr>`;
+    scanHealth.innerHTML = `<tr><td colspan="5">Unable to load scan health</td></tr>`;
+    sbomCoverage.innerHTML = `<tr><td colspan="5">Unable to load SBOM coverage</td></tr>`;
+    notifications.innerHTML = `<tr><td colspan="5">Unable to load notifications</td></tr>`;
+    maintenanceCandidates.innerHTML = `<tr><td colspan="5">Unable to load maintenance candidates</td></tr>`;
   }
 }
 
