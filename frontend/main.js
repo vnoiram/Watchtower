@@ -6,7 +6,9 @@ const applications = document.querySelector("#applications");
 const technologies = document.querySelector("#technologies");
 const sboms = document.querySelector("#sboms");
 const components = document.querySelector("#components");
+const componentUsage = document.querySelector("#component-usage");
 const vulnerabilities = document.querySelector("#vulnerabilities");
+const vulnerabilityImpact = document.querySelector("#vulnerability-impact");
 const remediationActions = document.querySelector("#remediation-actions");
 const vexReviews = document.querySelector("#vex-reviews");
 const scanHealth = document.querySelector("#scan-health");
@@ -70,6 +72,7 @@ const scannerFailures = document.querySelector("#scanner-failures");
 const dependencyUpdates = document.querySelector("#dependency-updates");
 const failureSignals = document.querySelector("#failure-signals");
 const isolatedSafeguards = document.querySelector("#isolated-safeguards");
+const isolatedScanHealth = document.querySelector("#isolated-scan-health");
 const secretsReview = document.querySelector("#secrets-review");
 const workerPosture = document.querySelector("#worker-posture");
 const exploitIntel = document.querySelector("#exploit-intel");
@@ -78,6 +81,8 @@ const rolloutBaseline = document.querySelector("#rollout-baseline");
 const applicationReadiness = document.querySelector("#application-readiness");
 const scanTargets = document.querySelector("#scan-targets");
 const remediationCoverage = document.querySelector("#remediation-coverage");
+const fixableGaps = document.querySelector("#fixable-gaps");
+const prCiFailures = document.querySelector("#pr-ci-failures");
 const resolutionVerification = document.querySelector("#resolution-verification");
 const monthlyReview = document.querySelector("#monthly-review");
 const operationalLoadKpis = document.querySelector("#operational-load-kpis");
@@ -195,6 +200,9 @@ function renderMetrics(summary) {
     ["rollout_wave_gap_items", "Wave gaps", "warn"],
     ["queue_pressure_items", "Queue pressure", "warn"],
     ["storage_pressure_items", "Storage pressure", "warn"],
+    ["fixable_gap_items", "Fixable gaps", "danger"],
+    ["pr_ci_failure_items", "PR CI failures", "danger"],
+    ["isolated_scan_health_items", "Isolated scan health", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -267,6 +275,18 @@ function renderComponents(page) {
     : `<tr><td colspan="4">No components</td></tr>`;
 }
 
+function renderComponentUsage(page) {
+  const rows = page.items || [];
+  componentUsage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.component_name)} ${escapeHtml(item.component_version || "")}</td><td>${escapeHtml(item.ecosystem || "-")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(formatDateTime(item.generated_at))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No component usage records</td></tr>`;
+}
+
 function renderVulnerabilities(page) {
   const rows = page.items || [];
   vulnerabilities.innerHTML = rows.length
@@ -277,6 +297,18 @@ function renderVulnerabilities(page) {
         )
         .join("")
     : `<tr><td colspan="4">No vulnerabilities</td></tr>`;
+}
+
+function renderVulnerabilityImpact(page) {
+  const rows = page.items || [];
+  vulnerabilityImpact.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.component_name)} ${escapeHtml(item.component_version || "")}</td><td>${escapeHtml(item.fixed_version || "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No vulnerability impact records</td></tr>`;
 }
 
 function renderRemediationActions(page) {
@@ -682,6 +714,30 @@ function renderRemediationPrs(page) {
     : `<tr><td colspan="5">No PR/CI actions</td></tr>`;
 }
 
+function renderFixableGaps(page) {
+  const rows = page.items || [];
+  fixableGaps.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No fixable remediation gaps</td></tr>`;
+}
+
+function renderPrCiFailures(page) {
+  const rows = page.items || [];
+  prCiFailures.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.provider_id || item.branch || "-")}</td><td>${escapeHtml(item.action_status)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No PR CI failures</td></tr>`;
+}
+
 function renderRemediationBacklog(page) {
   const rows = page.items || [];
   remediationBacklog.innerHTML = rows.length
@@ -1020,6 +1076,18 @@ function renderIsolatedSafeguards(page) {
         )
         .join("")
     : `<tr><td colspan="5">No isolated safeguard issues</td></tr>`;
+}
+
+function renderIsolatedScanHealth(page) {
+  const rows = page.items || [];
+  isolatedScanHealth.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.health_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.latest_scan_status || "missing")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No isolated scan health issues</td></tr>`;
 }
 
 function renderSecretsReview(page) {
@@ -1483,7 +1551,9 @@ async function refresh() {
   technologies.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   sboms.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   components.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  componentUsage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   vulnerabilities.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  vulnerabilityImpact.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationActions.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   vexReviews.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scanHealth.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1518,6 +1588,8 @@ async function refresh() {
   backupReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   notificationSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationPrs.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  fixableGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  prCiFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationBacklog.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationRescans.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   weeklyReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
@@ -1547,6 +1619,7 @@ async function refresh() {
   dependencyUpdates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   failureSignals.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   isolatedSafeguards.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  isolatedScanHealth.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   secretsReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   workerPosture.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   exploitIntel.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1595,7 +1668,9 @@ async function refresh() {
       technologyPage,
       sbomPage,
       componentPage,
+      componentUsagePage,
       vulnerabilityPage,
+      vulnerabilityImpactPage,
       remediationActionPage,
       vexPage,
       scanHealthPage,
@@ -1630,6 +1705,8 @@ async function refresh() {
       backupReadinessPage,
       notificationSloPage,
       remediationPrPage,
+      fixableGapPage,
+      prCiFailurePage,
       remediationBacklogPage,
       remediationRescanPage,
       weeklyReviewPage,
@@ -1659,6 +1736,7 @@ async function refresh() {
       dependencyUpdatePage,
       failureSignalPage,
       isolatedSafeguardPage,
+      isolatedScanHealthPage,
       secretsReviewPage,
       workerPosturePage,
       exploitIntelPage,
@@ -1706,7 +1784,9 @@ async function refresh() {
       loadJson("/technologies?limit=10"),
       loadJson("/sboms?active=true&limit=10"),
       loadJson("/components?limit=10"),
+      loadJson("/components/usage?limit=10"),
       loadJson("/vulnerabilities?limit=10"),
+      loadJson("/vulnerabilities/impact?limit=10"),
       loadJson("/remediation-actions?limit=10"),
       loadJson("/vex?expired=true&limit=10"),
       loadJson("/scan-health?limit=10"),
@@ -1741,6 +1821,8 @@ async function refresh() {
       loadJson("/operations/backup-readiness"),
       loadJson("/notifications/slo?breached=true&limit=10"),
       loadJson("/remediation/prs?limit=10"),
+      loadJson("/remediation/fixable-gaps?limit=10"),
+      loadJson("/remediation/pr-ci-failures?limit=10"),
       loadJson("/remediation/backlog?limit=10"),
       loadJson("/remediation/rescans?missing=true&limit=10"),
       loadJson("/operations/weekly-review"),
@@ -1770,6 +1852,7 @@ async function refresh() {
       loadJson("/remediation/dependency-updates?limit=10"),
       loadJson("/operations/failure-signals?limit=10"),
       loadJson("/isolated-lane/safeguards?limit=10"),
+      loadJson("/isolated-lane/scan-health?limit=10"),
       loadJson("/security/secrets-review?limit=10"),
       loadJson("/operations/worker-posture"),
       loadJson("/security/exploit-intel?limit=10"),
@@ -1816,7 +1899,9 @@ async function refresh() {
     renderTechnologies(technologyPage);
     renderSboms(sbomPage);
     renderComponents(componentPage);
+    renderComponentUsage(componentUsagePage);
     renderVulnerabilities(vulnerabilityPage);
+    renderVulnerabilityImpact(vulnerabilityImpactPage);
     renderRemediationActions(remediationActionPage);
     renderVexReviews(vexPage);
     renderScanHealth(scanHealthPage);
@@ -1851,6 +1936,8 @@ async function refresh() {
     renderBackupReadiness(backupReadinessPage);
     renderNotificationSlo(notificationSloPage);
     renderRemediationPrs(remediationPrPage);
+    renderFixableGaps(fixableGapPage);
+    renderPrCiFailures(prCiFailurePage);
     renderRemediationBacklog(remediationBacklogPage);
     renderRemediationRescans(remediationRescanPage);
     renderWeeklyReview(weeklyReviewPage);
@@ -1880,6 +1967,7 @@ async function refresh() {
     renderDependencyUpdates(dependencyUpdatePage);
     renderFailureSignals(failureSignalPage);
     renderIsolatedSafeguards(isolatedSafeguardPage);
+    renderIsolatedScanHealth(isolatedScanHealthPage);
     renderSecretsReview(secretsReviewPage);
     renderWorkerPosture(workerPosturePage);
     renderExploitIntel(exploitIntelPage);
@@ -1926,7 +2014,9 @@ async function refresh() {
     technologies.innerHTML = `<tr><td colspan="4">Unable to load technologies</td></tr>`;
     sboms.innerHTML = `<tr><td colspan="4">Unable to load SBOMs</td></tr>`;
     components.innerHTML = `<tr><td colspan="4">Unable to load components</td></tr>`;
+    componentUsage.innerHTML = `<tr><td colspan="5">Unable to load component usage</td></tr>`;
     vulnerabilities.innerHTML = `<tr><td colspan="4">Unable to load vulnerabilities</td></tr>`;
+    vulnerabilityImpact.innerHTML = `<tr><td colspan="5">Unable to load vulnerability impact</td></tr>`;
     remediationActions.innerHTML = `<tr><td colspan="4">Unable to load remediation actions</td></tr>`;
     vexReviews.innerHTML = `<tr><td colspan="5">Unable to load VEX reviews</td></tr>`;
     scanHealth.innerHTML = `<tr><td colspan="5">Unable to load scan health</td></tr>`;
@@ -1961,6 +2051,8 @@ async function refresh() {
     backupReadiness.innerHTML = `<tr><td colspan="4">Unable to load backup readiness</td></tr>`;
     notificationSlo.innerHTML = `<tr><td colspan="5">Unable to load notification SLO</td></tr>`;
     remediationPrs.innerHTML = `<tr><td colspan="5">Unable to load PR/CI status</td></tr>`;
+    fixableGaps.innerHTML = `<tr><td colspan="5">Unable to load fixable gaps</td></tr>`;
+    prCiFailures.innerHTML = `<tr><td colspan="5">Unable to load PR CI failures</td></tr>`;
     remediationBacklog.innerHTML = `<tr><td colspan="5">Unable to load remediation backlog</td></tr>`;
     remediationRescans.innerHTML = `<tr><td colspan="5">Unable to load remediation rescans</td></tr>`;
     weeklyReview.innerHTML = `<tr><td colspan="4">Unable to load weekly review</td></tr>`;
@@ -1990,6 +2082,7 @@ async function refresh() {
     dependencyUpdates.innerHTML = `<tr><td colspan="5">Unable to load dependency updates</td></tr>`;
     failureSignals.innerHTML = `<tr><td colspan="5">Unable to load failure signals</td></tr>`;
     isolatedSafeguards.innerHTML = `<tr><td colspan="5">Unable to load isolated safeguards</td></tr>`;
+    isolatedScanHealth.innerHTML = `<tr><td colspan="5">Unable to load isolated scan health</td></tr>`;
     secretsReview.innerHTML = `<tr><td colspan="5">Unable to load secrets review</td></tr>`;
     workerPosture.innerHTML = `<tr><td colspan="4">Unable to load worker posture</td></tr>`;
     exploitIntel.innerHTML = `<tr><td colspan="5">Unable to load exploit intelligence</td></tr>`;

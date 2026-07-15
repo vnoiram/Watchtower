@@ -77,6 +77,21 @@
         </table>
       </section>
       <section class="panel">
+        <h2>Component Usage</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th>Ecosystem</th>
+              <th>Application</th>
+              <th>Repository</th>
+              <th>SBOM</th>
+            </tr>
+          </thead>
+          <tbody id="component-usage"></tbody>
+        </table>
+      </section>
+      <section class="panel">
         <h2>Open Vulnerability Impact</h2>
         <table>
           <thead>
@@ -88,6 +103,21 @@
             </tr>
           </thead>
           <tbody id="vulnerabilities"></tbody>
+        </table>
+      </section>
+      <section class="panel">
+        <h2>Vulnerability Impact Applications</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Vulnerability</th>
+              <th>Severity</th>
+              <th>Application</th>
+              <th>Component</th>
+              <th>Fix</th>
+            </tr>
+          </thead>
+          <tbody id="vulnerability-impact"></tbody>
         </table>
       </section>
       <section class="panel">
@@ -595,6 +625,36 @@
         </table>
       </section>
       <section class="panel">
+        <h2>Fixable Remediation Gaps</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Gap</th>
+              <th>Severity</th>
+              <th>Application</th>
+              <th>Vulnerability</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="fixable-gaps"></tbody>
+        </table>
+      </section>
+      <section class="panel">
+        <h2>PR CI Failures</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Action</th>
+              <th>Application</th>
+              <th>PR</th>
+              <th>Status</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="pr-ci-failures"></tbody>
+        </table>
+      </section>
+      <section class="panel">
         <h2>Remediation Backlog</h2>
         <table>
           <thead>
@@ -1020,6 +1080,21 @@
             </tr>
           </thead>
           <tbody id="isolated-safeguards"></tbody>
+        </table>
+      </section>
+      <section class="panel">
+        <h2>Isolated Scan Health</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Health</th>
+              <th>Application</th>
+              <th>Repository</th>
+              <th>Scan</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="isolated-scan-health"></tbody>
         </table>
       </section>
       <section class="panel">

@@ -48,6 +48,67 @@ def list_components(
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
+@router.get("/usage", response_model=schemas.CursorPage)
+def list_component_usage(
+    limit: int = 50,
+    name: str | None = None,
+    purl: str | None = None,
+    ecosystem: str | None = None,
+    application_id: UUID | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    stmt = (
+        select(models.Component, models.Sbom, models.Application, models.Repository)
+        .join(models.SbomComponent, models.Component.id == models.SbomComponent.component_id)
+        .join(models.Sbom, models.SbomComponent.sbom_id == models.Sbom.id)
+        .join(models.Application, models.Sbom.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(models.Sbom.active.is_(True))
+    )
+    if name:
+        stmt = stmt.where(models.Component.name.ilike(f"%{name}%"))
+    if purl:
+        stmt = stmt.where(models.Component.purl.ilike(f"%{purl}%"))
+    if ecosystem:
+        stmt = stmt.where(models.Component.ecosystem == ecosystem)
+    if application_id:
+        stmt = stmt.where(models.Application.id == application_id)
+    stmt = stmt.order_by(
+        models.Component.name.asc(),
+        models.Component.version.asc().nullslast(),
+        models.Application.name.asc(),
+        models.Sbom.generated_at.desc(),
+    )
+    items = []
+    seen: set[tuple[UUID, UUID]] = set()
+    for component, sbom, application, repository in db.execute(stmt):
+        key = (component.id, application.id)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(
+            schemas.ComponentUsageOut(
+                component_id=component.id,
+                purl=component.purl,
+                ecosystem=component.ecosystem,
+                component_name=component.name,
+                component_version=component.version,
+                application_id=application.id,
+                application_name=application.name,
+                application_path=application.path,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                active_sbom_id=sbom.id,
+                generated_at=sbom.generated_at,
+            ).model_dump(mode="json")
+        )
+        if len(items) >= min(limit, 100):
+            break
+    return schemas.CursorPage(items=items, next_cursor=None)
+
+
 @router.get("/{component_id}/applications", response_model=list[schemas.ComponentApplicationOut])
 def list_component_applications(
     component_id: UUID,
