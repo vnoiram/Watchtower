@@ -774,6 +774,46 @@ class PrCiFailureOut(BaseModel):
     updated_at: datetime
 
 
+class IssueCreationSloOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    finding_status: models.FindingStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    created_at: datetime
+    deadline_at: datetime
+    first_evidence_at: datetime | None = None
+    evidence_type: str | None = None
+    action_id: UUID | None = None
+    breached: bool
+    detail: str
+
+
+class AutoResolutionEvidenceOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    resolved_at: datetime | None = None
+    successful_action_id: UUID | None = None
+    validation_scan_id: UUID | None = None
+    validation_scan_status: models.ScanStatus | None = None
+    issue_action_id: UUID | None = None
+    close_state: str
+    complete: bool
+    detail: str
+
+
 class RemediationBacklogOut(BaseModel):
     action_id: UUID
     action_type: str
@@ -1585,6 +1625,16 @@ class KpiEvidenceOut(BaseModel):
     detail: str
 
 
+class MvpTargetComplianceOut(BaseModel):
+    target: str
+    status: str
+    current_value: float
+    target_value: float
+    unit: str
+    breached: bool
+    detail: str
+
+
 class EfficiencyTimelineOut(BaseModel):
     finding_id: UUID
     metric: str
@@ -1617,6 +1667,36 @@ class InitialInventoryOut(BaseModel):
     open_critical_high_count: int
     has_notification_or_action: bool
     has_exception: bool
+    detail: str
+
+
+class RepositoryInventoryGapOut(BaseModel):
+    gap_type: str
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    provider: models.RepositoryProvider | None = None
+    visibility: str | None = None
+    source_classification: models.SourceClassification | None = None
+    count: int
+    target: int | None = None
+    detail: str
+
+
+class DailyScanSloOut(BaseModel):
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    latest_scheduled_scan_id: UUID | None = None
+    latest_scheduled_scan_status: models.ScanStatus | None = None
+    latest_scheduled_scan_created_at: datetime | None = None
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_trigger_type: models.TriggerType | None = None
+    manual_only: bool
+    breached: bool
     detail: str
 
 
@@ -1723,3 +1803,8 @@ class DashboardSummary(BaseModel):
     fixable_gap_items: int
     pr_ci_failure_items: int
     isolated_scan_health_items: int
+    mvp_target_breaches: int
+    repository_inventory_gap_items: int
+    daily_scan_slo_breaches: int
+    issue_slo_breaches: int
+    auto_resolution_gap_items: int

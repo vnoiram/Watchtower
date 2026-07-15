@@ -162,6 +162,22 @@ def list_initial_inventory(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/repository-inventory-gaps", response_model=schemas.CursorPage)
+def list_repository_inventory_gaps(
+    limit: int = 50,
+    gap_type: str | None = None,
+    provider: models.RepositoryProvider | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = repository_inventory_gap_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if provider:
+        items = [item for item in items if item["provider"] == provider.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def rollout_gap_count(db: Session) -> int:
     return len(rollout_gap_items(db))
 
@@ -172,6 +188,10 @@ def application_readiness_count(db: Session) -> int:
 
 def rollout_wave_gap_count(db: Session) -> int:
     return sum(item.gap_count for item in rollout_wave_items(db))
+
+
+def repository_inventory_gap_count(db: Session) -> int:
+    return sum(item["count"] for item in repository_inventory_gap_items(db))
 
 
 def rollout_baseline_items(db: Session) -> list[schemas.RolloutBaselineOut]:
@@ -190,6 +210,48 @@ def rollout_baseline_items(db: Session) -> list[schemas.RolloutBaselineOut]:
         _baseline("fork_repositories", True, forks, None, _percent(forks, total), "Fork repositories in inventory"),
         _baseline("active_repositories", True, active, None, _percent(active, total), "Non-archived repositories in inventory"),
     ]
+
+
+def repository_inventory_gap_items(db: Session) -> list[dict]:
+    repositories = _repositories_for_rollout(db)
+    items = []
+    if len(repositories) < 54:
+        items.append(
+            schemas.RepositoryInventoryGapOut(
+                gap_type="repository_registration",
+                count=54 - len(repositories),
+                target=54,
+                detail="Registered repository count is below the target of 54",
+            ).model_dump(mode="json")
+        )
+    mvp_targets = _mvp_target_repositories(db)
+    if len(mvp_targets) < 10:
+        items.append(
+            schemas.RepositoryInventoryGapOut(
+                gap_type="mvp_target_selection",
+                count=10 - len(mvp_targets),
+                target=10,
+                detail="MVP target repository selection is below 10",
+            ).model_dump(mode="json")
+        )
+    for repository in repositories:
+        context = {
+            "repository_id": repository.id,
+            "repository_owner": repository.owner,
+            "repository_name": repository.name,
+            "provider": repository.provider,
+            "visibility": repository.visibility,
+            "source_classification": repository.source_classification,
+        }
+        if not repository.visibility:
+            items.append(_inventory_gap("missing_visibility", context, "Repository visibility is missing"))
+        if repository.source_classification is None:
+            items.append(_inventory_gap("missing_source_classification", context, "Repository source classification is missing"))
+        if not repository.default_branch:
+            items.append(_inventory_gap("missing_default_branch", context, "Repository default branch is missing"))
+        if not repository.primary_language:
+            items.append(_inventory_gap("missing_primary_language", context, "Repository primary language is missing"))
+    return items
 
 
 def application_readiness_items(db: Session) -> list[dict]:
@@ -643,6 +705,20 @@ def _baseline(
         percent=percent,
         detail=detail,
     )
+
+
+def _inventory_gap(gap_type: str, context: dict, detail: str) -> dict:
+    return schemas.RepositoryInventoryGapOut(
+        gap_type=gap_type,
+        repository_id=context["repository_id"],
+        repository_owner=context["repository_owner"],
+        repository_name=context["repository_name"],
+        provider=context["provider"],
+        visibility=context["visibility"],
+        source_classification=context["source_classification"],
+        count=1,
+        detail=detail,
+    ).model_dump(mode="json")
 
 
 def _matching_datetime(reference: datetime, value: datetime) -> datetime:

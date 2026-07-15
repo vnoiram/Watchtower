@@ -30,7 +30,9 @@ const auditLogs = document.querySelector("#audit-logs");
 const operationsReadiness = document.querySelector("#operations-readiness");
 const dailyOperations = document.querySelector("#daily-operations");
 const kpiSummary = document.querySelector("#kpi-summary");
+const mvpTargetCompliance = document.querySelector("#mvp-target-compliance");
 const repositoryRollout = document.querySelector("#repository-rollout");
+const repositoryInventoryGaps = document.querySelector("#repository-inventory-gaps");
 const retryCandidates = document.querySelector("#retry-candidates");
 const scannerInventory = document.querySelector("#scanner-inventory");
 const exceptionReview = document.querySelector("#exception-review");
@@ -39,6 +41,7 @@ const operationalWorkload = document.querySelector("#operational-workload");
 const repositorySync = document.querySelector("#repository-sync");
 const applicationDetection = document.querySelector("#application-detection");
 const scheduledScanCoverage = document.querySelector("#scheduled-scan-coverage");
+const dailyScanSlo = document.querySelector("#daily-scan-slo");
 const resolutionCandidates = document.querySelector("#resolution-candidates");
 const backupReadiness = document.querySelector("#backup-readiness");
 const notificationSlo = document.querySelector("#notification-slo");
@@ -83,6 +86,8 @@ const scanTargets = document.querySelector("#scan-targets");
 const remediationCoverage = document.querySelector("#remediation-coverage");
 const fixableGaps = document.querySelector("#fixable-gaps");
 const prCiFailures = document.querySelector("#pr-ci-failures");
+const issueCreationSlo = document.querySelector("#issue-creation-slo");
+const autoResolutionEvidence = document.querySelector("#auto-resolution-evidence");
 const resolutionVerification = document.querySelector("#resolution-verification");
 const monthlyReview = document.querySelector("#monthly-review");
 const operationalLoadKpis = document.querySelector("#operational-load-kpis");
@@ -203,6 +208,11 @@ function renderMetrics(summary) {
     ["fixable_gap_items", "Fixable gaps", "danger"],
     ["pr_ci_failure_items", "PR CI failures", "danger"],
     ["isolated_scan_health_items", "Isolated scan health", "warn"],
+    ["mvp_target_breaches", "MVP target breaches", "danger"],
+    ["repository_inventory_gap_items", "Inventory gaps", "warn"],
+    ["daily_scan_slo_breaches", "Daily scan SLO", "danger"],
+    ["issue_slo_breaches", "Issue SLO", "danger"],
+    ["auto_resolution_gap_items", "Auto-resolution gaps", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -560,6 +570,17 @@ function renderKpiSummary(rows) {
     : `<tr><td colspan="4">No KPI metrics</td></tr>`;
 }
 
+function renderMvpTargetCompliance(rows) {
+  mvpTargetCompliance.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.target)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.current_value)}</td><td>${escapeHtml(item.target_value)} ${escapeHtml(item.unit)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No MVP target checks</td></tr>`;
+}
+
 function renderRepositoryRollout(page) {
   const rows = page.items || [];
   repositoryRollout.innerHTML = rows.length
@@ -570,6 +591,18 @@ function renderRepositoryRollout(page) {
         )
         .join("")
     : `<tr><td colspan="5">No repositories</td></tr>`;
+}
+
+function renderRepositoryInventoryGaps(page) {
+  const rows = page.items || [];
+  repositoryInventoryGaps.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.repository_name || "-")}</td><td>${escapeHtml(item.provider || "-")}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No repository inventory gaps</td></tr>`;
 }
 
 function renderRetryCandidates(page) {
@@ -667,6 +700,18 @@ function renderScheduledScanCoverage(page) {
     : `<tr><td colspan="5">No scheduled scan coverage gaps</td></tr>`;
 }
 
+function renderDailyScanSlo(page) {
+  const rows = page.items || [];
+  dailyScanSlo.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.breached ? "breached" : "ok")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.latest_scheduled_scan_status || "missing")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No daily scan SLO records</td></tr>`;
+}
+
 function renderResolutionCandidates(page) {
   const rows = page.items || [];
   resolutionCandidates.innerHTML = rows.length
@@ -736,6 +781,30 @@ function renderPrCiFailures(page) {
         )
         .join("")
     : `<tr><td colspan="5">No PR CI failures</td></tr>`;
+}
+
+function renderIssueCreationSlo(page) {
+  const rows = page.items || [];
+  issueCreationSlo.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.breached ? "breached" : "ok")}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.evidence_type || "missing")}</td><td>${escapeHtml(formatDateTime(item.deadline_at))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No issue creation SLO records</td></tr>`;
+}
+
+function renderAutoResolutionEvidence(page) {
+  const rows = page.items || [];
+  autoResolutionEvidence.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.complete ? "complete" : "gap")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.validation_scan_status || "missing")}</td><td>${escapeHtml(item.close_state)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No auto-resolution evidence records</td></tr>`;
 }
 
 function renderRemediationBacklog(page) {
@@ -1575,7 +1644,9 @@ async function refresh() {
   operationsReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   dailyOperations.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   kpiSummary.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  mvpTargetCompliance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   repositoryRollout.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  repositoryInventoryGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   retryCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scannerInventory.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   exceptionReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1584,12 +1655,15 @@ async function refresh() {
   repositorySync.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   applicationDetection.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scheduledScanCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  dailyScanSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   resolutionCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   backupReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   notificationSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationPrs.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   fixableGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   prCiFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  issueCreationSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  autoResolutionEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationBacklog.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationRescans.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   weeklyReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
@@ -1692,7 +1766,9 @@ async function refresh() {
       readinessPage,
       dailyPage,
       kpiPage,
+      mvpTargetCompliancePage,
       rolloutPage,
+      repositoryInventoryGapPage,
       retryCandidatePage,
       scannerInventoryPage,
       exceptionReviewPage,
@@ -1701,12 +1777,15 @@ async function refresh() {
       repositorySyncPage,
       applicationDetectionPage,
       scheduledScanCoveragePage,
+      dailyScanSloPage,
       resolutionCandidatePage,
       backupReadinessPage,
       notificationSloPage,
       remediationPrPage,
       fixableGapPage,
       prCiFailurePage,
+      issueCreationSloPage,
+      autoResolutionEvidencePage,
       remediationBacklogPage,
       remediationRescanPage,
       weeklyReviewPage,
@@ -1808,7 +1887,9 @@ async function refresh() {
       loadJson("/operations/readiness"),
       loadJson("/operations/daily"),
       loadJson("/kpis/summary"),
+      loadJson("/kpis/targets"),
       loadJson("/rollout/repositories?limit=10"),
+      loadJson("/rollout/repository-inventory-gaps?limit=10"),
       loadJson("/jobs/retry-candidates?limit=10"),
       loadJson("/scanner-inventory?limit=10"),
       loadJson("/exceptions?limit=10"),
@@ -1817,12 +1898,15 @@ async function refresh() {
       loadJson("/repository-sync?stale=true&limit=10"),
       loadJson("/application-detection?limit=10"),
       loadJson("/scheduled-scan-coverage?missing=true&limit=10"),
+      loadJson("/scans/daily-slo?breached=true&limit=10"),
       loadJson("/findings/resolution-candidates?limit=10"),
       loadJson("/operations/backup-readiness"),
       loadJson("/notifications/slo?breached=true&limit=10"),
       loadJson("/remediation/prs?limit=10"),
       loadJson("/remediation/fixable-gaps?limit=10"),
       loadJson("/remediation/pr-ci-failures?limit=10"),
+      loadJson("/remediation/issue-slo?breached=true&limit=10"),
+      loadJson("/remediation/auto-resolution?complete=false&limit=10"),
       loadJson("/remediation/backlog?limit=10"),
       loadJson("/remediation/rescans?missing=true&limit=10"),
       loadJson("/operations/weekly-review"),
@@ -1923,7 +2007,9 @@ async function refresh() {
     renderOperationsReadiness(readinessPage);
     renderDailyOperations(dailyPage);
     renderKpiSummary(kpiPage);
+    renderMvpTargetCompliance(mvpTargetCompliancePage);
     renderRepositoryRollout(rolloutPage);
+    renderRepositoryInventoryGaps(repositoryInventoryGapPage);
     renderRetryCandidates(retryCandidatePage);
     renderScannerInventory(scannerInventoryPage);
     renderExceptionReview(exceptionReviewPage);
@@ -1932,12 +2018,15 @@ async function refresh() {
     renderRepositorySync(repositorySyncPage);
     renderApplicationDetection(applicationDetectionPage);
     renderScheduledScanCoverage(scheduledScanCoveragePage);
+    renderDailyScanSlo(dailyScanSloPage);
     renderResolutionCandidates(resolutionCandidatePage);
     renderBackupReadiness(backupReadinessPage);
     renderNotificationSlo(notificationSloPage);
     renderRemediationPrs(remediationPrPage);
     renderFixableGaps(fixableGapPage);
     renderPrCiFailures(prCiFailurePage);
+    renderIssueCreationSlo(issueCreationSloPage);
+    renderAutoResolutionEvidence(autoResolutionEvidencePage);
     renderRemediationBacklog(remediationBacklogPage);
     renderRemediationRescans(remediationRescanPage);
     renderWeeklyReview(weeklyReviewPage);
@@ -2038,7 +2127,9 @@ async function refresh() {
     operationsReadiness.innerHTML = `<tr><td colspan="4">Unable to load operations readiness</td></tr>`;
     dailyOperations.innerHTML = `<tr><td colspan="4">Unable to load daily operations</td></tr>`;
     kpiSummary.innerHTML = `<tr><td colspan="4">Unable to load KPI summary</td></tr>`;
+    mvpTargetCompliance.innerHTML = `<tr><td colspan="5">Unable to load MVP target compliance</td></tr>`;
     repositoryRollout.innerHTML = `<tr><td colspan="5">Unable to load repository rollout</td></tr>`;
+    repositoryInventoryGaps.innerHTML = `<tr><td colspan="5">Unable to load repository inventory gaps</td></tr>`;
     retryCandidates.innerHTML = `<tr><td colspan="5">Unable to load retry candidates</td></tr>`;
     scannerInventory.innerHTML = `<tr><td colspan="5">Unable to load scanner inventory</td></tr>`;
     exceptionReview.innerHTML = `<tr><td colspan="5">Unable to load exceptions</td></tr>`;
@@ -2047,12 +2138,15 @@ async function refresh() {
     repositorySync.innerHTML = `<tr><td colspan="5">Unable to load repository sync coverage</td></tr>`;
     applicationDetection.innerHTML = `<tr><td colspan="5">Unable to load application detection coverage</td></tr>`;
     scheduledScanCoverage.innerHTML = `<tr><td colspan="5">Unable to load scheduled scan coverage</td></tr>`;
+    dailyScanSlo.innerHTML = `<tr><td colspan="5">Unable to load daily scan SLO</td></tr>`;
     resolutionCandidates.innerHTML = `<tr><td colspan="5">Unable to load resolution candidates</td></tr>`;
     backupReadiness.innerHTML = `<tr><td colspan="4">Unable to load backup readiness</td></tr>`;
     notificationSlo.innerHTML = `<tr><td colspan="5">Unable to load notification SLO</td></tr>`;
     remediationPrs.innerHTML = `<tr><td colspan="5">Unable to load PR/CI status</td></tr>`;
     fixableGaps.innerHTML = `<tr><td colspan="5">Unable to load fixable gaps</td></tr>`;
     prCiFailures.innerHTML = `<tr><td colspan="5">Unable to load PR CI failures</td></tr>`;
+    issueCreationSlo.innerHTML = `<tr><td colspan="5">Unable to load issue creation SLO</td></tr>`;
+    autoResolutionEvidence.innerHTML = `<tr><td colspan="5">Unable to load auto-resolution evidence</td></tr>`;
     remediationBacklog.innerHTML = `<tr><td colspan="5">Unable to load remediation backlog</td></tr>`;
     remediationRescans.innerHTML = `<tr><td colspan="5">Unable to load remediation rescans</td></tr>`;
     weeklyReview.innerHTML = `<tr><td colspan="4">Unable to load weekly review</td></tr>`;
