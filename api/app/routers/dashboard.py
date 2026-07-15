@@ -11,7 +11,11 @@ from api.app.deps import Principal, get_principal
 from api.app.routers.auto_merge import automation_guardrail_count
 from api.app.routers.governance import exposure_review_count, quarterly_review_count
 from api.app.routers.integrations import github_integration_issue_count
-from api.app.routers.isolated_lane import count_isolated_applications, isolated_safeguard_count
+from api.app.routers.isolated_lane import (
+    count_isolated_applications,
+    isolated_safeguard_count,
+    isolated_scan_health_count,
+)
 from api.app.routers.job_health import job_health_reason
 from api.app.routers.kpis import notification_failure_count, scan_failure_rate_percent
 from api.app.routers.notifications import notification_slo_breach_count
@@ -26,7 +30,12 @@ from api.app.routers.operations import (
     rollback_readiness_count,
 )
 from api.app.routers.quality import reopen_risk_count
-from api.app.routers.remediation import remediation_coverage_count, stale_remediation_count
+from api.app.routers.remediation import (
+    fixable_gap_count,
+    pr_ci_failure_count,
+    remediation_coverage_count,
+    stale_remediation_count,
+)
 from api.app.routers.rollout import application_readiness_count, rollout_gap_count, rollout_wave_gap_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import rbac_review_count
@@ -98,6 +107,9 @@ def dashboard_summary(
     rollback_readiness_items = rollback_readiness_count(db)
     queue_pressure_items = queue_pressure_count(db)
     storage_pressure_items = storage_pressure_count(db)
+    fixable_gap_items = fixable_gap_count(db)
+    pr_ci_failure_items = pr_ci_failure_count(db)
+    isolated_scan_health_items = isolated_scan_health_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -137,4 +149,7 @@ def dashboard_summary(
         rollback_readiness_items=rollback_readiness_items,
         queue_pressure_items=queue_pressure_items,
         storage_pressure_items=storage_pressure_items,
+        fixable_gap_items=fixable_gap_items,
+        pr_ci_failure_items=pr_ci_failure_items,
+        isolated_scan_health_items=isolated_scan_health_items,
     )

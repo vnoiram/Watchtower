@@ -192,6 +192,22 @@ class ComponentInventoryOut(BaseModel):
     applications: list[ComponentApplicationOut] = Field(default_factory=list)
 
 
+class ComponentUsageOut(BaseModel):
+    component_id: UUID
+    purl: str
+    ecosystem: str | None
+    component_name: str
+    component_version: str | None
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    active_sbom_id: UUID
+    generated_at: datetime
+
+
 class VulnerabilityInventoryOut(BaseModel):
     id: UUID
     source: str
@@ -201,6 +217,27 @@ class VulnerabilityInventoryOut(BaseModel):
     cvss_score: float | None
     open_finding_count: int
     affected_application_count: int
+
+
+class VulnerabilityImpactOut(BaseModel):
+    finding_id: UUID
+    finding_status: models.FindingStatus
+    severity: models.Severity
+    risk_score: float
+    fixed_version: str | None = None
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_id: UUID
+    component_name: str
+    component_version: str | None = None
+    vulnerability_id: UUID
+    vulnerability_external_id: str
+    vulnerability_title: str | None = None
+    last_seen_scan_id: UUID | None = None
+    updated_at: datetime
 
 
 class RemediationActionOut(BaseModel):
@@ -696,6 +733,47 @@ class RemediationPrOut(BaseModel):
     updated_at: datetime
 
 
+class FixableGapOut(BaseModel):
+    gap_type: str
+    finding_id: UUID
+    severity: models.Severity
+    risk_score: float
+    fixed_version: str
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    component_version: str | None = None
+    vulnerability_external_id: str
+    action_id: UUID | None = None
+    action_type: str | None = None
+    action_status: str | None = None
+    updated_at: datetime
+    detail: str
+
+
+class PrCiFailureOut(BaseModel):
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider: str | None = None
+    provider_id: str | None = None
+    branch: str | None = None
+    url: str | None = None
+    ci_passed: bool | None = None
+    detail: str
+    updated_at: datetime
+
+
 class RemediationBacklogOut(BaseModel):
     action_id: UUID
     action_type: str
@@ -1054,6 +1132,23 @@ class IsolatedSafeguardOut(BaseModel):
     application_name: str
     latest_scan_id: UUID | None = None
     latest_scan_status: models.ScanStatus | None = None
+    active_source_sbom_count: int
+    has_artifact_storage: bool
+    detail: str
+
+
+class IsolatedScanHealthOut(BaseModel):
+    health_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    repository_provider: models.RepositoryProvider
+    source_classification: models.SourceClassification
+    application_id: UUID
+    application_name: str
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
     active_source_sbom_count: int
     has_artifact_storage: bool
     detail: str
@@ -1625,3 +1720,6 @@ class DashboardSummary(BaseModel):
     rollout_wave_gap_items: int
     queue_pressure_items: int
     storage_pressure_items: int
+    fixable_gap_items: int
+    pr_ci_failure_items: int
+    isolated_scan_health_items: int

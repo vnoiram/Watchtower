@@ -50,7 +50,12 @@ from api.app.routers.auto_merge import (
     list_auto_merge_pilot_readiness,
     list_auto_merge_policy_violations,
 )
-from api.app.routers.components import list_component_applications, list_components, list_license_review
+from api.app.routers.components import (
+    list_component_applications,
+    list_component_usage,
+    list_components,
+    list_license_review,
+)
 from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
 from api.app.routers.findings import list_finding_evidence_gaps, list_findings, list_finding_lifecycle_review
@@ -65,7 +70,7 @@ from api.app.routers.governance import (
     quarterly_review,
 )
 from api.app.routers.integrations import github_integration_health, list_webhook_intake
-from api.app.routers.isolated_lane import list_isolated_lane, list_isolated_safeguards
+from api.app.routers.isolated_lane import list_isolated_lane, list_isolated_safeguards, list_isolated_scan_health
 from api.app.routers.job_health import list_job_health
 from api.app.routers.jobs import list_job_backlog, list_retry_candidates
 from api.app.routers.kpis import (
@@ -104,11 +109,13 @@ from api.app.routers.operations import (
 )
 from api.app.routers.quality import list_duplicate_review, list_reopen_risk
 from api.app.routers.remediation import (
+    list_fixable_gaps,
     list_remediation_backlog,
     list_remediation_coverage,
     list_dependency_updates,
     list_github_issue_actions,
     list_issue_closures,
+    list_pr_ci_failures,
     list_remediation_prs,
     list_remediation_aging,
     list_remediation_rescans,
@@ -149,7 +156,7 @@ from api.app.routers.sla import list_sla_findings
 from api.app.routers.storage import list_storage_cleanup_candidates, retention_review, storage_pressure
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_invalidation_candidates, list_vex_statements
-from api.app.routers.vulnerabilities import list_vulnerabilities
+from api.app.routers.vulnerabilities import list_vulnerabilities, list_vulnerability_impact
 from worker.runner import upsert_detected_applications
 
 
@@ -4240,3 +4247,153 @@ def test_list_credential_failures_reports_sources_and_filters() -> None:
 
         assert {"job", "scan", "remediation_action", "notification", "audit_log"} <= sources
         assert filtered.items[0]["source"] == "job"
+
+
+def test_list_component_usage_reports_active_sbom_application_context_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "component-usage")
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        component = Component(purl="pkg:npm/react@18.2.0", ecosystem="npm", name="react", version="18.2.0")
+        db.add_all([scan, component])
+        db.flush()
+        sbom = Sbom(
+            application_id=app.id,
+            scan_id=scan.id,
+            sbom_digest="component-usage",
+            storage_key="component-usage.json",
+            active=True,
+        )
+        db.add(sbom)
+        db.flush()
+        db.add(SbomComponent(sbom_id=sbom.id, component_id=component.id))
+        db.flush()
+
+        page = list_component_usage(name="react", ecosystem="npm", db=db, _=None)
+        filtered = list_component_usage(application_id=app.id, purl="pkg:npm/react", db=db, _=None)
+
+        assert page.items[0]["component_name"] == "react"
+        assert page.items[0]["application_name"] == app.name
+        assert page.items[0]["repository_name"] == repo.name
+        assert filtered.items[0]["active_sbom_id"] == str(sbom.id)
+
+
+def test_list_vulnerability_impact_reports_finding_context_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "vulnerability-impact")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical, risk_score=9.9, fixed_version="2.0.0")
+        vulnerability = db.get(Vulnerability, finding.vulnerability_id)
+
+        page = list_vulnerability_impact(external_id=vulnerability.external_id, severity=Severity.critical, db=db, _=None)
+        filtered = list_vulnerability_impact(status=FindingStatus.open, application_id=app.id, db=db, _=None)
+
+        assert page.items[0]["finding_id"] == str(finding.id)
+        assert page.items[0]["application_name"] == app.name
+        assert page.items[0]["fixed_version"] == "2.0.0"
+        assert filtered.items[0]["vulnerability_external_id"] == vulnerability.external_id
+
+
+def test_list_fixable_gaps_reports_missing_failed_and_stale_actions() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "fixable-gaps")
+        missing_app = create_application(db, repo, "missing-gap")
+        failed_app = create_application(db, repo, "failed-gap")
+        stale_app = create_application(db, repo, "stale-gap")
+        missing = create_finding(db, missing_app, severity=Severity.critical, risk_score=9.8)
+        failed = create_finding(db, failed_app, severity=Severity.high, risk_score=8.1)
+        db.get(Component, failed.component_id).purl = "pkg:pypi/high-failed-gap@1.0.0"
+        db.get(Vulnerability, failed.vulnerability_id).external_id = "high-failed-gap"
+        db.flush()
+        stale = create_finding(db, stale_app, severity=Severity.high, risk_score=7.9)
+        db.add_all(
+            [
+                RemediationAction(
+                    finding_id=failed.id,
+                    action_type="github_issue",
+                    provider="github",
+                    status="failed",
+                    metadata_json={"error": "issue create failed"},
+                ),
+                RemediationAction(
+                    finding_id=stale.id,
+                    action_type="github_issue",
+                    provider="github",
+                    status="queued",
+                    created_at=now_utc() - timedelta(days=8),
+                    updated_at=now_utc() - timedelta(days=8),
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_fixable_gaps(db=db, _=None)
+        filtered = list_fixable_gaps(gap_type="missing_issue_or_pr", severity=Severity.critical, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gap_types = {item["gap_type"] for item in page.items}
+
+        assert {"missing_issue_or_pr", "failed_action", "stale_action"} <= gap_types
+        assert filtered.items[0]["finding_id"] == str(missing.id)
+        assert summary.fixable_gap_items >= 3
+
+
+def test_list_pr_ci_failures_reports_metadata_failures_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "pr-ci-failures")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        db.add(
+            RemediationAction(
+                finding_id=finding.id,
+                action_type="ai_fix",
+                provider="github",
+                status="opened",
+                branch="fix/pr-ci-failures",
+                metadata_json={"pull_request_url": "https://github.com/local/pr-ci-failures/pull/1", "ci_passed": False, "ci_error": "unit tests failed"},
+            )
+        )
+        db.flush()
+
+        page = list_pr_ci_failures(provider="github", severity=Severity.high, db=db, _=None)
+        filtered = list_pr_ci_failures(action_type="ai_fix", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert page.items[0]["application_name"] == app.name
+        assert page.items[0]["ci_passed"] is False
+        assert filtered.items[0]["detail"] == "unit tests failed"
+        assert summary.pr_ci_failure_items >= 1
+
+
+def test_list_isolated_scan_health_reports_scan_sbom_and_artifact_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        missing_repo = create_repository(db, "isolated-missing-scan")
+        missing_repo.provider = RepositoryProvider.isolated
+        missing_repo.source_classification = SourceClassification.isolated
+        missing_app = create_application(db, missing_repo)
+        failed_repo = create_repository(db, "isolated-failed-scan")
+        failed_repo.source_classification = SourceClassification.restricted
+        failed_app = create_application(db, failed_repo)
+        failed_scan = Scan(
+            application_id=failed_app.id,
+            status=ScanStatus.failed,
+            error_message="scanner failed",
+            created_at=now_utc() - timedelta(days=40),
+            result_summary={"artifacts": {"osv": {"storage_key": "isolated-osv.json"}}},
+        )
+        db.add(failed_scan)
+        db.flush()
+
+        page = list_isolated_scan_health(db=db, _=None)
+        failed_filter = list_isolated_scan_health(health_type="unhealthy_scan", scan_status=ScanStatus.failed, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        health_types = {item["health_type"] for item in page.items}
+
+        assert {"missing_scan", "stale_scan", "unhealthy_scan", "missing_active_source_sbom", "missing_artifact_storage"} <= health_types
+        assert failed_filter.items[0]["application_id"] == str(failed_app.id)
+        assert any(item["application_id"] == str(missing_app.id) for item in page.items)
+        assert summary.isolated_scan_health_items >= 5

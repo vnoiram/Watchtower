@@ -325,6 +325,41 @@ def list_remediation_coverage(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/fixable-gaps", response_model=schemas.CursorPage)
+def list_fixable_gaps(
+    limit: int = 50,
+    gap_type: str | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = fixable_gap_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/pr-ci-failures", response_model=schemas.CursorPage)
+def list_pr_ci_failures(
+    limit: int = 50,
+    severity: models.Severity | None = None,
+    provider: str | None = None,
+    action_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = pr_ci_failure_items(db)
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if provider:
+        items = [item for item in items if item["provider"] == provider]
+    if action_type:
+        items = [item for item in items if item["action_type"] == action_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/resolution-verification", response_model=schemas.CursorPage)
 def list_resolution_verification(
     limit: int = 50,
@@ -379,6 +414,14 @@ def stale_remediation_count(db: Session) -> int:
 
 def remediation_coverage_count(db: Session) -> int:
     return sum(1 for item in remediation_coverage_items(db) if not item["has_issue_or_pr"])
+
+
+def fixable_gap_count(db: Session) -> int:
+    return len(fixable_gap_items(db))
+
+
+def pr_ci_failure_count(db: Session) -> int:
+    return len(pr_ci_failure_items(db))
 
 
 def dependency_update_items(db: Session) -> list[dict]:
@@ -515,6 +558,99 @@ def remediation_coverage_items(db: Session) -> list[dict]:
                 provider=action.provider if action else None,
                 url=_pr_url(action) if action else None,
                 coverage_percent=coverage_percent,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
+def fixable_gap_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(days=7)
+    action_by_finding = _latest_issue_or_pr_action_by_finding(db)
+    items = []
+    for finding, application, repository, component, vulnerability in _fixed_critical_high_findings(db):
+        action = action_by_finding.get(finding.id)
+        if action is None:
+            items.append(
+                _fixable_gap_item(
+                    "missing_issue_or_pr",
+                    finding,
+                    application,
+                    repository,
+                    component,
+                    vulnerability,
+                    None,
+                    finding.updated_at,
+                    "Fixable critical/high finding has no Issue or PR action",
+                )
+            )
+            continue
+        metadata = action.metadata_json or {}
+        detail = metadata.get("error") or metadata.get("close_error") or metadata.get("validation_error")
+        if action.status in {"failed", "close_failed"}:
+            items.append(
+                _fixable_gap_item(
+                    "failed_action",
+                    finding,
+                    application,
+                    repository,
+                    component,
+                    vulnerability,
+                    action,
+                    action.updated_at,
+                    str(detail or "Remediation action failed"),
+                )
+            )
+        elif action.status in _BACKLOG_OPEN_STATUSES and _before(action.updated_at, stale_cutoff):
+            items.append(
+                _fixable_gap_item(
+                    "stale_action",
+                    finding,
+                    application,
+                    repository,
+                    component,
+                    vulnerability,
+                    action,
+                    action.updated_at,
+                    "Remediation action has been open for more than 7 days",
+                )
+            )
+    return items
+
+
+def pr_ci_failure_items(db: Session) -> list[dict]:
+    items = []
+    stmt = _remediation_action_context_stmt().order_by(
+        models.RemediationAction.updated_at.desc(),
+        models.RemediationAction.id.asc(),
+    )
+    for action, finding, application, _, _ in db.execute(stmt):
+        if not _has_pr_signal(action):
+            continue
+        metadata = action.metadata_json or {}
+        detail = _ci_failure_detail(action)
+        if detail is None:
+            continue
+        repository = db.get(models.Repository, application.repository_id)
+        items.append(
+            schemas.PrCiFailureOut(
+                action_id=action.id,
+                action_type=action.action_type,
+                action_status=action.status,
+                finding_id=finding.id,
+                severity=finding.severity,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                provider=action.provider,
+                provider_id=action.provider_id,
+                branch=action.branch,
+                url=_pr_url(action),
+                ci_passed=_metadata_bool_or_none(metadata.get("ci_passed")),
+                detail=detail,
+                updated_at=action.updated_at,
             ).model_dump(mode="json")
         )
     return items
@@ -669,6 +805,39 @@ def _remediation_action_context_stmt():
         .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
     )
+
+
+def _fixable_gap_item(
+    gap_type: str,
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    component: models.Component,
+    vulnerability: models.Vulnerability,
+    action: models.RemediationAction | None,
+    updated_at: datetime,
+    detail: str,
+) -> dict:
+    return schemas.FixableGapOut(
+        gap_type=gap_type,
+        finding_id=finding.id,
+        severity=finding.severity,
+        risk_score=finding.risk_score,
+        fixed_version=finding.fixed_version or "",
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        component_name=component.name,
+        component_version=component.version,
+        vulnerability_external_id=vulnerability.external_id,
+        action_id=action.id if action else None,
+        action_type=action.action_type if action else None,
+        action_status=action.status if action else None,
+        updated_at=updated_at,
+        detail=detail,
+    ).model_dump(mode="json")
 
 
 def _fixed_critical_high_findings(db: Session):
@@ -859,6 +1028,26 @@ def _dependency_update_source(action: models.RemediationAction) -> str:
     if action.action_type == ACTION_TYPE_AI_FIX:
         return "ai_fix"
     return "dependency_update"
+
+
+def _ci_failure_detail(action: models.RemediationAction) -> str | None:
+    metadata = action.metadata_json or {}
+    if _metadata_bool_or_none(metadata.get("ci_passed")) is False:
+        return str(metadata.get("ci_error") or metadata.get("error") or "CI reported failure")
+    text = " ".join(
+        str(value or "")
+        for value in [
+            action.status,
+            metadata.get("ci_status"),
+            metadata.get("validation_status"),
+            metadata.get("ci_error"),
+            metadata.get("error"),
+            metadata.get("status"),
+        ]
+    ).lower()
+    if "ci" in text and any(token in text for token in ["fail", "error", "red"]):
+        return str(metadata.get("ci_error") or metadata.get("error") or action.status)
+    return None
 
 
 def _pr_url(action: models.RemediationAction) -> str | None:
