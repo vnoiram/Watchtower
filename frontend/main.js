@@ -29,6 +29,11 @@ const operationsReadiness = document.querySelector("#operations-readiness");
 const dailyOperations = document.querySelector("#daily-operations");
 const kpiSummary = document.querySelector("#kpi-summary");
 const repositoryRollout = document.querySelector("#repository-rollout");
+const retryCandidates = document.querySelector("#retry-candidates");
+const scannerInventory = document.querySelector("#scanner-inventory");
+const exceptionReview = document.querySelector("#exception-review");
+const storageCleanup = document.querySelector("#storage-cleanup");
+const operationalWorkload = document.querySelector("#operational-workload");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -91,6 +96,7 @@ function renderMetrics(summary) {
     ["isolated_applications", "Isolated apps", "warn"],
     ["scan_failure_rate_percent", "Scan failure %", "warn"],
     ["notification_failure_count", "Notification failures", "danger"],
+    ["manual_workload_items", "Manual workload", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -436,6 +442,65 @@ function renderRepositoryRollout(page) {
     : `<tr><td colspan="5">No repositories</td></tr>`;
 }
 
+function renderRetryCandidates(page) {
+  const rows = page.items || [];
+  retryCandidates.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.job_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.attempts)}/${escapeHtml(item.max_attempts)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.last_error || formatDateTime(item.run_after))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No retry candidates</td></tr>`;
+}
+
+function renderScannerInventory(page) {
+  const rows = page.items || [];
+  scannerInventory.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.tool || "-")}</td><td>${escapeHtml(item.tool_version || "-")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.scanner_failures.length || (item.scanner_failure ? 1 : 0))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scanner runs</td></tr>`;
+}
+
+function renderExceptionReview(page) {
+  const rows = page.items || [];
+  exceptionReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.exception_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id || item.component_name)}</td><td>${escapeHtml(item.review_date ? formatDateTime(item.review_date) : item.status)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No exceptions</td></tr>`;
+}
+
+function renderStorageCleanup(page) {
+  const rows = page.items || [];
+  storageCleanup.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.storage_key || "-")}</td><td>${escapeHtml(item.scan_id || "-")}</td><td>${escapeHtml(formatDateTime(item.created_at))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No cleanup candidates</td></tr>`;
+}
+
+function renderOperationalWorkload(rows) {
+  operationalWorkload.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.item)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No workload items</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -466,6 +531,11 @@ async function refresh() {
   dailyOperations.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   kpiSummary.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   repositoryRollout.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  retryCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scannerInventory.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  exceptionReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  storageCleanup.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  operationalWorkload.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -498,6 +568,11 @@ async function refresh() {
       dailyPage,
       kpiPage,
       rolloutPage,
+      retryCandidatePage,
+      scannerInventoryPage,
+      exceptionReviewPage,
+      storageCleanupPage,
+      operationalWorkloadPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -529,6 +604,11 @@ async function refresh() {
       loadJson("/operations/daily"),
       loadJson("/kpis/summary"),
       loadJson("/rollout/repositories?limit=10"),
+      loadJson("/jobs/retry-candidates?limit=10"),
+      loadJson("/scanner-inventory?limit=10"),
+      loadJson("/exceptions?limit=10"),
+      loadJson("/storage/cleanup-candidates?limit=10"),
+      loadJson("/operations/workload"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -559,6 +639,11 @@ async function refresh() {
     renderDailyOperations(dailyPage);
     renderKpiSummary(kpiPage);
     renderRepositoryRollout(rolloutPage);
+    renderRetryCandidates(retryCandidatePage);
+    renderScannerInventory(scannerInventoryPage);
+    renderExceptionReview(exceptionReviewPage);
+    renderStorageCleanup(storageCleanupPage);
+    renderOperationalWorkload(operationalWorkloadPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -589,6 +674,11 @@ async function refresh() {
     dailyOperations.innerHTML = `<tr><td colspan="4">Unable to load daily operations</td></tr>`;
     kpiSummary.innerHTML = `<tr><td colspan="4">Unable to load KPI summary</td></tr>`;
     repositoryRollout.innerHTML = `<tr><td colspan="5">Unable to load repository rollout</td></tr>`;
+    retryCandidates.innerHTML = `<tr><td colspan="5">Unable to load retry candidates</td></tr>`;
+    scannerInventory.innerHTML = `<tr><td colspan="5">Unable to load scanner inventory</td></tr>`;
+    exceptionReview.innerHTML = `<tr><td colspan="5">Unable to load exceptions</td></tr>`;
+    storageCleanup.innerHTML = `<tr><td colspan="5">Unable to load cleanup candidates</td></tr>`;
+    operationalWorkload.innerHTML = `<tr><td colspan="4">Unable to load operational workload</td></tr>`;
   }
 }
 

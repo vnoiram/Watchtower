@@ -44,14 +44,16 @@ from api.app.routers.artifacts import list_artifacts
 from api.app.routers.auto_merge import list_auto_merge_eligibility
 from api.app.routers.components import list_component_applications, list_components
 from api.app.routers.dashboard import dashboard_summary
+from api.app.routers.exceptions import list_exceptions
 from api.app.routers.findings import list_findings
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
 from api.app.routers.isolated_lane import list_isolated_lane
 from api.app.routers.job_health import list_job_health
+from api.app.routers.jobs import list_retry_candidates
 from api.app.routers.kpis import kpi_summary
 from api.app.routers.maintenance import list_application_maintenance_candidates
 from api.app.routers.notifications import list_notifications
-from api.app.routers.operations import daily_operations, operations_readiness
+from api.app.routers.operations import daily_operations, operational_workload, operations_readiness
 from api.app.routers.remediation import (
     list_github_issue_actions,
     list_issue_closures,
@@ -61,9 +63,11 @@ from api.app.routers.remediation import (
 from api.app.routers.remediation_actions import list_remediation_actions
 from api.app.routers.rollout import list_repository_rollout
 from api.app.routers.scan_health import list_scan_health
+from api.app.routers.scanner_inventory import list_scanner_inventory
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sboms
 from api.app.routers.sla import list_sla_findings
+from api.app.routers.storage import list_storage_cleanup_candidates
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_statements
 from api.app.routers.vulnerabilities import list_vulnerabilities
@@ -760,6 +764,184 @@ def test_list_job_health_reports_unhealthy_jobs_and_summary_count() -> None:
         assert failed["repository_name"] == repo.name
         assert failed["application_name"] == app.name
         assert summary.unhealthy_jobs == 3
+
+
+def test_list_retry_candidates_returns_failed_jobs_with_remaining_attempts() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        retryable = Job(
+            job_type=JobType.scan,
+            status=JobStatus.failed,
+            repository_id=repo.id,
+            application_id=app.id,
+            attempts=1,
+            max_attempts=3,
+            last_error="scanner timeout",
+        )
+        exhausted = Job(
+            job_type=JobType.notification,
+            status=JobStatus.failed,
+            attempts=3,
+            max_attempts=3,
+        )
+        succeeded = Job(job_type=JobType.repository_sync, status=JobStatus.succeeded)
+        db.add_all([retryable, exhausted, succeeded])
+        db.flush()
+
+        page = list_retry_candidates(db=db, _=None)
+
+        assert [item["id"] for item in page.items] == [str(retryable.id)]
+        assert page.items[0]["application_name"] == app.name
+        assert page.items[0]["repository_name"] == repo.name
+        assert page.items[0]["last_error"] == "scanner timeout"
+
+
+def test_list_scanner_inventory_filters_failed_scanner_runs() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        failed = Scan(
+            application_id=app.id,
+            status=ScanStatus.partially_succeeded,
+            tool="syft",
+            tool_version="1.0.0",
+            result_summary={"scanner_failures": [{"scanner": "osv", "error": "timeout"}]},
+        )
+        healthy = Scan(application_id=app.id, status=ScanStatus.succeeded, tool="syft")
+        db.add_all([failed, healthy])
+        db.flush()
+
+        page = list_scanner_inventory(tool="syft", failed_only=True, db=db, _=None)
+
+        assert [item["scan_id"] for item in page.items] == [str(failed.id)]
+        assert page.items[0]["scanner_failure"] is True
+        assert page.items[0]["scanner_failures"] == [{"scanner": "osv", "error": "timeout"}]
+        assert page.items[0]["application_name"] == app.name
+
+
+def test_list_exceptions_returns_finding_and_vex_review_context() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        accepted = create_finding(db, app, severity=Severity.high, status=FindingStatus.accepted_risk)
+        false_positive = create_finding(db, app, severity=Severity.medium, status=FindingStatus.false_positive)
+        vex_finding = create_finding(db, app, severity=Severity.low)
+        vex = VexStatement(
+            finding_id=vex_finding.id,
+            status=VexStatus.not_affected,
+            justification="not reachable",
+            approved_by="security",
+            review_date=now_utc() - timedelta(days=1),
+        )
+        db.add(vex)
+        db.flush()
+
+        all_page = list_exceptions(db=db, _=None)
+        expired_page = list_exceptions(exception_type="vex", expired=True, db=db, _=None)
+        severity_page = list_exceptions(severity=Severity.medium, db=db, _=None)
+
+        assert {item["finding_id"] for item in all_page.items} == {
+            str(accepted.id),
+            str(false_positive.id),
+            str(vex_finding.id),
+        }
+        assert [item["finding_id"] for item in expired_page.items] == [str(vex_finding.id)]
+        assert expired_page.items[0]["expired"] is True
+        assert expired_page.items[0]["application_name"] == app.name
+        assert expired_page.items[0]["repository_name"] == repo.name
+        assert [item["finding_id"] for item in severity_page.items] == [str(false_positive.id)]
+
+
+def test_list_storage_cleanup_candidates_reports_inactive_old_and_failed_artifacts() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        inactive_scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        old_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=91),
+            result_summary={"artifacts": {"osv": {"storage_key": "old-osv.json", "digest": "old-digest"}}},
+        )
+        failed_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.failed,
+            result_summary={"sbom_stored": False},
+        )
+        db.add_all([inactive_scan, old_scan, failed_scan])
+        db.flush()
+        inactive = Sbom(
+            application_id=app.id,
+            scan_id=inactive_scan.id,
+            sbom_digest="inactive-cleanup",
+            storage_key="inactive-cleanup.json",
+            active=False,
+        )
+        db.add(inactive)
+        db.flush()
+
+        page = list_storage_cleanup_candidates(db=db, _=None)
+
+        by_reason = {item["reason"]: item for item in page.items}
+        assert set(by_reason) == {"inactive_sbom", "old_scan_artifact", "failed_scan_without_sbom"}
+        assert by_reason["inactive_sbom"]["storage_key"] == "inactive-cleanup.json"
+        assert by_reason["inactive_sbom"]["sbom_id"] == str(inactive.id)
+        assert by_reason["old_scan_artifact"]["storage_key"] == "old-osv.json"
+        assert by_reason["old_scan_artifact"]["digest"] == "old-digest"
+        assert by_reason["failed_scan_without_sbom"]["scan_id"] == str(failed_scan.id)
+
+
+def test_operational_workload_reports_manual_queues_and_dashboard_total() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical)
+        db.add_all(
+            [
+                Scan(application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.succeeded),
+                AuditLog(
+                    actor="api-token",
+                    role="operator",
+                    action="job.create",
+                    resource_type="job",
+                    resource_id="job-1",
+                    metadata_json={},
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="ai_fix",
+                    status="failed",
+                    provider="watchtower",
+                    metadata_json={},
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="github_issue",
+                    status="close_failed",
+                    provider="github",
+                    metadata_json={},
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = operational_workload(db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_item = {row.item: row for row in rows}
+        assert by_item["open_findings"].count == 1
+        assert by_item["manual_scans"].count == 1
+        assert by_item["manual_jobs"].count == 1
+        assert by_item["failed_remediation_actions"].count == 1
+        assert by_item["close_failed_issue_actions"].count == 1
+        assert by_item["close_failed_issue_actions"].status == "fail"
+        assert summary.manual_workload_items == 5
 
 
 def test_list_artifacts_returns_scan_artifact_context_and_filters() -> None:

@@ -521,6 +521,76 @@ class JobHealthOut(BaseModel):
     health_reason: str
 
 
+class JobRetryCandidateOut(BaseModel):
+    id: UUID
+    job_type: models.JobType
+    status: models.JobStatus
+    repository_id: UUID | None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    application_id: UUID | None
+    application_name: str | None = None
+    attempts: int
+    max_attempts: int
+    run_after: datetime
+    last_error: str | None
+    created_at: datetime
+
+
+class ScannerInventoryOut(BaseModel):
+    scan_id: UUID
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    status: models.ScanStatus
+    tool: str | None
+    tool_version: str | None
+    scanner_failure: bool
+    scanner_failures: list[Any] = Field(default_factory=list)
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class ExceptionReviewOut(BaseModel):
+    exception_type: str
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus | models.VexStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    review_date: datetime | None = None
+    expired: bool | None = None
+    justification: str | None = None
+
+
+class StorageCleanupCandidateOut(BaseModel):
+    reason: str
+    storage_key: str | None
+    digest: str | None = None
+    scan_id: UUID | None = None
+    sbom_id: UUID | None = None
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    created_at: datetime
+
+
+class OperationalWorkloadOut(BaseModel):
+    item: str
+    count: int
+    status: str
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -536,3 +606,4 @@ class DashboardSummary(BaseModel):
     isolated_applications: int
     scan_failure_rate_percent: float
     notification_failure_count: int
+    manual_workload_items: int

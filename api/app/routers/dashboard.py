@@ -10,6 +10,7 @@ from api.app.deps import Principal, get_principal
 from api.app.routers.isolated_lane import count_isolated_applications
 from api.app.routers.job_health import job_health_reason
 from api.app.routers.kpis import notification_failure_count, scan_failure_rate_percent
+from api.app.routers.operations import manual_workload_count
 from api.app.routers.sla import count_sla_breached_findings
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -50,6 +51,7 @@ def dashboard_summary(
     isolated_applications = count_isolated_applications(db)
     scan_failure_rate = scan_failure_rate_percent(db)
     notification_failures = notification_failure_count(db)
+    manual_workload_items = manual_workload_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -65,4 +67,5 @@ def dashboard_summary(
         isolated_applications=isolated_applications,
         scan_failure_rate_percent=scan_failure_rate,
         notification_failure_count=notification_failures,
+        manual_workload_items=manual_workload_items,
     )
