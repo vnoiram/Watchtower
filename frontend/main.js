@@ -33,12 +33,16 @@ const kpiSummary = document.querySelector("#kpi-summary");
 const mvpTargetCompliance = document.querySelector("#mvp-target-compliance");
 const repositoryRollout = document.querySelector("#repository-rollout");
 const repositoryInventoryGaps = document.querySelector("#repository-inventory-gaps");
+const repositoryClassificationReview = document.querySelector("#repository-classification-review");
 const retryCandidates = document.querySelector("#retry-candidates");
+const jobConcurrencyRisks = document.querySelector("#job-concurrency-risks");
 const scannerInventory = document.querySelector("#scanner-inventory");
+const scannerDbFreshness = document.querySelector("#scanner-db-freshness");
 const exceptionReview = document.querySelector("#exception-review");
 const storageCleanup = document.querySelector("#storage-cleanup");
 const operationalWorkload = document.querySelector("#operational-workload");
 const repositorySync = document.querySelector("#repository-sync");
+const importFailures = document.querySelector("#import-failures");
 const applicationDetection = document.querySelector("#application-detection");
 const scheduledScanCoverage = document.querySelector("#scheduled-scan-coverage");
 const dailyScanSlo = document.querySelector("#daily-scan-slo");
@@ -75,6 +79,7 @@ const restoreEvidence = document.querySelector("#restore-evidence");
 const riskAcceptance = document.querySelector("#risk-acceptance");
 const rolloutGaps = document.querySelector("#rollout-gaps");
 const githubHealth = document.querySelector("#github-health");
+const githubPermissions = document.querySelector("#github-permissions");
 const webhookIntake = document.querySelector("#webhook-intake");
 const scannerFailures = document.querySelector("#scanner-failures");
 const dependencyUpdates = document.querySelector("#dependency-updates");
@@ -223,6 +228,11 @@ function renderMetrics(summary) {
     ["container_coverage_gap_items", "Container gaps", "warn"],
     ["backup_evidence_gap_items", "Backup evidence", "warn"],
     ["restore_evidence_gap_items", "Restore evidence", "warn"],
+    ["job_concurrency_risk_items", "Job concurrency", "warn"],
+    ["import_failure_items", "Import failures", "danger"],
+    ["scanner_database_freshness_items", "Scanner DB", "warn"],
+    ["repository_classification_gap_items", "Repo classification", "warn"],
+    ["github_permission_issue_items", "GitHub permissions", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -615,6 +625,18 @@ function renderRepositoryInventoryGaps(page) {
     : `<tr><td colspan="5">No repository inventory gaps</td></tr>`;
 }
 
+function renderRepositoryClassificationReview(page) {
+  const rows = page.items || [];
+  repositoryClassificationReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.provider)}</td><td>${escapeHtml(item.visibility || "-")}/${escapeHtml(item.source_classification)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No repository classification gaps</td></tr>`;
+}
+
 function renderRetryCandidates(page) {
   const rows = page.items || [];
   retryCandidates.innerHTML = rows.length
@@ -627,6 +649,18 @@ function renderRetryCandidates(page) {
     : `<tr><td colspan="5">No retry candidates</td></tr>`;
 }
 
+function renderJobConcurrencyRisks(page) {
+  const rows = page.items || [];
+  jobConcurrencyRisks.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.risk_type)}</td><td>${escapeHtml(item.job_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.repository_name || item.application_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No job concurrency risks</td></tr>`;
+}
+
 function renderScannerInventory(page) {
   const rows = page.items || [];
   scannerInventory.innerHTML = rows.length
@@ -637,6 +671,18 @@ function renderScannerInventory(page) {
         )
         .join("")
     : `<tr><td colspan="5">No scanner runs</td></tr>`;
+}
+
+function renderScannerDbFreshness(page) {
+  const rows = page.items || [];
+  scannerDbFreshness.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.tool || "-")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.database_age_days ?? "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scanner DB freshness gaps</td></tr>`;
 }
 
 function renderExceptionReview(page) {
@@ -684,6 +730,18 @@ function renderRepositorySync(page) {
         )
         .join("")
     : `<tr><td colspan="5">No repository sync issues</td></tr>`;
+}
+
+function renderImportFailures(page) {
+  const rows = page.items || [];
+  importFailures.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.failure_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.repository_name || item.application_name || "-")}</td><td>${escapeHtml(item.provider || "-")}</td><td>${escapeHtml(item.error || "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No import failures</td></tr>`;
 }
 
 function renderApplicationDetection(page) {
@@ -1131,6 +1189,18 @@ function renderGithubHealth(rows) {
         )
         .join("")
     : `<tr><td colspan="4">No GitHub integration checks</td></tr>`;
+}
+
+function renderGithubPermissions(page) {
+  const rows = page.items || [];
+  githubPermissions.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.action || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No GitHub permission posture items</td></tr>`;
 }
 
 function renderWebhookIntake(page) {
@@ -1693,12 +1763,16 @@ async function refresh() {
   mvpTargetCompliance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   repositoryRollout.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   repositoryInventoryGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  repositoryClassificationReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   retryCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  jobConcurrencyRisks.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scannerInventory.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scannerDbFreshness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   exceptionReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   storageCleanup.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   operationalWorkload.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   repositorySync.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  importFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   applicationDetection.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scheduledScanCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   dailyScanSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1739,6 +1813,7 @@ async function refresh() {
   riskAcceptance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   rolloutGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   githubHealth.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  githubPermissions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   webhookIntake.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scannerFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   dependencyUpdates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1820,12 +1895,16 @@ async function refresh() {
       mvpTargetCompliancePage,
       rolloutPage,
       repositoryInventoryGapPage,
+      repositoryClassificationReviewPage,
       retryCandidatePage,
+      jobConcurrencyRiskPage,
       scannerInventoryPage,
+      scannerDbFreshnessPage,
       exceptionReviewPage,
       storageCleanupPage,
       operationalWorkloadPage,
       repositorySyncPage,
+      importFailurePage,
       applicationDetectionPage,
       scheduledScanCoveragePage,
       dailyScanSloPage,
@@ -1866,6 +1945,7 @@ async function refresh() {
       riskAcceptancePage,
       rolloutGapPage,
       githubHealthPage,
+      githubPermissionPage,
       webhookIntakePage,
       scannerFailurePage,
       dependencyUpdatePage,
@@ -1946,12 +2026,16 @@ async function refresh() {
       loadJson("/kpis/targets"),
       loadJson("/rollout/repositories?limit=10"),
       loadJson("/rollout/repository-inventory-gaps?limit=10"),
+      loadJson("/repositories/classification-review?limit=10"),
       loadJson("/jobs/retry-candidates?limit=10"),
+      loadJson("/jobs/concurrency-risks?limit=10"),
       loadJson("/scanner-inventory?limit=10"),
+      loadJson("/scanners/database-freshness?limit=10"),
       loadJson("/exceptions?limit=10"),
       loadJson("/storage/cleanup-candidates?limit=10"),
       loadJson("/operations/workload"),
       loadJson("/repository-sync?stale=true&limit=10"),
+      loadJson("/repository-sync/import-failures?limit=10"),
       loadJson("/application-detection?limit=10"),
       loadJson("/scheduled-scan-coverage?missing=true&limit=10"),
       loadJson("/scans/daily-slo?breached=true&limit=10"),
@@ -1992,6 +2076,7 @@ async function refresh() {
       loadJson("/governance/risk-acceptance?limit=10"),
       loadJson("/rollout/gaps?limit=10"),
       loadJson("/integrations/github-health"),
+      loadJson("/integrations/github-permissions?limit=10"),
       loadJson("/integrations/webhooks?limit=10"),
       loadJson("/scanners/failures?limit=10"),
       loadJson("/remediation/dependency-updates?limit=10"),
@@ -2071,12 +2156,16 @@ async function refresh() {
     renderMvpTargetCompliance(mvpTargetCompliancePage);
     renderRepositoryRollout(rolloutPage);
     renderRepositoryInventoryGaps(repositoryInventoryGapPage);
+    renderRepositoryClassificationReview(repositoryClassificationReviewPage);
     renderRetryCandidates(retryCandidatePage);
+    renderJobConcurrencyRisks(jobConcurrencyRiskPage);
     renderScannerInventory(scannerInventoryPage);
+    renderScannerDbFreshness(scannerDbFreshnessPage);
     renderExceptionReview(exceptionReviewPage);
     renderStorageCleanup(storageCleanupPage);
     renderOperationalWorkload(operationalWorkloadPage);
     renderRepositorySync(repositorySyncPage);
+    renderImportFailures(importFailurePage);
     renderApplicationDetection(applicationDetectionPage);
     renderScheduledScanCoverage(scheduledScanCoveragePage);
     renderDailyScanSlo(dailyScanSloPage);
@@ -2117,6 +2206,7 @@ async function refresh() {
     renderRiskAcceptance(riskAcceptancePage);
     renderRolloutGaps(rolloutGapPage);
     renderGithubHealth(githubHealthPage);
+    renderGithubPermissions(githubPermissionPage);
     renderWebhookIntake(webhookIntakePage);
     renderScannerFailures(scannerFailurePage);
     renderDependencyUpdates(dependencyUpdatePage);
@@ -2196,12 +2286,16 @@ async function refresh() {
     mvpTargetCompliance.innerHTML = `<tr><td colspan="5">Unable to load MVP target compliance</td></tr>`;
     repositoryRollout.innerHTML = `<tr><td colspan="5">Unable to load repository rollout</td></tr>`;
     repositoryInventoryGaps.innerHTML = `<tr><td colspan="5">Unable to load repository inventory gaps</td></tr>`;
+    repositoryClassificationReview.innerHTML = `<tr><td colspan="5">Unable to load repository classification review</td></tr>`;
     retryCandidates.innerHTML = `<tr><td colspan="5">Unable to load retry candidates</td></tr>`;
+    jobConcurrencyRisks.innerHTML = `<tr><td colspan="5">Unable to load job concurrency risks</td></tr>`;
     scannerInventory.innerHTML = `<tr><td colspan="5">Unable to load scanner inventory</td></tr>`;
+    scannerDbFreshness.innerHTML = `<tr><td colspan="5">Unable to load scanner DB freshness</td></tr>`;
     exceptionReview.innerHTML = `<tr><td colspan="5">Unable to load exceptions</td></tr>`;
     storageCleanup.innerHTML = `<tr><td colspan="5">Unable to load cleanup candidates</td></tr>`;
     operationalWorkload.innerHTML = `<tr><td colspan="4">Unable to load operational workload</td></tr>`;
     repositorySync.innerHTML = `<tr><td colspan="5">Unable to load repository sync coverage</td></tr>`;
+    importFailures.innerHTML = `<tr><td colspan="5">Unable to load import failures</td></tr>`;
     applicationDetection.innerHTML = `<tr><td colspan="5">Unable to load application detection coverage</td></tr>`;
     scheduledScanCoverage.innerHTML = `<tr><td colspan="5">Unable to load scheduled scan coverage</td></tr>`;
     dailyScanSlo.innerHTML = `<tr><td colspan="5">Unable to load daily scan SLO</td></tr>`;
@@ -2242,6 +2336,7 @@ async function refresh() {
     riskAcceptance.innerHTML = `<tr><td colspan="5">Unable to load risk acceptance review</td></tr>`;
     rolloutGaps.innerHTML = `<tr><td colspan="5">Unable to load rollout gaps</td></tr>`;
     githubHealth.innerHTML = `<tr><td colspan="4">Unable to load GitHub integration health</td></tr>`;
+    githubPermissions.innerHTML = `<tr><td colspan="5">Unable to load GitHub permission posture</td></tr>`;
     webhookIntake.innerHTML = `<tr><td colspan="5">Unable to load webhook intake</td></tr>`;
     scannerFailures.innerHTML = `<tr><td colspan="5">Unable to load scanner failures</td></tr>`;
     dependencyUpdates.innerHTML = `<tr><td colspan="5">Unable to load dependency updates</td></tr>`;

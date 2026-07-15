@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -108,6 +109,29 @@ def list_job_backlog(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/concurrency-risks", response_model=schemas.CursorPage)
+def list_job_concurrency_risks(
+    limit: int = 50,
+    risk_type: str | None = None,
+    job_type: models.JobType | None = None,
+    status: models.JobStatus | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = job_concurrency_risk_items(db)
+    if risk_type:
+        items = [item for item in items if item["risk_type"] == risk_type]
+    if job_type:
+        items = [item for item in items if item["job_type"] == job_type.value]
+    if status:
+        items = [item for item in items if item["status"] == status.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def job_concurrency_risk_count(db: Session) -> int:
+    return len(job_concurrency_risk_items(db))
+
+
 def job_backlog_items(db: Session) -> list[dict]:
     now = datetime.now(timezone.utc)
     stmt = (
@@ -155,6 +179,49 @@ def job_backlog_items(db: Session) -> list[dict]:
     return items
 
 
+def job_concurrency_risk_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    jobs = list(
+        db.scalars(
+            select(models.Job)
+            .where(
+                models.Job.status.in_(
+                    [
+                        models.JobStatus.queued,
+                        models.JobStatus.running,
+                        models.JobStatus.failed,
+                        models.JobStatus.timed_out,
+                        models.JobStatus.cancelled,
+                    ]
+                )
+            )
+            .order_by(models.Job.created_at.asc(), models.Job.id.asc())
+        )
+    )
+    active_by_key: dict[str, list[models.Job]] = {}
+    for job in jobs:
+        if job.status in {models.JobStatus.queued, models.JobStatus.running}:
+            active_by_key.setdefault(_job_concurrency_key(job), []).append(job)
+    duplicate_ids = {
+        job.id: len(group)
+        for group in active_by_key.values()
+        if len(group) > 1
+        for job in group
+    }
+    repositories = {repo.id: repo for repo in db.scalars(select(models.Repository))}
+    applications = {app.id: app for app in db.scalars(select(models.Application))}
+    items = []
+    for job in jobs:
+        duplicate_count = duplicate_ids.get(job.id, 0)
+        if duplicate_count:
+            items.append(_job_concurrency_item("duplicate_active_job", job, duplicate_count, now, repositories, applications, "Multiple queued/running jobs target the same work"))
+        if job.status == models.JobStatus.running and job.locked_at and _before(job.locked_at, now - timedelta(hours=1)):
+            items.append(_job_concurrency_item("stale_lock", job, duplicate_count, now, repositories, applications, "Running job lock is older than 1 hour"))
+        if job.status in {models.JobStatus.failed, models.JobStatus.timed_out, models.JobStatus.cancelled} and job.attempts >= job.max_attempts:
+            items.append(_job_concurrency_item("retry_exhausted", job, duplicate_count, now, repositories, applications, "Job exhausted retry attempts"))
+    return items
+
+
 def _job_backlog_reason(job: models.Job, now: datetime) -> str | None:
     if job.status == models.JobStatus.queued and _before(job.run_after, now):
         return "stale_queued" if _age_hours(job.created_at, now) >= 24 else "queued"
@@ -171,6 +238,49 @@ def _age_hours(value, now: datetime) -> int:
     if value.tzinfo is None:
         now = now.replace(tzinfo=None)
     return max(int((now - value).total_seconds() // 3600), 0)
+
+
+def _job_concurrency_key(job: models.Job) -> str:
+    payload = json.dumps(job.payload or {}, sort_keys=True, default=str)
+    return "|".join(
+        [
+            job.job_type.value,
+            str(job.repository_id or ""),
+            str(job.application_id or ""),
+            payload,
+        ]
+    )
+
+
+def _job_concurrency_item(
+    risk_type: str,
+    job: models.Job,
+    duplicate_count: int,
+    now: datetime,
+    repositories: dict,
+    applications: dict,
+    detail: str,
+) -> dict:
+    repository = repositories.get(job.repository_id) if job.repository_id else None
+    application = applications.get(job.application_id) if job.application_id else None
+    return schemas.JobConcurrencyRiskOut(
+        risk_type=risk_type,
+        job_id=job.id,
+        job_type=job.job_type,
+        status=job.status,
+        repository_id=job.repository_id,
+        repository_owner=repository.owner if repository else None,
+        repository_name=repository.name if repository else None,
+        application_id=job.application_id,
+        application_name=application.name if application else None,
+        duplicate_count=duplicate_count,
+        locked_by=job.locked_by,
+        locked_at=job.locked_at,
+        attempts=job.attempts,
+        max_attempts=job.max_attempts,
+        detail=f"{detail}; age_hours={_age_hours(job.created_at, now)}",
+        created_at=job.created_at,
+    ).model_dump(mode="json")
 
 
 def _before(value, reference: datetime) -> bool:

@@ -41,8 +41,29 @@ def list_webhook_intake(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/github-permissions", response_model=schemas.CursorPage)
+def list_github_permissions(
+    limit: int = 50,
+    check: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    items = github_permission_posture_items(db, settings)
+    if check:
+        items = [item for item in items if item["check"] == check]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def github_integration_issue_count(db: Session, settings: Settings) -> int:
     return sum(1 for item in github_integration_health_items(db, settings) if item.status != "ok")
+
+
+def github_permission_issue_count(db: Session, settings: Settings) -> int:
+    return sum(max(item["count"], 1) for item in github_permission_posture_items(db, settings) if item["status"] != "ok")
 
 
 def github_integration_health_items(db: Session, settings: Settings) -> list[schemas.GitHubIntegrationHealthOut]:
@@ -88,6 +109,60 @@ def github_integration_health_items(db: Session, settings: Settings) -> list[sch
     ]
 
 
+def github_permission_posture_items(db: Session, settings: Settings) -> list[dict]:
+    auth_failures = _github_auth_failure_count(db)
+    permission_logs = _github_permission_logs(db)
+    items = [
+        _permission_check(
+            "github_app_credentials",
+            "ok" if settings.github_app_id and settings.github_private_key else "warn",
+            1 if settings.github_app_id and settings.github_private_key else 0,
+            None,
+            "GitHub App credentials are configured" if settings.github_app_id and settings.github_private_key else "GitHub App credentials are not fully configured",
+        ),
+        _permission_check(
+            "github_pat_configured",
+            "warn" if settings.github_token else "ok",
+            1 if settings.github_token else 0,
+            None,
+            "GitHub PAT is configured; prefer GitHub App credentials" if settings.github_token else "GitHub PAT is not configured",
+        ),
+        _permission_check(
+            "github_webhook_secret",
+            "ok" if settings.github_webhook_secret else "warn",
+            1 if settings.github_webhook_secret else 0,
+            None,
+            "Webhook signature secret is configured" if settings.github_webhook_secret else "Webhook signature secret is missing",
+        ),
+        _permission_check(
+            "default_api_token",
+            "fail" if settings.api_token == "change-me" else "ok",
+            1 if settings.api_token == "change-me" else 0,
+            None,
+            "API token uses the default value" if settings.api_token == "change-me" else "API token is customized",
+        ),
+        _permission_check(
+            "github_auth_failures",
+            "warn" if auth_failures else "ok",
+            auth_failures,
+            None,
+            "GitHub jobs or actions reported auth/permission failures",
+        ),
+        _permission_check(
+            "permission_change_audit",
+            "warn" if permission_logs else "ok",
+            len(permission_logs),
+            permission_logs[0] if permission_logs else None,
+            "GitHub permission or credential change audit events",
+        ),
+    ]
+    items.extend(
+        _permission_check("permission_change_audit_event", "warn", 1, log, "GitHub permission or credential change audit event")
+        for log in permission_logs
+    )
+    return items
+
+
 def webhook_intake_items(db: Session) -> list[dict]:
     jobs = list(
         db.scalars(
@@ -110,6 +185,44 @@ def webhook_intake_items(db: Session) -> list[dict]:
         ).model_dump(mode="json")
         for job, (event, repository) in parsed
     ]
+
+
+def _github_auth_failure_count(db: Session) -> int:
+    texts = []
+    for job in db.scalars(select(models.Job).where(models.Job.job_type.in_([models.JobType.repository_sync, models.JobType.scan]))):
+        texts.append(job.last_error or "")
+    texts.extend(_action_error(action) for action in _github_issue_error_actions(db))
+    return _count_matching(texts, "auth", "permission", "credential", "401", "403")
+
+
+def _github_permission_logs(db: Session) -> list[models.AuditLog]:
+    logs = []
+    for log in db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())):
+        text = f"{log.action} {log.resource_type} {log.resource_id} {log.metadata_json}".lower()
+        if "github" in text and any(token in text for token in ["permission", "credential", "token", "app", "webhook"]):
+            logs.append(log)
+    return logs
+
+
+def _permission_check(
+    check: str,
+    status: str,
+    count: int,
+    audit_log: models.AuditLog | None,
+    detail: str,
+) -> dict:
+    return schemas.GitHubPermissionPostureOut(
+        check=check,
+        status=status,
+        count=count,
+        action=audit_log.action if audit_log else None,
+        actor=audit_log.actor if audit_log else None,
+        role=audit_log.role if audit_log else None,
+        resource_type=audit_log.resource_type if audit_log else None,
+        resource_id=audit_log.resource_id if audit_log else None,
+        created_at=audit_log.created_at if audit_log else None,
+        detail=detail,
+    ).model_dump(mode="json")
 
 
 def _github_issue_error_actions(db: Session) -> list[models.RemediationAction]:

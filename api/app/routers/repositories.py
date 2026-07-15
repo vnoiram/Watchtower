@@ -56,3 +56,79 @@ def list_repositories(
         rows = rows[:limit]
     return schemas.CursorPage(items=[schemas.RepositoryOut.model_validate(row).model_dump(mode="json") for row in rows], next_cursor=next_cursor)
 
+
+@router.get("/classification-review", response_model=schemas.CursorPage)
+def list_repository_classification_review(
+    limit: int = 50,
+    gap_type: str | None = None,
+    provider: models.RepositoryProvider | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = repository_classification_review_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if provider:
+        items = [item for item in items if item["provider"] == provider.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def repository_classification_gap_count(db: Session) -> int:
+    return len(repository_classification_review_items(db))
+
+
+def repository_classification_review_items(db: Session) -> list[dict]:
+    applications_by_repository: dict = {}
+    for application in db.scalars(select(models.Application)):
+        applications_by_repository.setdefault(application.repository_id, []).append(application)
+    items = []
+    for repository in db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc())):
+        applications = applications_by_repository.get(repository.id, [])
+        if not repository.visibility:
+            items.append(_classification_item("missing_visibility", repository, None, "Repository visibility is not recorded"))
+        if repository.visibility and _classification_mismatch(repository):
+            items.append(_classification_item("classification_mismatch", repository, None, "Visibility and source classification look inconsistent"))
+        if repository.source_classification == models.SourceClassification.isolated and repository.provider != models.RepositoryProvider.isolated:
+            items.append(_classification_item("isolated_provider_mismatch", repository, None, "Isolated classification should use the isolated provider"))
+        if repository.provider == models.RepositoryProvider.isolated and repository.source_classification != models.SourceClassification.isolated:
+            items.append(_classification_item("isolated_provider_mismatch", repository, None, "Isolated provider should use isolated classification"))
+        if repository.archived:
+            for application in applications:
+                if application.lifecycle not in {models.Lifecycle.archived, models.Lifecycle.deprecated}:
+                    items.append(_classification_item("archived_active_app", repository, application, "Archived repository has an active application record"))
+    return items
+
+
+def _classification_mismatch(repository: models.Repository) -> bool:
+    visibility = (repository.visibility or "").lower()
+    if visibility == "public" and repository.source_classification in {
+        models.SourceClassification.private,
+        models.SourceClassification.restricted,
+        models.SourceClassification.isolated,
+    }:
+        return True
+    if visibility in {"private", "internal"} and repository.source_classification == models.SourceClassification.public:
+        return True
+    return False
+
+
+def _classification_item(
+    gap_type: str,
+    repository: models.Repository,
+    application: models.Application | None,
+    detail: str,
+) -> dict:
+    return schemas.RepositoryClassificationReviewOut(
+        gap_type=gap_type,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        provider=repository.provider,
+        visibility=repository.visibility,
+        source_classification=repository.source_classification,
+        archived=repository.archived,
+        fork=repository.fork,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        detail=detail,
+    ).model_dump(mode="json")
