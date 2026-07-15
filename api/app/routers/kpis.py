@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
@@ -106,6 +107,58 @@ def kpi_summary(
     ]
 
 
+@router.get("/efficiency", response_model=list[schemas.KpiMetricOut])
+def efficiency_kpis(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    findings = list(db.scalars(select(models.Finding)))
+    notifications = list(db.scalars(select(models.Notification).where(models.Notification.status == "sent")))
+    actions = list(db.scalars(select(models.RemediationAction)))
+    issue_actions = [
+        action for action in actions if action.action_type == "github_issue" and action.status in {"created", "closed"}
+    ]
+    auto_resolved = [
+        finding
+        for finding in findings
+        if finding.status == models.FindingStatus.resolved
+        and finding.resolved_at is not None
+        and _has_successful_action_after(actions, finding)
+    ]
+    return [
+        _metric(
+            "mean_time_to_detect_hours",
+            _mean_hours([_scan_to_finding_hours(db, finding) for finding in findings]),
+            "hours",
+            "Average time from first scan to finding creation",
+        ),
+        _metric(
+            "mean_time_to_notify_hours",
+            _mean_hours([_finding_to_notification_hours(db, notification) for notification in notifications]),
+            "hours",
+            "Average time from finding creation to sent notification",
+        ),
+        _metric(
+            "mean_time_to_remediate_hours",
+            _mean_hours([_finding_to_resolution_hours(finding) for finding in findings]),
+            "hours",
+            "Average time from finding creation to resolution",
+        ),
+        _metric(
+            "issue_creation_rate_percent",
+            _percent(len({action.finding_id for action in issue_actions}), len(findings)),
+            "percent",
+            "Findings with a created or closed GitHub issue action",
+        ),
+        _metric(
+            "auto_resolution_rate_percent",
+            _percent(len(auto_resolved), len([finding for finding in findings if finding.status == models.FindingStatus.resolved])),
+            "percent",
+            "Resolved findings with successful remediation evidence",
+        ),
+    ]
+
+
 def scan_failure_rate_percent(db: Session) -> float:
     scans = list(db.scalars(select(models.Scan)))
     failed = sum(1 for scan in scans if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out})
@@ -133,3 +186,55 @@ def _after_cutoff(value: datetime, cutoff: datetime) -> bool:
     if value.tzinfo is None:
         cutoff = cutoff.replace(tzinfo=None)
     return value >= cutoff
+
+
+def _mean_hours(values: list[float | None]) -> float:
+    present = [value for value in values if value is not None]
+    return round(sum(present) / len(present), 1) if present else 0.0
+
+
+def _scan_to_finding_hours(db: Session, finding: models.Finding) -> float | None:
+    if not finding.first_seen_scan_id:
+        return None
+    scan = db.get(models.Scan, finding.first_seen_scan_id)
+    if not scan:
+        return None
+    return _hours_between(scan.created_at, finding.created_at)
+
+
+def _finding_to_notification_hours(db: Session, notification: models.Notification) -> float | None:
+    finding_id = (notification.metadata_json or {}).get("finding_id")
+    if not finding_id:
+        return None
+    try:
+        finding_uuid = UUID(str(finding_id))
+    except ValueError:
+        return None
+    finding = db.get(models.Finding, finding_uuid)
+    if not finding or not notification.sent_at:
+        return None
+    return _hours_between(finding.created_at, notification.sent_at)
+
+
+def _finding_to_resolution_hours(finding: models.Finding) -> float | None:
+    if finding.status != models.FindingStatus.resolved or not finding.resolved_at:
+        return None
+    return _hours_between(finding.created_at, finding.resolved_at)
+
+
+def _has_successful_action_after(actions: list[models.RemediationAction], finding: models.Finding) -> bool:
+    for action in actions:
+        metadata = action.metadata_json or {}
+        if action.finding_id != finding.id:
+            continue
+        if action.status in {"succeeded", "merged", "closed"} or metadata.get("validation_status") == "succeeded":
+            return True
+    return False
+
+
+def _hours_between(start: datetime, end: datetime) -> float:
+    if start.tzinfo is None and end.tzinfo is not None:
+        end = end.replace(tzinfo=None)
+    if start.tzinfo is not None and end.tzinfo is None:
+        start = start.replace(tzinfo=None)
+    return max(round((end - start).total_seconds() / 3600, 1), 0.0)

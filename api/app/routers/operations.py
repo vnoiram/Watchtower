@@ -238,6 +238,53 @@ def weekly_review(
     ]
 
 
+@router.get("/manual-actions", response_model=schemas.CursorPage)
+def list_manual_actions(
+    limit: int = 50,
+    action: str | None = None,
+    actor: str | None = None,
+    days: int = 30,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = manual_action_items(db, days=days)
+    if action:
+        items = [item for item in items if item["action"] == action]
+    if actor:
+        items = [item for item in items if item["actor"] == actor]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def manual_action_count(db: Session, days: int = 30) -> int:
+    return len(manual_action_items(db, days=days))
+
+
+def manual_action_items(db: Session, days: int = 30) -> list[dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    stmt = select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())
+    items = []
+    for audit_log in db.scalars(stmt):
+        if _before(audit_log.created_at, cutoff):
+            continue
+        reason = _manual_action_reason(audit_log)
+        if not reason:
+            continue
+        items.append(
+            schemas.ManualActionOut(
+                id=audit_log.id,
+                actor=audit_log.actor,
+                role=audit_log.role,
+                action=audit_log.action,
+                resource_type=audit_log.resource_type,
+                resource_id=audit_log.resource_id,
+                metadata_json=audit_log.metadata_json,
+                created_at=audit_log.created_at,
+                reason=reason,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
 def manual_workload_count(db: Session) -> int:
     return sum(row.count for row in _workload_rows(db))
 
@@ -312,6 +359,24 @@ def _source_sbom_artifact_count(db: Session) -> int:
             if artifacts["source_sbom"].get("storage_key"):
                 count += 1
     return count
+
+
+def _manual_action_reason(audit_log: models.AuditLog) -> str | None:
+    manual_actions = {
+        "scan.create": "manual_scan",
+        "job.create": "manual_job",
+        "repository.scan.enqueue": "manual_scan_enqueue",
+        "finding.github_issue.enqueue": "manual_issue",
+    }
+    if audit_log.action in manual_actions:
+        return manual_actions[audit_log.action]
+    metadata = audit_log.metadata_json or {}
+    searchable = f"{audit_log.action} {metadata}".lower()
+    if "dependency" in searchable:
+        return "manual_dependency_update"
+    if "manual" in searchable:
+        return "manual"
+    return None
 
 
 def _recent_jobs(db: Session, job_type: models.JobType, cutoff: datetime) -> list[models.Job]:

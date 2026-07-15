@@ -12,6 +12,7 @@ from api.app.routers import (
     dashboard,
     exceptions,
     findings,
+    governance,
     github,
     isolated_lane,
     job_health,
@@ -62,6 +63,7 @@ app.include_router(auto_merge.router, prefix=api_prefix)
 app.include_router(notifications.router, prefix=api_prefix)
 app.include_router(dashboard.router, prefix=api_prefix)
 app.include_router(github.router, prefix=api_prefix)
+app.include_router(governance.router, prefix=api_prefix)
 app.include_router(vex.router, prefix=api_prefix)
 app.include_router(scan_health.router, prefix=api_prefix)
 app.include_router(scanner_inventory.router, prefix=api_prefix)
