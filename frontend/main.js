@@ -89,6 +89,11 @@ const findingLifecycle = document.querySelector("#finding-lifecycle");
 const vexInvalidation = document.querySelector("#vex-invalidation");
 const repositoryDrift = document.querySelector("#repository-drift");
 const autoMergePilot = document.querySelector("#auto-merge-pilot");
+const controlEvidence = document.querySelector("#control-evidence");
+const findingEvidenceGaps = document.querySelector("#finding-evidence-gaps");
+const jobBacklog = document.querySelector("#job-backlog");
+const auditEvidenceGaps = document.querySelector("#audit-evidence-gaps");
+const scanEvidenceQuality = document.querySelector("#scan-evidence-quality");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -169,6 +174,7 @@ function renderMetrics(summary) {
     ["remediation_coverage_items", "Remediation coverage", "danger"],
     ["monthly_review_items", "Monthly review", "warn"],
     ["phase_readiness_items", "Phase readiness", "warn"],
+    ["control_evidence_items", "Control evidence", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -1216,6 +1222,65 @@ function renderAutoMergePilot(page) {
     : `<tr><td colspan="5">No auto-merge pilot items</td></tr>`;
 }
 
+function renderControlEvidence(rows) {
+  controlEvidence.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td colspan="2">${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No control evidence gaps</td></tr>`;
+}
+
+function renderFindingEvidenceGaps(page) {
+  const rows = page.items || [];
+  findingEvidenceGaps.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No finding evidence gaps</td></tr>`;
+}
+
+function renderJobBacklog(page) {
+  const rows = page.items || [];
+  jobBacklog.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.job_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.age_hours)}h</td><td>${escapeHtml(item.last_error || "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No job backlog items</td></tr>`;
+}
+
+function renderAuditEvidenceGaps(page) {
+  const rows = page.items || [];
+  auditEvidenceGaps.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.resource_type)}</td><td>${escapeHtml(item.expected_action)}</td><td>${escapeHtml(item.actor || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No audit evidence gaps</td></tr>`;
+}
+
+function renderScanEvidenceQuality(page) {
+  const rows = page.items || [];
+  scanEvidenceQuality.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.tool || "-")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scan evidence quality gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1306,6 +1371,11 @@ async function refresh() {
   vexInvalidation.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   repositoryDrift.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   autoMergePilot.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  controlEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  findingEvidenceGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  jobBacklog.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  auditEvidenceGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scanEvidenceQuality.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -1398,6 +1468,11 @@ async function refresh() {
       vexInvalidationPage,
       repositoryDriftPage,
       autoMergePilotPage,
+      controlEvidencePage,
+      findingEvidenceGapPage,
+      jobBacklogPage,
+      auditEvidenceGapPage,
+      scanEvidenceQualityPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -1489,6 +1564,11 @@ async function refresh() {
       loadJson("/vex/invalidation-candidates?limit=10"),
       loadJson("/rollout/repository-drift?limit=10"),
       loadJson("/auto-merge/pilot-readiness?limit=10"),
+      loadJson("/operations/control-evidence"),
+      loadJson("/findings/evidence-gaps?limit=10"),
+      loadJson("/jobs/backlog?limit=10"),
+      loadJson("/audit/evidence-gaps?limit=10"),
+      loadJson("/scans/evidence-quality?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -1579,6 +1659,11 @@ async function refresh() {
     renderVexInvalidation(vexInvalidationPage);
     renderRepositoryDrift(repositoryDriftPage);
     renderAutoMergePilot(autoMergePilotPage);
+    renderControlEvidence(controlEvidencePage);
+    renderFindingEvidenceGaps(findingEvidenceGapPage);
+    renderJobBacklog(jobBacklogPage);
+    renderAuditEvidenceGaps(auditEvidenceGapPage);
+    renderScanEvidenceQuality(scanEvidenceQualityPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1669,6 +1754,11 @@ async function refresh() {
     vexInvalidation.innerHTML = `<tr><td colspan="5">Unable to load VEX invalidation candidates</td></tr>`;
     repositoryDrift.innerHTML = `<tr><td colspan="5">Unable to load repository drift</td></tr>`;
     autoMergePilot.innerHTML = `<tr><td colspan="5">Unable to load auto-merge pilot readiness</td></tr>`;
+    controlEvidence.innerHTML = `<tr><td colspan="5">Unable to load control evidence</td></tr>`;
+    findingEvidenceGaps.innerHTML = `<tr><td colspan="5">Unable to load finding evidence gaps</td></tr>`;
+    jobBacklog.innerHTML = `<tr><td colspan="5">Unable to load job backlog</td></tr>`;
+    auditEvidenceGaps.innerHTML = `<tr><td colspan="5">Unable to load audit evidence gaps</td></tr>`;
+    scanEvidenceQuality.innerHTML = `<tr><td colspan="5">Unable to load scan evidence quality</td></tr>`;
   }
 }
 

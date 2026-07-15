@@ -362,6 +362,14 @@ def phase_readiness(
     return phase_readiness_items(db)
 
 
+@router.get("/control-evidence", response_model=list[schemas.ControlEvidenceOut])
+def control_evidence(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return control_evidence_items(db)
+
+
 def failure_signal_count(db: Session) -> int:
     return len(failure_signal_items(db))
 
@@ -372,6 +380,10 @@ def monthly_review_count(db: Session) -> int:
 
 def phase_readiness_count(db: Session) -> int:
     return sum(item.count for item in phase_readiness_items(db) if item.status != "ok")
+
+
+def control_evidence_count(db: Session) -> int:
+    return sum(item.count for item in control_evidence_items(db) if item.status != "ok")
 
 
 def manual_action_count(db: Session, days: int = 30) -> int:
@@ -597,6 +609,68 @@ def phase_readiness_items(db: Session) -> list[schemas.PhaseReadinessOut]:
         _phase("phase_9", "rollout_owner_sbom", missing_owner + missing_sbom, "Active application owner or SBOM rollout gaps"),
         _phase("phase_10", "isolated_lane", 0 if isolated_repositories else 1, "Restricted or isolated lane inventory exists"),
         _phase("phase_11", "auto_merge_pilot", auto_merge_blocked, "Blocked or failed AI fix actions before auto-merge pilot"),
+    ]
+
+
+def control_evidence_items(db: Session) -> list[schemas.ControlEvidenceOut]:
+    scans = list(db.scalars(select(models.Scan)))
+    sboms = list(db.scalars(select(models.Sbom)))
+    findings = list(db.scalars(select(models.Finding)))
+    actions = list(db.scalars(select(models.RemediationAction)))
+    notifications = list(db.scalars(select(models.Notification)))
+    vex_statements = list(db.scalars(select(models.VexStatement)))
+    audit_logs = list(db.scalars(select(models.AuditLog)))
+
+    source_sboms = [sbom for sbom in sboms if sbom.active and sbom.sbom_kind == "source"]
+    source_sbom_artifacts = _source_sbom_artifact_count(db)
+    missing_scan_summary = sum(1 for scan in scans if not (scan.result_summary or {}))
+    open_critical_high = [
+        finding
+        for finding in findings
+        if finding.status == models.FindingStatus.open
+        and finding.severity in {models.Severity.critical, models.Severity.high}
+    ]
+    notified_finding_ids = {
+        _metadata_uuid(notification.metadata_json, "finding_id")
+        for notification in notifications
+        if notification.status == "sent"
+    }
+    notified_finding_ids.discard(None)
+    unnotified = sum(1 for finding in open_critical_high if finding.id not in notified_finding_ids)
+    fixable = [finding for finding in findings if finding.fixed_version and finding.status == models.FindingStatus.open]
+    remediated_finding_ids = {
+        action.finding_id
+        for action in actions
+        if action.action_type == "github_issue" or action.branch or action.url or (action.metadata_json or {}).get("pull_request_url")
+    }
+    missing_issue_pr = sum(1 for finding in fixable if finding.id not in remediated_finding_ids)
+    validation_missing = sum(
+        1
+        for action in actions
+        if action.status in {"created", "running", "pending", "open", "queued"}
+        and (action.metadata_json or {}).get("validation_status") != "succeeded"
+    )
+    unresolved_closures = _resolved_without_closure_count(db)
+    incomplete_vex = sum(1 for vex in vex_statements if not vex.approved_by or not vex.review_date)
+    missing_audit = (
+        sum(1 for vex in vex_statements if not _has_audit_log(audit_logs, "vex", str(vex.id)))
+        + sum(1 for action in actions if not _has_audit_log(audit_logs, "remediation_action", str(action.id)))
+    )
+
+    return [
+        _control_evidence(
+            "source_sbom_artifacts",
+            "warn" if source_sbom_artifacts < len(source_sboms) else "ok",
+            max(len(source_sboms) - source_sbom_artifacts, 0),
+            "Active source SBOMs without recorded storage artifact",
+        ),
+        _control_evidence("scan_result_summary", "warn" if missing_scan_summary else "ok", missing_scan_summary, "Scans without result summary evidence"),
+        _control_evidence("critical_high_notifications", "fail" if unnotified else "ok", unnotified, "Open critical/high findings without sent notification evidence"),
+        _control_evidence("issue_or_pr_evidence", "warn" if missing_issue_pr else "ok", missing_issue_pr, "Fixable open findings without issue or PR evidence"),
+        _control_evidence("validation_evidence", "warn" if validation_missing else "ok", validation_missing, "Open remediation actions without successful validation evidence"),
+        _control_evidence("closure_evidence", "warn" if unresolved_closures else "ok", unresolved_closures, "Resolved findings without closure evidence"),
+        _control_evidence("vex_approval_evidence", "warn" if incomplete_vex else "ok", incomplete_vex, "VEX statements without approval or review evidence"),
+        _control_evidence("audit_trail_evidence", "warn" if missing_audit else "ok", missing_audit, "VEX or remediation records without audit trail evidence"),
     ]
 
 
@@ -849,6 +923,10 @@ def _phase(phase: str, check: str, count: int, detail: str) -> schemas.PhaseRead
     )
 
 
+def _control_evidence(check: str, status: str, count: int, detail: str) -> schemas.ControlEvidenceOut:
+    return schemas.ControlEvidenceOut(check=check, status=status, count=count, detail=detail)
+
+
 def _count(db: Session, stmt) -> int:
     subquery = stmt.subquery()
     return db.scalar(select(func.count()).select_from(subquery)) or 0
@@ -867,6 +945,36 @@ def _source_sbom_artifact_count(db: Session) -> int:
             if artifacts["source_sbom"].get("storage_key"):
                 count += 1
     return count
+
+
+def _resolved_without_closure_count(db: Session) -> int:
+    closed_finding_ids = {
+        action.finding_id
+        for action in db.scalars(select(models.RemediationAction))
+        if action.action_type == "github_issue"
+        and (action.status == "closed" or bool((action.metadata_json or {}).get("github_issue_closed_at")))
+    }
+    return sum(
+        1
+        for finding in db.scalars(select(models.Finding).where(models.Finding.status == models.FindingStatus.resolved))
+        if finding.id not in closed_finding_ids
+    )
+
+
+def _metadata_uuid(metadata: dict | None, key: str):
+    value = (metadata or {}).get(key)
+    if value is None:
+        return None
+    try:
+        from uuid import UUID
+
+        return UUID(str(value))
+    except ValueError:
+        return None
+
+
+def _has_audit_log(audit_logs: list[models.AuditLog], resource_type: str, resource_id: str) -> bool:
+    return any(log.resource_type == resource_type and log.resource_id == resource_id for log in audit_logs)
 
 
 def _recent_restore_logs(db: Session) -> list[models.AuditLog]:

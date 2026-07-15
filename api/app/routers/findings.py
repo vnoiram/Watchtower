@@ -127,6 +127,25 @@ def list_finding_lifecycle_review(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/evidence-gaps", response_model=schemas.CursorPage)
+def list_finding_evidence_gaps(
+    limit: int = 50,
+    gap_type: str | None = None,
+    severity: models.Severity | None = None,
+    status: models.FindingStatus | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = finding_evidence_gap_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if status:
+        items = [item for item in items if item["status"] == status.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.post("/{finding_id}/github-issue", response_model=schemas.RemediationActionOut)
 def enqueue_github_issue(
     finding_id: UUID,
@@ -180,6 +199,40 @@ def finding_lifecycle_review_items(db: Session) -> list[dict]:
             items.append(_lifecycle_item(f"{finding.status.value}_review", *context, detail="Exception-like finding status requires periodic review"))
         if finding.status == models.FindingStatus.resolved and _close_state(issue_actions.get(finding.id)) != "closed":
             items.append(_lifecycle_item("resolved_without_close", *context, detail="Resolved finding does not have closed GitHub issue evidence"))
+    return items
+
+
+def finding_evidence_gap_items(db: Session) -> list[dict]:
+    issue_actions = _issue_actions_by_finding(db)
+    remediation_actions = _actions_by_finding(db)
+    notified_finding_ids = _sent_notification_finding_ids(db)
+    vex_finding_ids = {vex.finding_id for vex in db.scalars(select(models.VexStatement))}
+    items = []
+    stmt = (
+        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .order_by(models.Finding.updated_at.desc(), models.Finding.id.asc())
+    )
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        context = (finding, application, repository, component, vulnerability)
+        actions = remediation_actions.get(finding.id, [])
+        if (
+            finding.status == models.FindingStatus.open
+            and finding.severity in {models.Severity.critical, models.Severity.high}
+            and finding.id not in notified_finding_ids
+        ):
+            items.append(_evidence_gap_item("missing_notification", *context, detail="Open critical/high finding has no sent notification evidence"))
+        if finding.status == models.FindingStatus.open and finding.fixed_version and not _has_issue_or_pr(actions):
+            items.append(_evidence_gap_item("missing_issue_or_pr", *context, detail="Fixable open finding has no GitHub issue or PR evidence"))
+        if actions and not _has_successful_validation(actions):
+            items.append(_evidence_gap_item("missing_validation", *context, detail="Remediation action has no successful validation evidence"))
+        if finding.status == models.FindingStatus.resolved and _close_state(issue_actions.get(finding.id)) != "closed":
+            items.append(_evidence_gap_item("missing_closure", *context, detail="Resolved finding has no GitHub issue closure evidence"))
+        if finding.status in {models.FindingStatus.accepted_risk, models.FindingStatus.false_positive} and finding.id not in vex_finding_ids:
+            items.append(_evidence_gap_item("missing_exception_review", *context, detail="Exception-like finding has no VEX or review evidence"))
     return items
 
 
@@ -251,6 +304,36 @@ def _issue_actions_by_finding(db: Session) -> dict[UUID, models.RemediationActio
     return actions
 
 
+def _actions_by_finding(db: Session) -> dict[UUID, list[models.RemediationAction]]:
+    actions: dict[UUID, list[models.RemediationAction]] = {}
+    stmt = select(models.RemediationAction).order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.desc())
+    for action in db.scalars(stmt):
+        actions.setdefault(action.finding_id, []).append(action)
+    return actions
+
+
+def _sent_notification_finding_ids(db: Session) -> set[UUID]:
+    finding_ids = set()
+    for notification in db.scalars(select(models.Notification).where(models.Notification.status == "sent")):
+        try:
+            finding_ids.add(UUID(str((notification.metadata_json or {}).get("finding_id"))))
+        except (TypeError, ValueError):
+            continue
+    return finding_ids
+
+
+def _has_issue_or_pr(actions: list[models.RemediationAction]) -> bool:
+    for action in actions:
+        metadata = action.metadata_json or {}
+        if action.action_type == ACTION_TYPE_GITHUB_ISSUE or action.branch or action.url or metadata.get("pull_request_url"):
+            return True
+    return False
+
+
+def _has_successful_validation(actions: list[models.RemediationAction]) -> bool:
+    return any((action.metadata_json or {}).get("validation_status") == "succeeded" for action in actions)
+
+
 def _close_state(action: models.RemediationAction | None) -> str:
     if action is None:
         return "not_requested"
@@ -259,6 +342,32 @@ def _close_state(action: models.RemediationAction | None) -> str:
     if action.status == "close_failed":
         return "close_failed"
     return "pending_close"
+
+
+def _evidence_gap_item(
+    gap_type: str,
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    component: models.Component,
+    vulnerability: models.Vulnerability,
+    detail: str,
+) -> dict:
+    return schemas.FindingEvidenceGapOut(
+        gap_type=gap_type,
+        finding_id=finding.id,
+        severity=finding.severity,
+        status=finding.status,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        component_name=component.name,
+        vulnerability_external_id=vulnerability.external_id,
+        detail=detail,
+        updated_at=finding.updated_at,
+    ).model_dump(mode="json")
 
 
 def _lifecycle_item(
