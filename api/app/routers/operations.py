@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.app import models, schemas
@@ -131,6 +131,39 @@ def daily_operations(
     ]
 
 
+@router.get("/workload", response_model=list[schemas.OperationalWorkloadOut])
+def operational_workload(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return _workload_rows(db)
+
+
+def manual_workload_count(db: Session) -> int:
+    return sum(row.count for row in _workload_rows(db))
+
+
+def _workload_rows(db: Session) -> list[schemas.OperationalWorkloadOut]:
+    open_findings = _count(db, select(models.Finding).where(models.Finding.status == models.FindingStatus.open))
+    manual_scans = _count(db, select(models.Scan).where(models.Scan.trigger_type == models.TriggerType.manual))
+    manual_jobs = _count(db, select(models.AuditLog).where(models.AuditLog.action == "job.create"))
+    failed_remediation = _count(db, select(models.RemediationAction).where(models.RemediationAction.status == "failed"))
+    close_failed_issues = _count(
+        db,
+        select(models.RemediationAction).where(
+            models.RemediationAction.action_type == "github_issue",
+            models.RemediationAction.status == "close_failed",
+        ),
+    )
+    return [
+        _workload("open_findings", open_findings, "warn", "Open findings requiring triage or remediation"),
+        _workload("manual_scans", manual_scans, "warn", "Scans triggered manually"),
+        _workload("manual_jobs", manual_jobs, "warn", "Jobs created directly by an operator"),
+        _workload("failed_remediation_actions", failed_remediation, "fail", "Remediation actions that failed"),
+        _workload("close_failed_issue_actions", close_failed_issues, "fail", "GitHub issue close attempts that failed"),
+    ]
+
+
 def _readiness(check: str, configured: bool, detail: str) -> schemas.OperationsReadinessOut:
     return schemas.OperationsReadinessOut(
         check=check,
@@ -142,6 +175,20 @@ def _readiness(check: str, configured: bool, detail: str) -> schemas.OperationsR
 
 def _daily_check(check: str, status: str, count: int, detail: str) -> schemas.DailyOperationCheckOut:
     return schemas.DailyOperationCheckOut(check=check, status=status, count=count, detail=detail)
+
+
+def _workload(item: str, count: int, nonzero_status: str, detail: str) -> schemas.OperationalWorkloadOut:
+    return schemas.OperationalWorkloadOut(
+        item=item,
+        count=count,
+        status=nonzero_status if count else "ok",
+        detail=detail,
+    )
+
+
+def _count(db: Session, stmt) -> int:
+    subquery = stmt.subquery()
+    return db.scalar(select(func.count()).select_from(subquery)) or 0
 
 
 def _recent_jobs(db: Session, job_type: models.JobType, cutoff: datetime) -> list[models.Job]:

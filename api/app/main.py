@@ -9,6 +9,7 @@ from api.app.routers import (
     auto_merge,
     components,
     dashboard,
+    exceptions,
     findings,
     github,
     isolated_lane,
@@ -26,7 +27,9 @@ from api.app.routers import (
     sboms,
     scan_health,
     scans,
+    scanner_inventory,
     sla,
+    storage,
     technologies,
     vex,
     vulnerabilities,
@@ -57,8 +60,11 @@ app.include_router(dashboard.router, prefix=api_prefix)
 app.include_router(github.router, prefix=api_prefix)
 app.include_router(vex.router, prefix=api_prefix)
 app.include_router(scan_health.router, prefix=api_prefix)
+app.include_router(scanner_inventory.router, prefix=api_prefix)
 app.include_router(maintenance.router, prefix=api_prefix)
 app.include_router(job_health.router, prefix=api_prefix)
+app.include_router(exceptions.router, prefix=api_prefix)
+app.include_router(storage.router, prefix=api_prefix)
 app.include_router(isolated_lane.router, prefix=api_prefix)
 app.include_router(sla.router, prefix=api_prefix)
 app.include_router(kpis.router, prefix=api_prefix)
