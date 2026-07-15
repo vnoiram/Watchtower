@@ -355,6 +355,54 @@ class SlaFindingOut(BaseModel):
     breached: bool
 
 
+class AuditLogOut(BaseModel):
+    id: UUID
+    actor: str
+    role: str
+    action: str
+    resource_type: str
+    resource_id: str | None
+    metadata_json: dict[str, Any]
+    created_at: datetime
+
+
+class OperationsReadinessOut(BaseModel):
+    check: str
+    status: str
+    configured: bool
+    detail: str
+
+
+class DailyOperationCheckOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class KpiMetricOut(BaseModel):
+    metric: str
+    value: float
+    unit: str
+    detail: str
+
+
+class RepositoryRolloutOut(BaseModel):
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider: models.RepositoryProvider
+    source_classification: models.SourceClassification
+    archived: bool
+    application_count: int
+    owner_completeness_percent: float
+    active_sbom_coverage_percent: float
+    latest_scan_status: models.ScanStatus | None
+    latest_scan_created_at: datetime | None
+    stale_scan_count: int
+    open_critical_high_count: int
+
+
 class VexCreate(BaseModel):
     finding_id: UUID
     status: models.VexStatus
@@ -486,3 +534,5 @@ class DashboardSummary(BaseModel):
     unhealthy_jobs: int
     sla_breached_findings: int
     isolated_applications: int
+    scan_failure_rate_percent: float
+    notification_failure_count: int

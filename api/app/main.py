@@ -5,6 +5,7 @@ from api.app.routers import (
     ai_fix,
     applications,
     artifacts,
+    audit_logs,
     auto_merge,
     components,
     dashboard,
@@ -13,11 +14,14 @@ from api.app.routers import (
     isolated_lane,
     job_health,
     jobs,
+    kpis,
     maintenance,
     notifications,
+    operations,
     remediation,
     remediation_actions,
     repositories,
+    rollout,
     sbom_coverage,
     sboms,
     scan_health,
@@ -35,6 +39,7 @@ api_prefix = "/v1"
 app.include_router(repositories.router, prefix=api_prefix)
 app.include_router(applications.router, prefix=api_prefix)
 app.include_router(artifacts.router, prefix=api_prefix)
+app.include_router(audit_logs.router, prefix=api_prefix)
 app.include_router(jobs.router, prefix=api_prefix)
 app.include_router(scans.router, prefix=api_prefix)
 app.include_router(findings.router, prefix=api_prefix)
@@ -56,6 +61,9 @@ app.include_router(maintenance.router, prefix=api_prefix)
 app.include_router(job_health.router, prefix=api_prefix)
 app.include_router(isolated_lane.router, prefix=api_prefix)
 app.include_router(sla.router, prefix=api_prefix)
+app.include_router(kpis.router, prefix=api_prefix)
+app.include_router(operations.router, prefix=api_prefix)
+app.include_router(rollout.router, prefix=api_prefix)
 
 
 @app.get("/healthz")

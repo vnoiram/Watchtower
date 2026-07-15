@@ -7,10 +7,12 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from api.app.config import Settings
 from api.app.database import Base
 from api.app.models import (
     Application,
     ApplicationType,
+    AuditLog,
     Component,
     Finding,
     FindingStatus,
@@ -35,6 +37,7 @@ from api.app.models import (
     Vulnerability,
     now_utc,
 )
+from api.app.routers.audit_logs import list_audit_logs
 from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
 from api.app.routers.artifacts import list_artifacts
@@ -45,8 +48,10 @@ from api.app.routers.findings import list_findings
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
 from api.app.routers.isolated_lane import list_isolated_lane
 from api.app.routers.job_health import list_job_health
+from api.app.routers.kpis import kpi_summary
 from api.app.routers.maintenance import list_application_maintenance_candidates
 from api.app.routers.notifications import list_notifications
+from api.app.routers.operations import daily_operations, operations_readiness
 from api.app.routers.remediation import (
     list_github_issue_actions,
     list_issue_closures,
@@ -54,6 +59,7 @@ from api.app.routers.remediation import (
     list_remediation_validations,
 )
 from api.app.routers.remediation_actions import list_remediation_actions
+from api.app.routers.rollout import list_repository_rollout
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sboms
@@ -976,6 +982,212 @@ def test_list_sla_findings_reports_breaches_and_dashboard_count() -> None:
         assert page.items[0]["sla_days"] == 7
         assert page.items[0]["breached"] is True
         assert summary.sla_breached_findings == 1
+
+
+def test_list_audit_logs_filters_and_returns_metadata() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        matching = AuditLog(
+            actor="api-token",
+            role="operator",
+            action="repository.create",
+            resource_type="repository",
+            resource_id="repo-1",
+            metadata_json={"source": "test"},
+        )
+        skipped = AuditLog(
+            actor="api-token",
+            role="viewer",
+            action="job.create",
+            resource_type="job",
+            resource_id="job-1",
+            metadata_json={},
+        )
+        db.add_all([matching, skipped])
+        db.flush()
+
+        page = list_audit_logs(
+            role="operator",
+            action="repository.create",
+            resource_type="repository",
+            db=db,
+            _=None,
+        )
+
+        assert [item["id"] for item in page.items] == [str(matching.id)]
+        assert page.items[0]["metadata_json"] == {"source": "test"}
+
+
+def test_operations_readiness_reports_configuration_without_secret_values() -> None:
+    settings = Settings(
+        github_token="secret-token",
+        github_app_id="123",
+        github_private_key="private-key",
+        github_webhook_secret="webhook-secret",
+        slack_webhook_url="https://hooks.slack.test/demo",
+        minio_secret_key="minio-secret",
+        api_default_role="operator",
+    )
+
+    rows = operations_readiness(settings=settings, _=None)
+
+    by_check = {row.check: row for row in rows}
+    assert by_check["github_token"].configured is True
+    assert by_check["github_app"].configured is True
+    assert by_check["notifications"].configured is True
+    rendered = " ".join(row.detail for row in rows)
+    assert "secret-token" not in rendered
+    assert "private-key" not in rendered
+    assert "webhook-secret" not in rendered
+    assert "minio-secret" not in rendered
+
+
+def test_daily_operations_reports_failures_and_24h_jobs() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical)
+        finding.created_at = now_utc() - timedelta(days=8)
+        db.add_all(
+            [
+                Job(job_type=JobType.repository_sync, status=JobStatus.succeeded),
+                Job(job_type=JobType.scan, status=JobStatus.succeeded),
+                Job(job_type=JobType.notification, status=JobStatus.failed, last_error="webhook failed"),
+                Notification(
+                    channel="slack",
+                    severity=Severity.critical,
+                    subject="subject",
+                    body="body",
+                    status="failed",
+                ),
+                VexStatement(
+                    finding_id=finding.id,
+                    status=VexStatus.not_affected,
+                    justification="temporary",
+                    approved_by="security",
+                    review_date=now_utc() - timedelta(days=1),
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = daily_operations(db=db, _=None)
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["repository_sync_24h"].status == "ok"
+        assert by_check["scan_jobs_24h"].status == "ok"
+        assert by_check["unhealthy_jobs"].status == "fail"
+        assert by_check["failed_notifications"].status == "fail"
+        assert by_check["expired_vex"].status == "warn"
+        assert by_check["sla_breaches"].status == "fail"
+
+
+def test_kpi_summary_reports_core_operational_metrics() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        covered = create_application(db, repo, "covered")
+        missing = create_application(db, repo, "missing")
+        covered.auto_merge_enabled = True
+        success_scan = Scan(application_id=covered.id, status=ScanStatus.succeeded)
+        failed_scan = Scan(application_id=missing.id, status=ScanStatus.failed)
+        db.add_all([success_scan, failed_scan])
+        db.flush()
+        db.add(
+            Sbom(
+                application_id=covered.id,
+                scan_id=success_scan.id,
+                sbom_digest="digest",
+                storage_key="sbom.json",
+                active=True,
+                sbom_kind="source",
+            )
+        )
+        open_finding = create_finding(db, covered, severity=Severity.critical)
+        open_finding.created_at = now_utc() - timedelta(days=8)
+        create_finding(db, missing, severity=Severity.high, status=FindingStatus.resolved)
+        action = RemediationAction(
+            finding_id=open_finding.id,
+            action_type="ai_fix",
+            status="created",
+            provider="watchtower",
+            metadata_json={
+                "validation_status": "succeeded",
+                "update_kind": "patch",
+                "ci_passed": True,
+                "tier_allows": True,
+                "touches_forbidden_path": False,
+            },
+        )
+        sent = Notification(channel="slack", severity=Severity.high, subject="sent", body="body", status="sent")
+        failed = Notification(
+            channel="slack",
+            severity=Severity.high,
+            subject="failed",
+            body="body",
+            status="failed",
+        )
+        db.add_all([action, sent, failed])
+        db.flush()
+
+        rows = kpi_summary(db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_metric = {row.metric: row for row in rows}
+        assert by_metric["sbom_coverage_percent"].value == 50.0
+        assert by_metric["scan_failure_rate_percent"].value == 50.0
+        assert by_metric["open_finding_count"].value == 1
+        assert by_metric["resolved_finding_count"].value == 1
+        assert by_metric["notification_success_rate_percent"].value == 50.0
+        assert by_metric["ai_fix_success_rate_percent"].value == 100.0
+        assert by_metric["auto_merge_eligible_count"].value == 1
+        assert by_metric["sla_breach_count"].value == 1
+        assert summary.scan_failure_rate_percent == 50.0
+        assert summary.notification_failure_count == 1
+
+
+def test_repository_rollout_filters_and_reports_coverage() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        github_repo = create_repository(db, "github")
+        local_repo = create_repository(db, "local")
+        local_repo.provider = RepositoryProvider.local
+        app_owned = create_application(db, github_repo, "owned")
+        app_owned.owner = "team"
+        app_missing_owner = create_application(db, github_repo, "missing-owner")
+        create_application(db, local_repo, "local-app")
+        scan = Scan(application_id=app_owned.id, status=ScanStatus.succeeded, created_at=now_utc())
+        stale_scan = Scan(
+            application_id=app_missing_owner.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=31),
+        )
+        db.add_all([scan, stale_scan])
+        db.flush()
+        db.add(
+            Sbom(
+                application_id=app_owned.id,
+                scan_id=scan.id,
+                sbom_digest="rollout-digest",
+                storage_key="rollout.json",
+                active=True,
+                sbom_kind="source",
+            )
+        )
+        create_finding(db, app_owned, severity=Severity.high)
+        db.flush()
+
+        page = list_repository_rollout(provider=RepositoryProvider.github, archived=False, db=db, _=None)
+
+        assert [item["repository_name"] for item in page.items] == [github_repo.name]
+        item = page.items[0]
+        assert item["application_count"] == 2
+        assert item["owner_completeness_percent"] == 50.0
+        assert item["active_sbom_coverage_percent"] == 50.0
+        assert item["latest_scan_status"] == "succeeded"
+        assert item["stale_scan_count"] == 1
+        assert item["open_critical_high_count"] == 1
 
 
 def test_enqueue_github_issue_endpoint_queues_and_suppresses_duplicate() -> None:
