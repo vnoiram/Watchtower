@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 from api.app import models, schemas
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
+from api.app.routers.isolated_lane import count_isolated_applications
 from api.app.routers.job_health import job_health_reason
+from api.app.routers.sla import count_sla_breached_findings
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -43,6 +45,8 @@ def dashboard_summary(
     )
     now = datetime.now(timezone.utc)
     unhealthy_jobs = sum(1 for job in db.execute(select(models.Job)).scalars() if job_health_reason(job, now))
+    sla_breached_findings = count_sla_breached_findings(db, now)
+    isolated_applications = count_isolated_applications(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -54,4 +58,6 @@ def dashboard_summary(
         sbom_coverage_percent=sbom_coverage_percent,
         missing_active_sbom=missing_active_sbom,
         unhealthy_jobs=unhealthy_jobs,
+        sla_breached_findings=sla_breached_findings,
+        isolated_applications=isolated_applications,
     )
