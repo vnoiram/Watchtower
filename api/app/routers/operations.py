@@ -11,6 +11,7 @@ from api.app.deps import Principal, get_principal
 from api.app.routers.job_health import job_health_reason
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.sla import count_sla_breached_findings
+from api.app.routers.storage import list_storage_cleanup_candidates
 
 router = APIRouter(prefix="/operations", tags=["operations"])
 
@@ -139,6 +140,55 @@ def operational_workload(
     return _workload_rows(db)
 
 
+@router.get("/backup-readiness", response_model=list[schemas.BackupReadinessOut])
+def backup_readiness(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    storage_configured = bool(
+        settings.minio_endpoint
+        and settings.minio_access_key
+        and settings.minio_secret_key
+        and settings.minio_bucket
+    )
+    missing_storage_keys = _count(
+        db,
+        select(models.Sbom).where(
+            (models.Sbom.storage_key.is_(None)) | (models.Sbom.storage_key == ""),
+        ),
+    )
+    source_sbom_artifacts = _source_sbom_artifact_count(db)
+    source_sboms = _count(db, select(models.Sbom).where(models.Sbom.sbom_kind == "source"))
+    cleanup_backlog = len(list_storage_cleanup_candidates(db=db, _=None).items)
+    return [
+        _backup_check(
+            "object_storage",
+            "ok" if storage_configured else "fail",
+            1 if storage_configured else 0,
+            f"Object storage bucket setting: {settings.minio_bucket}",
+        ),
+        _backup_check(
+            "sbom_storage_keys",
+            "ok" if not missing_storage_keys else "fail",
+            missing_storage_keys,
+            "SBOM records without a storage key",
+        ),
+        _backup_check(
+            "source_sbom_artifacts",
+            "ok" if source_sbom_artifacts >= source_sboms else "warn",
+            source_sbom_artifacts,
+            f"Source SBOM artifacts recorded for {source_sboms} source SBOMs",
+        ),
+        _backup_check(
+            "cleanup_backlog",
+            "ok" if not cleanup_backlog else "warn",
+            cleanup_backlog,
+            "Storage cleanup candidates awaiting review",
+        ),
+    ]
+
+
 def manual_workload_count(db: Session) -> int:
     return sum(row.count for row in _workload_rows(db))
 
@@ -186,9 +236,24 @@ def _workload(item: str, count: int, nonzero_status: str, detail: str) -> schema
     )
 
 
+def _backup_check(check: str, status: str, count: int, detail: str) -> schemas.BackupReadinessOut:
+    return schemas.BackupReadinessOut(check=check, status=status, count=count, detail=detail)
+
+
 def _count(db: Session, stmt) -> int:
     subquery = stmt.subquery()
     return db.scalar(select(func.count()).select_from(subquery)) or 0
+
+
+def _source_sbom_artifact_count(db: Session) -> int:
+    count = 0
+    scans = db.scalars(select(models.Scan))
+    for scan in scans:
+        artifacts = (scan.result_summary or {}).get("artifacts") or {}
+        if isinstance(artifacts, dict) and isinstance(artifacts.get("source_sbom"), dict):
+            if artifacts["source_sbom"].get("storage_key"):
+                count += 1
+    return count
 
 
 def _recent_jobs(db: Session, job_type: models.JobType, cutoff: datetime) -> list[models.Job]:

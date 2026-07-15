@@ -34,6 +34,11 @@ const scannerInventory = document.querySelector("#scanner-inventory");
 const exceptionReview = document.querySelector("#exception-review");
 const storageCleanup = document.querySelector("#storage-cleanup");
 const operationalWorkload = document.querySelector("#operational-workload");
+const repositorySync = document.querySelector("#repository-sync");
+const applicationDetection = document.querySelector("#application-detection");
+const scheduledScanCoverage = document.querySelector("#scheduled-scan-coverage");
+const resolutionCandidates = document.querySelector("#resolution-candidates");
+const backupReadiness = document.querySelector("#backup-readiness");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -97,6 +102,7 @@ function renderMetrics(summary) {
     ["scan_failure_rate_percent", "Scan failure %", "warn"],
     ["notification_failure_count", "Notification failures", "danger"],
     ["manual_workload_items", "Manual workload", "warn"],
+    ["missing_scheduled_scans", "Missing schedules", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -501,6 +507,65 @@ function renderOperationalWorkload(rows) {
     : `<tr><td colspan="4">No workload items</td></tr>`;
 }
 
+function renderRepositorySync(page) {
+  const rows = page.items || [];
+  repositorySync.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.provider)}</td><td>${escapeHtml(formatDateTime(item.last_synced_at))}</td><td>${escapeHtml(item.latest_sync_job_status || "-")}</td><td>${escapeHtml(item.reasons.join(", ") || "ok")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No repository sync issues</td></tr>`;
+}
+
+function renderApplicationDetection(page) {
+  const rows = page.items || [];
+  applicationDetection.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.application_type || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No application detection gaps</td></tr>`;
+}
+
+function renderScheduledScanCoverage(page) {
+  const rows = page.items || [];
+  scheduledScanCoverage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.latest_scheduled_scan_status || "missing")}</td><td>${escapeHtml(item.latest_scan_trigger_type || "-")}</td><td>${escapeHtml(item.missing_recent_schedule ? "missing" : "covered")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scheduled scan coverage gaps</td></tr>`;
+}
+
+function renderResolutionCandidates(page) {
+  const rows = page.items || [];
+  resolutionCandidates.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.component_name)}</td><td>${escapeHtml(formatDateTime(item.latest_successful_scan_created_at))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No resolution candidates</td></tr>`;
+}
+
+function renderBackupReadiness(rows) {
+  backupReadiness.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No backup readiness checks</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -536,6 +601,11 @@ async function refresh() {
   exceptionReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   storageCleanup.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   operationalWorkload.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  repositorySync.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  applicationDetection.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scheduledScanCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  resolutionCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  backupReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -573,6 +643,11 @@ async function refresh() {
       exceptionReviewPage,
       storageCleanupPage,
       operationalWorkloadPage,
+      repositorySyncPage,
+      applicationDetectionPage,
+      scheduledScanCoveragePage,
+      resolutionCandidatePage,
+      backupReadinessPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -609,6 +684,11 @@ async function refresh() {
       loadJson("/exceptions?limit=10"),
       loadJson("/storage/cleanup-candidates?limit=10"),
       loadJson("/operations/workload"),
+      loadJson("/repository-sync?stale=true&limit=10"),
+      loadJson("/application-detection?limit=10"),
+      loadJson("/scheduled-scan-coverage?missing=true&limit=10"),
+      loadJson("/findings/resolution-candidates?limit=10"),
+      loadJson("/operations/backup-readiness"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -644,6 +724,11 @@ async function refresh() {
     renderExceptionReview(exceptionReviewPage);
     renderStorageCleanup(storageCleanupPage);
     renderOperationalWorkload(operationalWorkloadPage);
+    renderRepositorySync(repositorySyncPage);
+    renderApplicationDetection(applicationDetectionPage);
+    renderScheduledScanCoverage(scheduledScanCoveragePage);
+    renderResolutionCandidates(resolutionCandidatePage);
+    renderBackupReadiness(backupReadinessPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -679,6 +764,11 @@ async function refresh() {
     exceptionReview.innerHTML = `<tr><td colspan="5">Unable to load exceptions</td></tr>`;
     storageCleanup.innerHTML = `<tr><td colspan="5">Unable to load cleanup candidates</td></tr>`;
     operationalWorkload.innerHTML = `<tr><td colspan="4">Unable to load operational workload</td></tr>`;
+    repositorySync.innerHTML = `<tr><td colspan="5">Unable to load repository sync coverage</td></tr>`;
+    applicationDetection.innerHTML = `<tr><td colspan="5">Unable to load application detection coverage</td></tr>`;
+    scheduledScanCoverage.innerHTML = `<tr><td colspan="5">Unable to load scheduled scan coverage</td></tr>`;
+    resolutionCandidates.innerHTML = `<tr><td colspan="5">Unable to load resolution candidates</td></tr>`;
+    backupReadiness.innerHTML = `<tr><td colspan="4">Unable to load backup readiness</td></tr>`;
   }
 }
 

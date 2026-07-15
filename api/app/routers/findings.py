@@ -44,6 +44,69 @@ def list_findings(
     return schemas.CursorPage(items=[schemas.FindingOut.model_validate(row).model_dump(mode="json") for row in rows], next_cursor=next_cursor)
 
 
+@router.get("/resolution-candidates", response_model=schemas.CursorPage)
+def list_resolution_candidates(
+    limit: int = 50,
+    severity: models.Severity | None = None,
+    status: models.FindingStatus | None = None,
+    application_id: UUID | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    statuses = [
+        models.FindingStatus.open,
+        models.FindingStatus.triaged,
+        models.FindingStatus.in_progress,
+    ]
+    stmt = (
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(models.Finding.status.in_(statuses))
+        .order_by(models.Finding.updated_at.desc(), models.Finding.id.asc())
+    )
+    if severity:
+        stmt = stmt.where(models.Finding.severity == severity)
+    if status:
+        stmt = stmt.where(models.Finding.status == status)
+    if application_id:
+        stmt = stmt.where(models.Finding.application_id == application_id)
+    latest_successful_scans = _latest_successful_scans_by_application(db)
+    items = []
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        latest_scan = latest_successful_scans.get(application.id)
+        if latest_scan is None or finding.last_seen_scan_id == latest_scan.id:
+            continue
+        items.append(
+            schemas.FindingResolutionCandidateOut(
+                finding_id=finding.id,
+                severity=finding.severity,
+                status=finding.status,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                component_name=component.name,
+                vulnerability_external_id=vulnerability.external_id,
+                last_seen_scan_id=finding.last_seen_scan_id,
+                latest_successful_scan_id=latest_scan.id,
+                latest_successful_scan_created_at=latest_scan.created_at,
+            ).model_dump(mode="json")
+        )
+        if len(items) >= min(limit, 100):
+            break
+    return schemas.CursorPage(items=items, next_cursor=None)
+
+
 @router.post("/{finding_id}/github-issue", response_model=schemas.RemediationActionOut)
 def enqueue_github_issue(
     finding_id: UUID,
@@ -115,3 +178,15 @@ def _remediation_action_out(db: Session, action: models.RemediationAction) -> di
         vulnerability_external_id=vulnerability.external_id if vulnerability else None,
         component_name=component.name if component else None,
     ).model_dump(mode="json")
+
+
+def _latest_successful_scans_by_application(db: Session) -> dict:
+    scans = db.execute(
+        select(models.Scan)
+        .where(models.Scan.status == models.ScanStatus.succeeded)
+        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+    ).scalars()
+    by_application = {}
+    for scan in scans:
+        by_application.setdefault(scan.application_id, scan)
+    return by_application
