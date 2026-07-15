@@ -354,6 +354,25 @@ def list_remediation_aging(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/suppressions", response_model=schemas.CursorPage)
+def list_automation_suppressions(
+    limit: int = 50,
+    reason: str | None = None,
+    action_type: str | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = automation_suppression_items(db)
+    if reason:
+        items = [item for item in items if item["reason"] == reason]
+    if action_type:
+        items = [item for item in items if item["action_type"] == action_type]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def stale_remediation_count(db: Session) -> int:
     return len(remediation_backlog_items(db))
 
@@ -595,6 +614,47 @@ def remediation_aging_items(db: Session) -> list[dict]:
     return items
 
 
+def automation_suppression_items(db: Session) -> list[dict]:
+    items = []
+    stmt = _remediation_action_context_stmt().order_by(
+        models.RemediationAction.updated_at.desc(),
+        models.RemediationAction.id.asc(),
+    )
+    for action, finding, application, vulnerability, component in db.execute(stmt):
+        metadata = action.metadata_json or {}
+        reason = _suppression_reason(action)
+        if not reason:
+            continue
+        repository = db.get(models.Repository, application.repository_id)
+        detail = (
+            metadata.get("skipped_reason")
+            or metadata.get("block_reason")
+            or metadata.get("policy_reason")
+            or metadata.get("duplicate_of")
+            or action.status
+        )
+        items.append(
+            schemas.AutomationSuppressionOut(
+                reason=reason,
+                action_id=action.id,
+                action_type=action.action_type,
+                action_status=action.status,
+                finding_id=finding.id,
+                severity=finding.severity,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                duplicate_of=metadata.get("duplicate_of"),
+                policy_reason=metadata.get("policy_reason"),
+                detail=str(detail),
+                updated_at=action.updated_at,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
 def _remediation_action_context_stmt():
     return (
         select(
@@ -772,6 +832,21 @@ def _has_dependency_update_signal(action: models.RemediationAction) -> bool:
         or metadata.get("update_kind")
         or "ci_passed" in metadata
     )
+
+
+def _suppression_reason(action: models.RemediationAction) -> str | None:
+    metadata = action.metadata_json or {}
+    if action.status == "skipped_duplicate" or metadata.get("duplicate_of"):
+        return "duplicate"
+    if action.status == "blocked" or metadata.get("block_reason"):
+        return "blocked"
+    if action.status == "cancelled":
+        return "cancelled"
+    if metadata.get("skipped_reason"):
+        return "skipped"
+    if metadata.get("policy_reason"):
+        return "policy"
+    return None
 
 
 def _dependency_update_source(action: models.RemediationAction) -> str:

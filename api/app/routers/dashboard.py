@@ -8,6 +8,7 @@ from api.app import models, schemas
 from api.app.config import Settings, get_settings
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
+from api.app.routers.auto_merge import automation_guardrail_count
 from api.app.routers.governance import exposure_review_count, quarterly_review_count
 from api.app.routers.integrations import github_integration_issue_count
 from api.app.routers.isolated_lane import count_isolated_applications, isolated_safeguard_count
@@ -21,6 +22,7 @@ from api.app.routers.operations import (
     manual_workload_count,
     monthly_review_count,
     phase_readiness_count,
+    rollback_readiness_count,
 )
 from api.app.routers.quality import reopen_risk_count
 from api.app.routers.remediation import remediation_coverage_count, stale_remediation_count
@@ -90,6 +92,8 @@ def dashboard_summary(
     monthly_review_items = monthly_review_count(db)
     phase_readiness_items = phase_readiness_count(db)
     control_evidence_items = control_evidence_count(db)
+    automation_guardrail_items = automation_guardrail_count(db)
+    rollback_readiness_items = rollback_readiness_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -124,4 +128,6 @@ def dashboard_summary(
         monthly_review_items=monthly_review_items,
         phase_readiness_items=phase_readiness_items,
         control_evidence_items=control_evidence_items,
+        automation_guardrail_items=automation_guardrail_items,
+        rollback_readiness_items=rollback_readiness_items,
     )
