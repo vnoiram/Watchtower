@@ -146,6 +146,22 @@ def list_finding_evidence_gaps(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/medium-review", response_model=schemas.CursorPage)
+def list_medium_review(
+    limit: int = 50,
+    review_type: str | None = None,
+    status: models.FindingStatus | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = medium_review_items(db)
+    if review_type:
+        items = [item for item in items if item["review_type"] == review_type]
+    if status:
+        items = [item for item in items if item["status"] == status.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.post("/{finding_id}/github-issue", response_model=schemas.RemediationActionOut)
 def enqueue_github_issue(
     finding_id: UUID,
@@ -178,6 +194,10 @@ def enqueue_github_issue(
     return _remediation_action_out(db, actions[0])
 
 
+def medium_review_count(db: Session) -> int:
+    return len(medium_review_items(db))
+
+
 def finding_lifecycle_review_items(db: Session) -> list[dict]:
     now = datetime.now(timezone.utc)
     stale_cutoff = now - timedelta(days=30)
@@ -199,6 +219,61 @@ def finding_lifecycle_review_items(db: Session) -> list[dict]:
             items.append(_lifecycle_item(f"{finding.status.value}_review", *context, detail="Exception-like finding status requires periodic review"))
         if finding.status == models.FindingStatus.resolved and _close_state(issue_actions.get(finding.id)) != "closed":
             items.append(_lifecycle_item("resolved_without_close", *context, detail="Resolved finding does not have closed GitHub issue evidence"))
+    return items
+
+
+def medium_review_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    actions = _actions_by_finding(db)
+    notified_ids = _sent_notification_finding_ids(db)
+    vex_ids = {vex.finding_id for vex in db.scalars(select(models.VexStatement))}
+    stmt = (
+        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(
+            models.Finding.severity == models.Severity.medium,
+            models.Finding.status.in_([models.FindingStatus.open, models.FindingStatus.triaged]),
+        )
+        .order_by(models.Finding.updated_at.asc(), models.Finding.id.asc())
+    )
+    items = []
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        has_notification = finding.id in notified_ids
+        has_action = bool(actions.get(finding.id))
+        has_vex = finding.id in vex_ids
+        if not has_notification and not has_action and not has_vex:
+            review_type = "missing_triage_evidence"
+            detail = "Medium finding has no notification, action, or VEX evidence"
+        elif not has_action and not has_vex:
+            review_type = "needs_weekly_review"
+            detail = "Medium finding has no action or VEX evidence"
+        else:
+            review_type = "tracked_medium"
+            detail = "Medium finding has review evidence"
+        items.append(
+            schemas.MediumFindingReviewOut(
+                review_type=review_type,
+                finding_id=finding.id,
+                status=finding.status,
+                severity=finding.severity,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                component_name=component.name,
+                vulnerability_external_id=vulnerability.external_id,
+                has_notification=has_notification,
+                has_action=has_action,
+                has_vex=has_vex,
+                age_days=max((now.replace(tzinfo=None) - finding.updated_at.replace(tzinfo=None)).days, 0),
+                detail=detail,
+                updated_at=finding.updated_at,
+            ).model_dump(mode="json")
+        )
     return items
 
 

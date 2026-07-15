@@ -48,8 +48,28 @@ def list_reopen_risk(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/false-positive-review", response_model=schemas.CursorPage)
+def list_false_positive_review(
+    limit: int = 50,
+    review_type: str | None = None,
+    expired: bool | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = false_positive_review_items(db)
+    if review_type:
+        items = [item for item in items if item["review_type"] == review_type]
+    if expired is not None:
+        items = [item for item in items if item["expired"] is expired]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def reopen_risk_count(db: Session) -> int:
     return len(reopen_risk_items(db))
+
+
+def false_positive_review_count(db: Session) -> int:
+    return len(false_positive_review_items(db))
 
 
 def duplicate_review_items(db: Session) -> list[dict]:
@@ -103,6 +123,70 @@ def reopen_risk_items(db: Session) -> list[dict]:
                 last_seen_scan_created_at=scan.created_at if scan else None,
                 reason=reason,
             ).model_dump(mode="json")
+        )
+    return items
+
+
+def false_positive_review_items(db: Session) -> list[dict]:
+    now = datetime.now()
+    reopened_ids = {UUID(item["finding_id"]) for item in reopen_risk_items(db)}
+    items = []
+    stmt = (
+        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(models.Finding.status == models.FindingStatus.false_positive)
+        .order_by(models.Finding.updated_at.asc(), models.Finding.id.asc())
+    )
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        reappeared = finding.id in reopened_ids
+        items.append(
+            _false_positive_item(
+                "finding_false_positive",
+                "finding",
+                finding,
+                application,
+                repository,
+                component,
+                vulnerability,
+                None,
+                None,
+                False,
+                reappeared,
+                "False positive finding requires periodic review",
+            )
+        )
+    vex_stmt = (
+        select(models.VexStatement, models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        .join(models.Finding, models.VexStatement.finding_id == models.Finding.id)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(models.VexStatement.status == models.VexStatus.not_affected)
+        .order_by(models.VexStatement.review_date.asc(), models.VexStatement.id.asc())
+    )
+    for vex, finding, application, repository, component, vulnerability in db.execute(vex_stmt):
+        expired = _before(vex.review_date, now)
+        reappeared = finding.id in reopened_ids
+        review_type = "expired_not_affected_vex" if expired else "not_affected_vex"
+        items.append(
+            _false_positive_item(
+                review_type,
+                "vex",
+                finding,
+                application,
+                repository,
+                component,
+                vulnerability,
+                vex.id,
+                vex.review_date,
+                expired,
+                reappeared,
+                "VEX not_affected statement requires review",
+            )
         )
     return items
 
@@ -241,3 +325,46 @@ def _after(value: datetime, reference: datetime) -> bool:
     elif value.tzinfo is not None and reference.tzinfo is None:
         value = value.replace(tzinfo=None)
     return value > reference
+
+
+def _before(value: datetime, reference: datetime) -> bool:
+    if value.tzinfo is None and reference.tzinfo is not None:
+        reference = reference.replace(tzinfo=None)
+    elif value.tzinfo is not None and reference.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return value < reference
+
+
+def _false_positive_item(
+    review_type: str,
+    source: str,
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    component: models.Component,
+    vulnerability: models.Vulnerability,
+    vex_id: UUID | None,
+    review_date: datetime | None,
+    expired: bool,
+    reappeared: bool,
+    detail: str,
+) -> dict:
+    return schemas.FalsePositiveReviewOut(
+        review_type=review_type,
+        source=source,
+        finding_id=finding.id,
+        status=finding.status,
+        severity=finding.severity,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        component_name=component.name,
+        vulnerability_external_id=vulnerability.external_id,
+        vex_id=vex_id,
+        review_date=review_date,
+        expired=expired,
+        reappeared=reappeared,
+        detail=detail,
+    ).model_dump(mode="json")

@@ -60,7 +60,7 @@ from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
 from api.app.routers.findings import list_finding_evidence_gaps, list_findings, list_finding_lifecycle_review
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
-from api.app.routers.findings import list_resolution_candidates
+from api.app.routers.findings import list_medium_review, list_resolution_candidates
 from api.app.routers.governance import (
     list_auto_merge_scope,
     list_exposure_review,
@@ -98,6 +98,7 @@ from api.app.routers.operations import (
     list_manual_actions,
     list_restore_evidence,
     list_scheduler_drift,
+    worker_hardening,
     monthly_review,
     operational_workload,
     operations_readiness,
@@ -111,6 +112,7 @@ from api.app.routers.operations import (
     weekly_review,
 )
 from api.app.routers.quality import list_duplicate_review, list_reopen_risk
+from api.app.routers.quality import list_false_positive_review
 from api.app.routers.remediation import (
     list_auto_resolution_evidence,
     list_fixable_gaps,
@@ -121,6 +123,7 @@ from api.app.routers.remediation import (
     list_github_issue_actions,
     list_issue_closures,
     list_pr_ci_failures,
+    list_pr_staleness,
     list_remediation_prs,
     list_remediation_aging,
     list_remediation_rescans,
@@ -162,7 +165,7 @@ from api.app.routers.security import (
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sboms
 from api.app.routers.sla import list_sla_findings
-from api.app.routers.storage import list_storage_cleanup_candidates, retention_review, storage_pressure
+from api.app.routers.storage import list_storage_cleanup_candidates, retention_review, storage_encryption_posture, storage_pressure
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_invalidation_candidates, list_vex_statements
 from api.app.routers.vulnerabilities import list_vulnerabilities, list_vulnerability_impact
@@ -4923,3 +4926,144 @@ def test_list_github_permissions_reports_configuration_audit_and_auth_failures_w
         rendered = " ".join(str(item.get("detail")) for item in page.items)
         assert "secret-pat" not in rendered
         assert "SUPER_SECRET_TOKEN" not in rendered
+
+
+def test_list_pr_staleness_reports_stale_ci_and_review_waiting_items() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "pr-staleness")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="created",
+            provider="github",
+            provider_id="42",
+            branch="fix/high",
+            url="https://github.com/local/pr-staleness/pull/42",
+            metadata_json={"ci_passed": False},
+            updated_at=now_utc() - timedelta(days=8),
+        )
+        db.add(action)
+        db.flush()
+
+        page = list_pr_staleness(db=db, _=None)
+        filtered = list_pr_staleness(staleness_type="stale_pr", severity=Severity.high, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        types = {item["staleness_type"] for item in page.items}
+
+        assert {"stale_pr", "ci_incomplete", "review_or_merge_waiting"} <= types
+        assert filtered.items[0]["action_id"] == str(action.id)
+        assert summary.pr_staleness_items == 3
+
+
+def test_list_medium_review_reports_evidence_state_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "medium-review")
+        app = create_application(db, repo)
+        missing = create_finding(db, app, severity=Severity.medium, status=FindingStatus.open)
+        tracked = create_finding(db, app, severity=Severity.medium, status=FindingStatus.triaged)
+        db.get(Component, tracked.component_id).purl = "pkg:pypi/medium-tracked@1.0.0"
+        db.get(Vulnerability, tracked.vulnerability_id).external_id = "medium-tracked"
+        db.add(Notification(channel="slack", severity=Severity.medium, subject="medium", body="body", status="sent", metadata_json={"finding_id": str(tracked.id)}))
+        db.flush()
+
+        page = list_medium_review(db=db, _=None)
+        filtered = list_medium_review(review_type="missing_triage_evidence", status=FindingStatus.open, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        by_finding = {item["finding_id"]: item for item in page.items}
+
+        assert by_finding[str(missing.id)]["review_type"] == "missing_triage_evidence"
+        assert by_finding[str(tracked.id)]["has_notification"] is True
+        assert filtered.items[0]["finding_id"] == str(missing.id)
+        assert summary.medium_review_items == 2
+
+
+def test_list_false_positive_review_reports_findings_vex_expiry_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "false-positive-review")
+        app = create_application(db, repo)
+        false_positive = create_finding(db, app, severity=Severity.low, status=FindingStatus.false_positive)
+        vex_finding = create_finding(db, app, severity=Severity.medium, status=FindingStatus.open)
+        db.add(
+            VexStatement(
+                finding_id=vex_finding.id,
+                status=VexStatus.not_affected,
+                justification="not reachable",
+                approved_by="security",
+                review_date=now_utc() - timedelta(days=1),
+            )
+        )
+        db.flush()
+
+        page = list_false_positive_review(db=db, _=None)
+        expired = list_false_positive_review(expired=True, review_type="expired_not_affected_vex", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        sources = {(item["source"], item["finding_id"]) for item in page.items}
+
+        assert ("finding", str(false_positive.id)) in sources
+        assert ("vex", str(vex_finding.id)) in sources
+        assert expired.items[0]["finding_id"] == str(vex_finding.id)
+        assert summary.false_positive_review_items == 2
+
+
+def test_worker_hardening_reports_security_evidence_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        db.add_all(
+            [
+                AuditLog(actor="ops", role="admin", action="worker.rootless.verify", resource_type="worker", resource_id="w1", metadata_json={"rootless": True}),
+                AuditLog(actor="ops", role="admin", action="worker.read_only.verify", resource_type="worker", resource_id="w1", metadata_json={"read_only": True}),
+                AuditLog(actor="ops", role="admin", action="worker.network_policy.verify", resource_type="worker", resource_id="w1", metadata_json={"network_restricted": True}),
+                AuditLog(actor="ops", role="admin", action="worker.resource_limit.verify", resource_type="worker", resource_id="w1", metadata_json={"cpu_limit": "1", "memory_limit": "512Mi"}),
+                AuditLog(actor="ops", role="admin", action="worker.temp_cleanup.verify", resource_type="worker", resource_id="w1", metadata_json={"temp_cleanup": True}),
+            ]
+        )
+        db.flush()
+
+        rows = worker_hardening(db=db, settings=Settings(worker_job_timeout_seconds=1800), _=None)
+        summary = dashboard_summary(db=db, settings=Settings(worker_job_timeout_seconds=1800), _=None)
+        by_check = {row.check: row for row in rows}
+
+        assert by_check["job_timeout"].status == "ok"
+        assert by_check["non_root_worker"].status == "ok"
+        assert by_check["read_only_filesystem"].status == "ok"
+        assert by_check["network_restriction"].status == "ok"
+        assert by_check["resource_limits"].status == "ok"
+        assert by_check["temp_cleanup"].status == "ok"
+        assert summary.worker_hardening_items == 0
+
+
+def test_storage_encryption_posture_reports_tls_metadata_and_backup_audit() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "storage-encryption")
+        app = create_application(db, repo)
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={"artifacts": {"source_sbom": {"storage_key": "source.json", "encrypted": True}}},
+        )
+        db.add(scan)
+        db.flush()
+        db.add_all(
+            [
+                Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="encrypted-digest", storage_key="encrypted/sbom.json", active=True, sbom_kind="source"),
+                AuditLog(actor="ops", role="admin", action="backup.encryption.verify", resource_type="backup", resource_id="backup-1", metadata_json={"encryption": "kms"}),
+            ]
+        )
+        db.flush()
+        settings = Settings(minio_endpoint="https://minio.example.test")
+
+        rows = storage_encryption_posture(db=db, settings=settings, _=None)
+        summary = dashboard_summary(db=db, settings=settings, _=None)
+        by_check = {row.check: row for row in rows}
+
+        assert by_check["object_storage_tls"].status == "ok"
+        assert by_check["sbom_encryption_metadata"].status == "ok"
+        assert by_check["artifact_encryption_metadata"].status == "ok"
+        assert by_check["backup_encryption_audit"].status == "ok"
+        assert summary.storage_encryption_items == 0

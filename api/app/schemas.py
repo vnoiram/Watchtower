@@ -1885,6 +1885,82 @@ class GitHubPermissionPostureOut(BaseModel):
     detail: str
 
 
+class PrStalenessOut(BaseModel):
+    staleness_type: str
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider_id: str | None = None
+    branch: str | None = None
+    url: str | None = None
+    ci_passed: bool | None = None
+    age_days: int
+    detail: str
+    updated_at: datetime
+
+
+class MediumFindingReviewOut(BaseModel):
+    review_type: str
+    finding_id: UUID
+    status: models.FindingStatus
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    has_notification: bool
+    has_action: bool
+    has_vex: bool
+    age_days: int
+    detail: str
+    updated_at: datetime
+
+
+class FalsePositiveReviewOut(BaseModel):
+    review_type: str
+    source: str
+    finding_id: UUID
+    status: models.FindingStatus
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    vex_id: UUID | None = None
+    review_date: datetime | None = None
+    expired: bool
+    reappeared: bool
+    detail: str
+
+
+class WorkerHardeningOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    evidence_type: str | None = None
+    detail: str
+
+
+class StorageEncryptionPostureOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1942,3 +2018,8 @@ class DashboardSummary(BaseModel):
     scanner_database_freshness_items: int
     repository_classification_gap_items: int
     github_permission_issue_items: int
+    pr_staleness_items: int
+    medium_review_items: int
+    false_positive_review_items: int
+    worker_hardening_items: int
+    storage_encryption_items: int

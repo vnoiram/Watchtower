@@ -51,6 +51,7 @@ const backupReadiness = document.querySelector("#backup-readiness");
 const backupEvidence = document.querySelector("#backup-evidence");
 const notificationSlo = document.querySelector("#notification-slo");
 const remediationPrs = document.querySelector("#remediation-prs");
+const prStaleness = document.querySelector("#pr-staleness");
 const remediationBacklog = document.querySelector("#remediation-backlog");
 const remediationRescans = document.querySelector("#remediation-rescans");
 const weeklyReview = document.querySelector("#weekly-review");
@@ -70,6 +71,7 @@ const sastCoverage = document.querySelector("#sast-coverage");
 const duplicateReview = document.querySelector("#duplicate-review");
 const reopenRisk = document.querySelector("#reopen-risk");
 const qualityKpis = document.querySelector("#quality-kpis");
+const falsePositiveReview = document.querySelector("#false-positive-review");
 const scannerVersions = document.querySelector("#scanner-versions");
 const runtimeEol = document.querySelector("#runtime-eol");
 const auditReview = document.querySelector("#audit-review");
@@ -88,6 +90,7 @@ const isolatedSafeguards = document.querySelector("#isolated-safeguards");
 const isolatedScanHealth = document.querySelector("#isolated-scan-health");
 const secretsReview = document.querySelector("#secrets-review");
 const workerPosture = document.querySelector("#worker-posture");
+const workerHardening = document.querySelector("#worker-hardening");
 const exploitIntel = document.querySelector("#exploit-intel");
 const quarterlyReview = document.querySelector("#quarterly-review");
 const rolloutBaseline = document.querySelector("#rollout-baseline");
@@ -106,6 +109,7 @@ const toolchainPosture = document.querySelector("#toolchain-posture");
 const notificationDigest = document.querySelector("#notification-digest");
 const phaseReadiness = document.querySelector("#phase-readiness");
 const findingLifecycle = document.querySelector("#finding-lifecycle");
+const mediumReview = document.querySelector("#medium-review");
 const vexInvalidation = document.querySelector("#vex-invalidation");
 const repositoryDrift = document.querySelector("#repository-drift");
 const autoMergePilot = document.querySelector("#auto-merge-pilot");
@@ -127,6 +131,7 @@ const initialInventory = document.querySelector("#initial-inventory");
 const queuePressure = document.querySelector("#queue-pressure");
 const schedulerDrift = document.querySelector("#scheduler-drift");
 const storagePressure = document.querySelector("#storage-pressure");
+const storageEncryption = document.querySelector("#storage-encryption");
 const githubSyncLag = document.querySelector("#github-sync-lag");
 const credentialFailures = document.querySelector("#credential-failures");
 
@@ -233,6 +238,11 @@ function renderMetrics(summary) {
     ["scanner_database_freshness_items", "Scanner DB", "warn"],
     ["repository_classification_gap_items", "Repo classification", "warn"],
     ["github_permission_issue_items", "GitHub permissions", "warn"],
+    ["pr_staleness_items", "PR staleness", "warn"],
+    ["medium_review_items", "Medium review", "warn"],
+    ["false_positive_review_items", "False positive", "warn"],
+    ["worker_hardening_items", "Worker hardening", "warn"],
+    ["storage_encryption_items", "Storage encryption", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -827,6 +837,18 @@ function renderRemediationPrs(page) {
     : `<tr><td colspan="5">No PR/CI actions</td></tr>`;
 }
 
+function renderPrStaleness(page) {
+  const rows = page.items || [];
+  prStaleness.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.staleness_type)}</td><td>${escapeHtml(item.action_status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.age_days)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No PR staleness items</td></tr>`;
+}
+
 function renderFixableGaps(page) {
   const rows = page.items || [];
   fixableGaps.innerHTML = rows.length
@@ -1086,6 +1108,18 @@ function renderQualityKpis(rows) {
     : `<tr><td colspan="4">No quality KPIs</td></tr>`;
 }
 
+function renderFalsePositiveReview(page) {
+  const rows = page.items || [];
+  falsePositiveReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.review_type)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.expired ? "expired" : "current")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No false positive review items</td></tr>`;
+}
+
 function renderScannerVersions(page) {
   const rows = page.items || [];
   scannerVersions.innerHTML = rows.length
@@ -1298,6 +1332,17 @@ function renderWorkerPosture(rows) {
     : `<tr><td colspan="4">No worker posture checks</td></tr>`;
 }
 
+function renderWorkerHardening(rows) {
+  workerHardening.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.evidence_type || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No worker hardening checks</td></tr>`;
+}
+
 function renderExploitIntel(page) {
   const rows = page.items || [];
   exploitIntel.innerHTML = rows.length
@@ -1457,6 +1502,18 @@ function renderFindingLifecycle(page) {
         )
         .join("")
     : `<tr><td colspan="5">No finding lifecycle issues</td></tr>`;
+}
+
+function renderMediumReview(page) {
+  const rows = page.items || [];
+  mediumReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.review_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.has_notification ? "N" : "-")}/${escapeHtml(item.has_action ? "A" : "-")}/${escapeHtml(item.has_vex ? "V" : "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No medium review items</td></tr>`;
 }
 
 function renderVexInvalidation(page) {
@@ -1705,6 +1762,17 @@ function renderStoragePressure(rows) {
     : `<tr><td colspan="5">No storage pressure records</td></tr>`;
 }
 
+function renderStorageEncryption(rows) {
+  storageEncryption.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No storage encryption checks</td></tr>`;
+}
+
 function renderGithubSyncLag(page) {
   const rows = page.items || [];
   githubSyncLag.innerHTML = rows.length
@@ -1781,6 +1849,7 @@ async function refresh() {
   backupEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   notificationSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationPrs.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  prStaleness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   fixableGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   prCiFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   issueCreationSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1804,6 +1873,7 @@ async function refresh() {
   duplicateReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   reopenRisk.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   qualityKpis.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  falsePositiveReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scannerVersions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   runtimeEol.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   auditReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1822,6 +1892,7 @@ async function refresh() {
   isolatedScanHealth.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   secretsReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   workerPosture.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  workerHardening.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   exploitIntel.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   quarterlyReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   rolloutBaseline.innerHTML = `<tr><td colspan="6">Loading</td></tr>`;
@@ -1836,6 +1907,7 @@ async function refresh() {
   notificationDigest.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   phaseReadiness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   findingLifecycle.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  mediumReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   vexInvalidation.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   repositoryDrift.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   autoMergePilot.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1857,6 +1929,7 @@ async function refresh() {
   queuePressure.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   schedulerDrift.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   storagePressure.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  storageEncryption.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   githubSyncLag.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   credentialFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
@@ -1913,6 +1986,7 @@ async function refresh() {
       backupEvidencePage,
       notificationSloPage,
       remediationPrPage,
+      prStalenessPage,
       fixableGapPage,
       prCiFailurePage,
       issueCreationSloPage,
@@ -1936,6 +2010,7 @@ async function refresh() {
       duplicateReviewPage,
       reopenRiskPage,
       qualityKpiPage,
+      falsePositiveReviewPage,
       scannerVersionPage,
       runtimeEolPage,
       auditReviewPage,
@@ -1954,6 +2029,7 @@ async function refresh() {
       isolatedScanHealthPage,
       secretsReviewPage,
       workerPosturePage,
+      workerHardeningPage,
       exploitIntelPage,
       quarterlyReviewPage,
       rolloutBaselinePage,
@@ -1968,6 +2044,7 @@ async function refresh() {
       notificationDigestPage,
       phaseReadinessPage,
       findingLifecyclePage,
+      mediumReviewPage,
       vexInvalidationPage,
       repositoryDriftPage,
       autoMergePilotPage,
@@ -1989,6 +2066,7 @@ async function refresh() {
       queuePressurePage,
       schedulerDriftPage,
       storagePressurePage,
+      storageEncryptionPage,
       githubSyncLagPage,
       credentialFailurePage,
     ] = await Promise.all([
@@ -2044,6 +2122,7 @@ async function refresh() {
       loadJson("/operations/backup-evidence?limit=10"),
       loadJson("/notifications/slo?breached=true&limit=10"),
       loadJson("/remediation/prs?limit=10"),
+      loadJson("/remediation/pr-staleness?limit=10"),
       loadJson("/remediation/fixable-gaps?limit=10"),
       loadJson("/remediation/pr-ci-failures?limit=10"),
       loadJson("/remediation/issue-slo?breached=true&limit=10"),
@@ -2067,6 +2146,7 @@ async function refresh() {
       loadJson("/quality/duplicates?limit=10"),
       loadJson("/quality/reopen-risk?limit=10"),
       loadJson("/kpis/quality"),
+      loadJson("/quality/false-positive-review?limit=10"),
       loadJson("/scanner-versions?limit=10"),
       loadJson("/governance/runtime-eol?limit=10"),
       loadJson("/audit/review?limit=10"),
@@ -2085,6 +2165,7 @@ async function refresh() {
       loadJson("/isolated-lane/scan-health?limit=10"),
       loadJson("/security/secrets-review?limit=10"),
       loadJson("/operations/worker-posture"),
+      loadJson("/operations/worker-hardening"),
       loadJson("/security/exploit-intel?limit=10"),
       loadJson("/governance/quarterly-review"),
       loadJson("/rollout/baseline"),
@@ -2099,6 +2180,7 @@ async function refresh() {
       loadJson("/notifications/digest-readiness?limit=10"),
       loadJson("/operations/phase-readiness"),
       loadJson("/findings/lifecycle-review?limit=10"),
+      loadJson("/findings/medium-review?limit=10"),
       loadJson("/vex/invalidation-candidates?limit=10"),
       loadJson("/rollout/repository-drift?limit=10"),
       loadJson("/auto-merge/pilot-readiness?limit=10"),
@@ -2120,6 +2202,7 @@ async function refresh() {
       loadJson("/operations/queue-pressure"),
       loadJson("/operations/scheduler-drift?limit=10"),
       loadJson("/storage/pressure"),
+      loadJson("/storage/encryption-posture"),
       loadJson("/repository-sync/lag?limit=10"),
       loadJson("/operations/credential-failures?limit=10"),
     ]);
@@ -2174,6 +2257,7 @@ async function refresh() {
     renderOperationEvidence(backupEvidence, backupEvidencePage, "No backup evidence records");
     renderNotificationSlo(notificationSloPage);
     renderRemediationPrs(remediationPrPage);
+    renderPrStaleness(prStalenessPage);
     renderFixableGaps(fixableGapPage);
     renderPrCiFailures(prCiFailurePage);
     renderIssueCreationSlo(issueCreationSloPage);
@@ -2197,6 +2281,7 @@ async function refresh() {
     renderDuplicateReview(duplicateReviewPage);
     renderReopenRisk(reopenRiskPage);
     renderQualityKpis(qualityKpiPage);
+    renderFalsePositiveReview(falsePositiveReviewPage);
     renderScannerVersions(scannerVersionPage);
     renderRuntimeEol(runtimeEolPage);
     renderAuditReview(auditReviewPage);
@@ -2215,6 +2300,7 @@ async function refresh() {
     renderIsolatedScanHealth(isolatedScanHealthPage);
     renderSecretsReview(secretsReviewPage);
     renderWorkerPosture(workerPosturePage);
+    renderWorkerHardening(workerHardeningPage);
     renderExploitIntel(exploitIntelPage);
     renderQuarterlyReview(quarterlyReviewPage);
     renderRolloutBaseline(rolloutBaselinePage);
@@ -2229,6 +2315,7 @@ async function refresh() {
     renderNotificationDigest(notificationDigestPage);
     renderPhaseReadiness(phaseReadinessPage);
     renderFindingLifecycle(findingLifecyclePage);
+    renderMediumReview(mediumReviewPage);
     renderVexInvalidation(vexInvalidationPage);
     renderRepositoryDrift(repositoryDriftPage);
     renderAutoMergePilot(autoMergePilotPage);
@@ -2250,6 +2337,7 @@ async function refresh() {
     renderQueuePressure(queuePressurePage);
     renderSchedulerDrift(schedulerDriftPage);
     renderStoragePressure(storagePressurePage);
+    renderStorageEncryption(storageEncryptionPage);
     renderGithubSyncLag(githubSyncLagPage);
     renderCredentialFailures(credentialFailurePage);
   } catch (error) {
@@ -2304,6 +2392,7 @@ async function refresh() {
     backupEvidence.innerHTML = `<tr><td colspan="5">Unable to load backup evidence</td></tr>`;
     notificationSlo.innerHTML = `<tr><td colspan="5">Unable to load notification SLO</td></tr>`;
     remediationPrs.innerHTML = `<tr><td colspan="5">Unable to load PR/CI status</td></tr>`;
+    prStaleness.innerHTML = `<tr><td colspan="5">Unable to load PR staleness</td></tr>`;
     fixableGaps.innerHTML = `<tr><td colspan="5">Unable to load fixable gaps</td></tr>`;
     prCiFailures.innerHTML = `<tr><td colspan="5">Unable to load PR CI failures</td></tr>`;
     issueCreationSlo.innerHTML = `<tr><td colspan="5">Unable to load issue creation SLO</td></tr>`;
@@ -2327,6 +2416,7 @@ async function refresh() {
     duplicateReview.innerHTML = `<tr><td colspan="5">Unable to load duplicate review</td></tr>`;
     reopenRisk.innerHTML = `<tr><td colspan="5">Unable to load reopen risk</td></tr>`;
     qualityKpis.innerHTML = `<tr><td colspan="4">Unable to load quality KPIs</td></tr>`;
+    falsePositiveReview.innerHTML = `<tr><td colspan="5">Unable to load false positive review</td></tr>`;
     scannerVersions.innerHTML = `<tr><td colspan="5">Unable to load scanner versions</td></tr>`;
     runtimeEol.innerHTML = `<tr><td colspan="5">Unable to load runtime EOL review</td></tr>`;
     auditReview.innerHTML = `<tr><td colspan="5">Unable to load audit review</td></tr>`;
@@ -2345,6 +2435,7 @@ async function refresh() {
     isolatedScanHealth.innerHTML = `<tr><td colspan="5">Unable to load isolated scan health</td></tr>`;
     secretsReview.innerHTML = `<tr><td colspan="5">Unable to load secrets review</td></tr>`;
     workerPosture.innerHTML = `<tr><td colspan="4">Unable to load worker posture</td></tr>`;
+    workerHardening.innerHTML = `<tr><td colspan="5">Unable to load worker hardening</td></tr>`;
     exploitIntel.innerHTML = `<tr><td colspan="5">Unable to load exploit intelligence</td></tr>`;
     quarterlyReview.innerHTML = `<tr><td colspan="4">Unable to load quarterly review</td></tr>`;
     rolloutBaseline.innerHTML = `<tr><td colspan="6">Unable to load rollout baseline</td></tr>`;
@@ -2359,6 +2450,7 @@ async function refresh() {
     notificationDigest.innerHTML = `<tr><td colspan="5">Unable to load notification digest readiness</td></tr>`;
     phaseReadiness.innerHTML = `<tr><td colspan="5">Unable to load phase readiness</td></tr>`;
     findingLifecycle.innerHTML = `<tr><td colspan="5">Unable to load finding lifecycle review</td></tr>`;
+    mediumReview.innerHTML = `<tr><td colspan="5">Unable to load medium finding review</td></tr>`;
     vexInvalidation.innerHTML = `<tr><td colspan="5">Unable to load VEX invalidation candidates</td></tr>`;
     repositoryDrift.innerHTML = `<tr><td colspan="5">Unable to load repository drift</td></tr>`;
     autoMergePilot.innerHTML = `<tr><td colspan="5">Unable to load auto-merge pilot readiness</td></tr>`;
@@ -2380,6 +2472,7 @@ async function refresh() {
     queuePressure.innerHTML = `<tr><td colspan="5">Unable to load queue pressure</td></tr>`;
     schedulerDrift.innerHTML = `<tr><td colspan="5">Unable to load scheduler drift</td></tr>`;
     storagePressure.innerHTML = `<tr><td colspan="5">Unable to load storage pressure</td></tr>`;
+    storageEncryption.innerHTML = `<tr><td colspan="4">Unable to load storage encryption</td></tr>`;
     githubSyncLag.innerHTML = `<tr><td colspan="5">Unable to load GitHub sync lag</td></tr>`;
     credentialFailures.innerHTML = `<tr><td colspan="5">Unable to load credential failures</td></tr>`;
   }
