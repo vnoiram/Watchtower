@@ -21,6 +21,7 @@ from api.app.routers.job_health import job_health_reason
 from api.app.routers.jobs import job_concurrency_risk_count
 from api.app.routers.kpis import mvp_target_breach_count, notification_failure_count, scan_failure_rate_percent
 from api.app.routers.notifications import notification_slo_breach_count
+from api.app.routers.findings import medium_review_count
 from api.app.routers.operations import (
     control_evidence_count,
     backup_evidence_count,
@@ -32,13 +33,15 @@ from api.app.routers.operations import (
     queue_pressure_count,
     rollback_readiness_count,
     restore_evidence_count,
+    worker_hardening_count,
 )
-from api.app.routers.quality import reopen_risk_count
+from api.app.routers.quality import false_positive_review_count, reopen_risk_count
 from api.app.routers.remediation import (
     fixable_gap_count,
     auto_resolution_gap_count,
     issue_slo_breach_count,
     pr_ci_failure_count,
+    pr_staleness_count,
     remediation_coverage_count,
     stale_remediation_count,
 )
@@ -55,7 +58,7 @@ from api.app.routers.scanners import scanner_database_freshness_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import rbac_review_count, sast_coverage_count, secret_scan_coverage_count
 from api.app.routers.sla import count_sla_breached_findings
-from api.app.routers.storage import retention_review_count, storage_pressure_count
+from api.app.routers.storage import retention_review_count, storage_encryption_count, storage_pressure_count
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -140,6 +143,11 @@ def dashboard_summary(
     scanner_database_freshness_items = scanner_database_freshness_count(db)
     repository_classification_gap_items = repository_classification_gap_count(db)
     github_permission_issue_items = github_permission_issue_count(db, settings)
+    pr_staleness_items = pr_staleness_count(db)
+    medium_review_items = medium_review_count(db)
+    false_positive_review_items = false_positive_review_count(db)
+    worker_hardening_items = worker_hardening_count(db, settings)
+    storage_encryption_items = storage_encryption_count(db, settings)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -197,4 +205,9 @@ def dashboard_summary(
         scanner_database_freshness_items=scanner_database_freshness_items,
         repository_classification_gap_items=repository_classification_gap_items,
         github_permission_issue_items=github_permission_issue_items,
+        pr_staleness_items=pr_staleness_items,
+        medium_review_items=medium_review_items,
+        false_positive_review_items=false_positive_review_items,
+        worker_hardening_items=worker_hardening_items,
+        storage_encryption_items=storage_encryption_items,
     )

@@ -364,6 +364,15 @@ def worker_posture(
     return worker_posture_items(db, settings)
 
 
+@router.get("/worker-hardening", response_model=list[schemas.WorkerHardeningOut])
+def worker_hardening(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    return worker_hardening_items(db, settings)
+
+
 @router.get("/scan-targets", response_model=list[schemas.ScanTargetOut])
 def scan_targets(
     db: Session = Depends(get_db),
@@ -478,6 +487,10 @@ def backup_evidence_count(db: Session, settings: Settings) -> int:
 
 def restore_evidence_count(db: Session, settings: Settings) -> int:
     return sum(max(item["count"], 1) for item in restore_evidence_items(db, settings) if item["status"] != "ok")
+
+
+def worker_hardening_count(db: Session, settings: Settings) -> int:
+    return sum(max(item.count, 1) for item in worker_hardening_items(db, settings) if item.status != "ok")
 
 
 def queue_pressure_count(db: Session) -> int:
@@ -646,6 +659,30 @@ def worker_posture_items(db: Session, settings: Settings) -> list[schemas.Worker
         _worker_check("timed_out_jobs", "fail" if timed_out else "ok", len(timed_out), "Jobs with timed_out status"),
         _worker_check("isolated_scan_failures", "warn" if isolated_scan_failures else "ok", len(isolated_scan_failures), "Failed scans for restricted or isolated lane applications"),
         _worker_check("credential_failure_signals", "fail" if credential_signals else "ok", len(credential_signals), "Failure signals mentioning auth or credentials"),
+    ]
+
+
+def worker_hardening_items(db: Session, settings: Settings) -> list[schemas.WorkerHardeningOut]:
+    audit_logs = list(db.scalars(select(models.AuditLog)))
+    jobs = list(db.scalars(select(models.Job)))
+    root_evidence = _hardening_evidence(audit_logs, jobs, "rootless", "non_root", "run_as_user")
+    readonly_evidence = _hardening_evidence(audit_logs, jobs, "read_only", "readonly", "read-only")
+    network_evidence = _hardening_evidence(audit_logs, jobs, "network_policy", "network_restricted", "network")
+    resource_evidence = _hardening_evidence(audit_logs, jobs, "cpu_limit", "memory_limit", "resource_limit")
+    temp_cleanup_evidence = _hardening_evidence(audit_logs, jobs, "temp_cleanup", "workspace_cleanup", "cleanup")
+    return [
+        _hardening_check(
+            "job_timeout",
+            "ok" if settings.worker_job_timeout_seconds > 0 else "fail",
+            settings.worker_job_timeout_seconds,
+            "setting",
+            f"worker_job_timeout_seconds={settings.worker_job_timeout_seconds}",
+        ),
+        _hardening_check("non_root_worker", "ok" if root_evidence else "warn", len(root_evidence), "metadata_or_audit", "Worker rootless/non-root evidence"),
+        _hardening_check("read_only_filesystem", "ok" if readonly_evidence else "warn", len(readonly_evidence), "metadata_or_audit", "Worker read-only filesystem evidence"),
+        _hardening_check("network_restriction", "ok" if network_evidence else "warn", len(network_evidence), "metadata_or_audit", "Worker network restriction evidence"),
+        _hardening_check("resource_limits", "ok" if resource_evidence else "warn", len(resource_evidence), "metadata_or_audit", "Worker CPU or memory limit evidence"),
+        _hardening_check("temp_cleanup", "ok" if temp_cleanup_evidence else "warn", len(temp_cleanup_evidence), "metadata_or_audit", "Worker temporary workspace cleanup evidence"),
     ]
 
 
@@ -1206,6 +1243,39 @@ def _workload(item: str, count: int, nonzero_status: str, detail: str) -> schema
 
 def _worker_check(check: str, status: str, count: int, detail: str) -> schemas.WorkerPostureOut:
     return schemas.WorkerPostureOut(check=check, status=status, count=count, detail=detail)
+
+
+def _hardening_check(
+    check: str,
+    status: str,
+    count: int,
+    evidence_type: str,
+    detail: str,
+) -> schemas.WorkerHardeningOut:
+    return schemas.WorkerHardeningOut(
+        check=check,
+        status=status,
+        count=count,
+        evidence_type=evidence_type,
+        detail=detail,
+    )
+
+
+def _hardening_evidence(
+    audit_logs: list[models.AuditLog],
+    jobs: list[models.Job],
+    *tokens: str,
+) -> list[object]:
+    evidence = []
+    for log in audit_logs:
+        text = f"{log.action} {log.resource_type} {log.resource_id} {log.metadata_json}".lower()
+        if "worker" in text and any(token in text for token in tokens):
+            evidence.append(log)
+    for job in jobs:
+        text = f"{job.job_type.value} {job.payload}".lower()
+        if any(token in text for token in tokens):
+            evidence.append(job)
+    return evidence
 
 
 def _scan_target(

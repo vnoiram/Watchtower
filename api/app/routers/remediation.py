@@ -258,6 +258,25 @@ def list_remediation_prs(
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
+@router.get("/pr-staleness", response_model=schemas.CursorPage)
+def list_pr_staleness(
+    limit: int = 50,
+    staleness_type: str | None = None,
+    severity: models.Severity | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = pr_staleness_items(db)
+    if staleness_type:
+        items = [item for item in items if item["staleness_type"] == staleness_type]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if status:
+        items = [item for item in items if item["action_status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/dependency-updates", response_model=schemas.CursorPage)
 def list_dependency_updates(
     limit: int = 50,
@@ -462,6 +481,35 @@ def issue_slo_breach_count(db: Session) -> int:
 
 def auto_resolution_gap_count(db: Session) -> int:
     return sum(1 for item in auto_resolution_evidence_items(db) if not item["complete"])
+
+
+def pr_staleness_count(db: Session) -> int:
+    return len(pr_staleness_items(db))
+
+
+def pr_staleness_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(days=7)
+    items = []
+    stmt = _remediation_action_context_stmt().order_by(
+        models.RemediationAction.updated_at.asc(),
+        models.RemediationAction.id.asc(),
+    )
+    for action, finding, application, vulnerability, component in db.execute(stmt):
+        if not _has_pr_signal(action):
+            continue
+        metadata = action.metadata_json or {}
+        ci_passed = _metadata_bool_or_none(metadata.get("ci_passed"))
+        age_days = max((now.replace(tzinfo=None) - action.updated_at.replace(tzinfo=None)).days, 0)
+        repository = db.get(models.Repository, application.repository_id)
+        context = (action, finding, application, repository, vulnerability, component, ci_passed, age_days)
+        if action.status in _BACKLOG_OPEN_STATUSES and _before(action.updated_at, stale_cutoff):
+            items.append(_pr_staleness_item("stale_pr", *context, detail="PR action has not been updated in 7 days"))
+        if ci_passed is not True:
+            items.append(_pr_staleness_item("ci_incomplete", *context, detail="PR action is missing successful CI evidence"))
+        if action.status in {"created", "open", "in_review", "pending_review"}:
+            items.append(_pr_staleness_item("review_or_merge_waiting", *context, detail="PR action is waiting for review or merge"))
+    return items
 
 
 def dependency_update_items(db: Session) -> list[dict]:
@@ -1175,6 +1223,40 @@ def _has_dependency_update_signal(action: models.RemediationAction) -> bool:
         or metadata.get("update_kind")
         or "ci_passed" in metadata
     )
+
+
+def _pr_staleness_item(
+    staleness_type: str,
+    action: models.RemediationAction,
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    vulnerability: models.Vulnerability,
+    component: models.Component,
+    ci_passed: bool | None,
+    age_days: int,
+    detail: str,
+) -> dict:
+    return schemas.PrStalenessOut(
+        staleness_type=staleness_type,
+        action_id=action.id,
+        action_type=action.action_type,
+        action_status=action.status,
+        finding_id=finding.id,
+        severity=finding.severity,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        provider_id=action.provider_id,
+        branch=action.branch,
+        url=_pr_url(action),
+        ci_passed=ci_passed,
+        age_days=age_days,
+        detail=f"{detail}: {component.name} / {vulnerability.external_id}",
+        updated_at=action.updated_at,
+    ).model_dump(mode="json")
 
 
 def _suppression_reason(action: models.RemediationAction) -> str | None:
