@@ -11,6 +11,7 @@ from api.app.deps import Principal, get_principal
 from api.app.routers.auto_merge import automation_guardrail_count
 from api.app.routers.artifacts import container_coverage_count
 from api.app.routers.application_detection import application_input_coverage_count, container_input_coverage_count
+from api.app.routers.components import dependency_relationship_gap_count
 from api.app.routers.governance import exposure_review_count, quarterly_review_count
 from api.app.routers.integrations import github_integration_issue_count, github_permission_issue_count
 from api.app.routers.isolated_lane import (
@@ -22,7 +23,7 @@ from api.app.routers.job_health import job_health_reason
 from api.app.routers.jobs import job_concurrency_risk_count
 from api.app.routers.kpis import mvp_target_breach_count, notification_failure_count, scan_failure_rate_percent
 from api.app.routers.notifications import notification_slo_breach_count
-from api.app.routers.findings import medium_review_count
+from api.app.routers.findings import medium_review_count, risk_score_gap_count
 from api.app.routers.operations import (
     control_evidence_count,
     backup_evidence_count,
@@ -40,10 +41,12 @@ from api.app.routers.quality import false_positive_review_count, reopen_risk_cou
 from api.app.routers.remediation import (
     fixable_gap_count,
     auto_resolution_gap_count,
+    dependency_update_gap_count,
     issue_slo_breach_count,
     pr_ci_failure_count,
     pr_staleness_count,
     remediation_coverage_count,
+    remediation_priority_count,
     stale_remediation_count,
 )
 from api.app.routers.rollout import (
@@ -61,7 +64,7 @@ from api.app.routers.security import rbac_review_count, sast_coverage_count, sec
 from api.app.routers.sla import count_sla_breached_findings
 from api.app.routers.sboms import sbom_normalization_quality_count
 from api.app.routers.storage import retention_review_count, storage_encryption_count, storage_pressure_count
-from api.app.routers.vulnerabilities import vulnerability_reevaluation_gap_count
+from api.app.routers.vulnerabilities import vulnerability_enrichment_gap_count, vulnerability_reevaluation_gap_count
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -156,6 +159,11 @@ def dashboard_summary(
     sbom_normalization_gap_items = sbom_normalization_quality_count(db)
     raw_artifact_gap_items = raw_scan_artifact_gap_count(db)
     vulnerability_reevaluation_gap_items = vulnerability_reevaluation_gap_count(db)
+    vulnerability_enrichment_gap_items = vulnerability_enrichment_gap_count(db)
+    risk_score_gap_items = risk_score_gap_count(db)
+    dependency_relationship_gap_items = dependency_relationship_gap_count(db)
+    dependency_update_gap_items = dependency_update_gap_count(db)
+    remediation_priority_items = remediation_priority_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -223,4 +231,9 @@ def dashboard_summary(
         sbom_normalization_gap_items=sbom_normalization_gap_items,
         raw_artifact_gap_items=raw_artifact_gap_items,
         vulnerability_reevaluation_gap_items=vulnerability_reevaluation_gap_items,
+        vulnerability_enrichment_gap_items=vulnerability_enrichment_gap_items,
+        risk_score_gap_items=risk_score_gap_items,
+        dependency_relationship_gap_items=dependency_relationship_gap_items,
+        dependency_update_gap_items=dependency_update_gap_items,
+        remediation_priority_items=remediation_priority_items,
     )

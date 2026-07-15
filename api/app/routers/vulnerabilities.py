@@ -131,8 +131,62 @@ def list_vulnerability_reevaluation_coverage(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/enrichment-coverage", response_model=schemas.CursorPage)
+def list_vulnerability_enrichment_coverage(
+    limit: int = 50,
+    gap_type: str | None = None,
+    severity: models.Severity | None = None,
+    source: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = vulnerability_enrichment_coverage_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if source:
+        items = [item for item in items if item["source"] == source]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def vulnerability_reevaluation_gap_count(db: Session) -> int:
     return len(vulnerability_reevaluation_coverage_items(db))
+
+
+def vulnerability_enrichment_gap_count(db: Session) -> int:
+    return len(vulnerability_enrichment_coverage_items(db))
+
+
+def vulnerability_enrichment_coverage_items(db: Session) -> list[dict]:
+    affected_counts = {
+        vulnerability_id: count
+        for vulnerability_id, count in db.execute(
+            select(models.Finding.vulnerability_id, func.count(models.Finding.id)).group_by(
+                models.Finding.vulnerability_id
+            )
+        )
+    }
+    affected_context = _first_finding_context_by_vulnerability(db)
+    stmt = select(models.Vulnerability).order_by(models.Vulnerability.severity.asc(), models.Vulnerability.external_id.asc())
+    items = []
+    for vulnerability in db.scalars(stmt):
+        evidence = _vulnerability_evidence_text(vulnerability)
+        context = affected_context.get(vulnerability.id)
+        common = (vulnerability, int(affected_counts.get(vulnerability.id, 0)), context)
+        if vulnerability.cvss_score is None:
+            items.append(_enrichment_item("missing_cvss", *common, "Vulnerability has no CVSS score"))
+        if not _has_token(evidence, {"epss"}):
+            items.append(_enrichment_item("missing_epss", *common, "Vulnerability has no EPSS evidence"))
+        if not _has_token(evidence, {"kev", "cisa"}):
+            items.append(_enrichment_item("missing_kev", *common, "Vulnerability has no CISA KEV evidence"))
+        if not _has_token(evidence, {"exploit", "poc", "proof-of-concept"}):
+            items.append(_enrichment_item("missing_exploit_availability", *common, "Vulnerability has no exploit availability evidence"))
+        if not _has_token(evidence, {"raw", "storage", "artifact", "object"}):
+            items.append(_enrichment_item("missing_raw_data_location", *common, "Vulnerability has no raw data storage evidence"))
+        if not vulnerability.references:
+            items.append(_enrichment_item("missing_references", *common, "Vulnerability has no reference URLs"))
+    return items
 
 
 def vulnerability_reevaluation_coverage_items(db: Session) -> list[dict]:
@@ -168,6 +222,77 @@ def vulnerability_reevaluation_coverage_items(db: Session) -> list[dict]:
         if latest_scan.created_at < _matching_datetime(stale_cutoff, latest_scan.created_at):
             items.append(_reevaluation_item("stale_vulnerability_scan", *context, "Latest scan is older than 30 days"))
     return items
+
+
+def _first_finding_context_by_vulnerability(
+    db: Session,
+) -> dict[UUID, tuple[models.Finding, models.Application, models.Repository]]:
+    stmt = (
+        select(models.Finding, models.Application, models.Repository)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Finding.risk_score.desc(), models.Finding.created_at.asc(), models.Finding.id.asc())
+    )
+    contexts = {}
+    for finding, application, repository in db.execute(stmt):
+        contexts.setdefault(finding.vulnerability_id, (finding, application, repository))
+    return contexts
+
+
+def _vulnerability_evidence_text(vulnerability: models.Vulnerability) -> str:
+    values = [
+        vulnerability.title,
+        vulnerability.description,
+        vulnerability.references or [],
+        vulnerability.source,
+        vulnerability.external_id,
+    ]
+    return _flatten_text(values)
+
+
+def _flatten_text(value) -> str:
+    if isinstance(value, dict):
+        return " ".join([str(key).lower() for key in value] + [_flatten_text(item) for item in value.values()])
+    if isinstance(value, list | tuple | set):
+        return " ".join(_flatten_text(item) for item in value)
+    return str(value or "").lower()
+
+
+def _has_token(text: str, tokens: set[str]) -> bool:
+    return any(token in text for token in tokens)
+
+
+def _enrichment_item(
+    gap_type: str,
+    vulnerability: models.Vulnerability,
+    affected_count: int,
+    context: tuple[models.Finding, models.Application, models.Repository] | None,
+    detail: str,
+) -> dict:
+    evidence = _vulnerability_evidence_text(vulnerability)
+    finding = context[0] if context else None
+    application = context[1] if context else None
+    repository = context[2] if context else None
+    return schemas.VulnerabilityEnrichmentCoverageOut(
+        gap_type=gap_type,
+        vulnerability_id=vulnerability.id,
+        source=vulnerability.source,
+        external_id=vulnerability.external_id,
+        severity=vulnerability.severity,
+        cvss_score=vulnerability.cvss_score,
+        reference_count=len(vulnerability.references or []),
+        affected_finding_count=affected_count,
+        has_epss=_has_token(evidence, {"epss"}),
+        has_kev=_has_token(evidence, {"kev", "cisa"}),
+        has_exploit=_has_token(evidence, {"exploit", "poc", "proof-of-concept"}),
+        has_raw_data_location=_has_token(evidence, {"raw", "storage", "artifact", "object"}),
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        repository_id=repository.id if repository else None,
+        repository_owner=repository.owner if repository else None,
+        repository_name=repository.name if repository else None,
+        detail=detail if finding is None else f"{detail}: representative finding {finding.id}",
+    ).model_dump(mode="json")
 
 
 def _latest_scans_by_application(db: Session, application_ids: list[UUID]) -> dict[UUID, models.Scan]:

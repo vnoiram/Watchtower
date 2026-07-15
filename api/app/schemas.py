@@ -1178,6 +1178,49 @@ class DependencyUpdateOut(BaseModel):
     detail: str
 
 
+class VulnerabilityEnrichmentCoverageOut(BaseModel):
+    gap_type: str
+    vulnerability_id: UUID
+    source: str
+    external_id: str
+    severity: models.Severity
+    cvss_score: float | None = None
+    reference_count: int
+    affected_finding_count: int
+    has_epss: bool
+    has_kev: bool
+    has_exploit: bool
+    has_raw_data_location: bool
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    detail: str
+
+
+class RiskScoreExplanationOut(BaseModel):
+    gap_type: str
+    finding_id: UUID
+    status: models.FindingStatus
+    severity: models.Severity
+    risk_score: float
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    criticality: str
+    internet_exposed: bool
+    production: bool
+    fixed_version: str | None = None
+    has_kev: bool
+    has_epss: bool
+    priority_factors: list[str] = Field(default_factory=list)
+    detail: str
+    updated_at: datetime
+
+
 class FailureSignalOut(BaseModel):
     signal_type: str
     source: str
@@ -1325,6 +1368,55 @@ class RemediationCoverageOut(BaseModel):
     provider: str | None = None
     url: str | None = None
     coverage_percent: float
+
+
+class DependencyUpdateCoverageOut(BaseModel):
+    gap_type: str
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus
+    risk_score: float
+    fixed_version: str
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    provider: str | None = None
+    update_source: str | None = None
+    action_id: UUID | None = None
+    action_type: str | None = None
+    action_status: str | None = None
+    validation_status: str | None = None
+    validation_scan_id: UUID | None = None
+    age_days: int
+    detail: str
+
+
+class RemediationPriorityQueueOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus
+    risk_score: float
+    priority_rank: int
+    priority_reason: str
+    sla_breached: bool
+    fix_available: bool
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    production: bool
+    internet_exposed: bool
+    has_kev: bool
+    has_exploit: bool
+    fixed_version: str | None = None
+    created_at: datetime
 
 
 class ResolutionVerificationOut(BaseModel):
@@ -1749,6 +1841,27 @@ class DailyScanSloOut(BaseModel):
     detail: str
 
 
+class DependencyRelationshipOut(BaseModel):
+    gap_type: str
+    component_id: UUID
+    purl: str
+    ecosystem: str | None = None
+    component_name: str
+    component_version: str | None = None
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    active_sbom_id: UUID
+    direct_dependency: bool | None = None
+    dependency_scope: str | None = None
+    dependency_path: str | None = None
+    development_dependency: bool | None = None
+    optional_dependency: bool | None = None
+    detail: str
+
+
 class QueuePressureOut(BaseModel):
     job_type: models.JobType
     status: models.JobStatus
@@ -2117,3 +2230,8 @@ class DashboardSummary(BaseModel):
     sbom_normalization_gap_items: int
     raw_artifact_gap_items: int
     vulnerability_reevaluation_gap_items: int
+    vulnerability_enrichment_gap_items: int
+    risk_score_gap_items: int
+    dependency_relationship_gap_items: int
+    dependency_update_gap_items: int
+    remediation_priority_items: int

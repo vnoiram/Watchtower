@@ -58,13 +58,14 @@ from api.app.routers.components import (
     list_component_applications,
     list_component_usage,
     list_components,
+    list_dependency_relationships,
     list_license_review,
 )
 from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
 from api.app.routers.findings import list_finding_evidence_gaps, list_findings, list_finding_lifecycle_review
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
-from api.app.routers.findings import list_medium_review, list_resolution_candidates
+from api.app.routers.findings import list_medium_review, list_resolution_candidates, list_risk_score_explanations
 from api.app.routers.governance import (
     list_auto_merge_scope,
     list_exposure_review,
@@ -119,6 +120,7 @@ from api.app.routers.quality import list_duplicate_review, list_reopen_risk
 from api.app.routers.quality import list_false_positive_review
 from api.app.routers.remediation import (
     list_auto_resolution_evidence,
+    list_dependency_update_coverage,
     list_fixable_gaps,
     list_issue_creation_slo,
     list_remediation_backlog,
@@ -128,6 +130,7 @@ from api.app.routers.remediation import (
     list_issue_closures,
     list_pr_ci_failures,
     list_pr_staleness,
+    list_remediation_priority_queue,
     list_remediation_prs,
     list_remediation_aging,
     list_remediation_rescans,
@@ -173,6 +176,7 @@ from api.app.routers.storage import list_storage_cleanup_candidates, retention_r
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_invalidation_candidates, list_vex_statements
 from api.app.routers.vulnerabilities import (
+    list_vulnerability_enrichment_coverage,
     list_vulnerabilities,
     list_vulnerability_impact,
     list_vulnerability_reevaluation_coverage,
@@ -5245,3 +5249,173 @@ def test_list_vulnerability_reevaluation_coverage_reports_stale_and_modified_vul
         assert "vulnerability_updated_after_scan" in gaps
         assert high_page.items[0]["finding_id"] == str(finding.id)
         assert summary.vulnerability_reevaluation_gap_items == len(page.items)
+
+
+def test_list_vulnerability_enrichment_coverage_reports_missing_intel_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "vuln-enrichment")
+        app = create_application(db, repo)
+        component = Component(purl="pkg:pypi/enrich@1", ecosystem="pypi", name="enrich", version="1")
+        vulnerability = Vulnerability(
+            source="osv",
+            external_id="OSV-ENRICH",
+            severity=Severity.high,
+            references=["https://storage.example/raw/osv-enrich.json"],
+        )
+        db.add_all([component, vulnerability])
+        db.flush()
+        db.add(
+            Finding(
+                application_id=app.id,
+                component_id=component.id,
+                vulnerability_id=vulnerability.id,
+                status=FindingStatus.open,
+                severity=Severity.high,
+            )
+        )
+        db.flush()
+
+        page = list_vulnerability_enrichment_coverage(db=db, _=None)
+        source_page = list_vulnerability_enrichment_coverage(source="osv", gap_type="missing_epss", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {item["gap_type"] for item in page.items}
+
+        assert {"missing_cvss", "missing_epss", "missing_kev", "missing_exploit_availability"} <= gaps
+        assert "missing_raw_data_location" not in gaps
+        assert source_page.items[0]["external_id"] == "OSV-ENRICH"
+        assert summary.vulnerability_enrichment_gap_items == len(page.items)
+
+
+def test_list_risk_score_explanations_reports_missing_score_and_priority_factors() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "risk-score")
+        app = create_application(db, repo)
+        app.criticality = "critical"
+        app.internet_exposed = True
+        app.production = True
+        component = Component(purl="pkg:pypi/risk@1", ecosystem="pypi", name="risk", version="1")
+        vulnerability = Vulnerability(
+            source="osv",
+            external_id="OSV-RISK",
+            severity=Severity.critical,
+            references=["https://example.test/epss", "https://example.test/cisa-kev"],
+        )
+        db.add_all([component, vulnerability])
+        db.flush()
+        finding = Finding(
+            application_id=app.id,
+            component_id=component.id,
+            vulnerability_id=vulnerability.id,
+            status=FindingStatus.open,
+            severity=Severity.critical,
+            risk_score=0,
+            fixed_version="1.0.1",
+        )
+        db.add(finding)
+        db.flush()
+
+        page = list_risk_score_explanations(db=db, _=None)
+        critical_page = list_risk_score_explanations(gap_type="missing_risk_score", severity=Severity.critical, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert page.items[0]["finding_id"] == str(finding.id)
+        assert "internet_exposed" in page.items[0]["priority_factors"]
+        assert "kev" in page.items[0]["priority_factors"]
+        assert critical_page.items[0]["gap_type"] == "missing_risk_score"
+        assert summary.risk_score_gap_items == len(page.items)
+
+
+def test_list_dependency_relationships_reports_missing_relationship_metadata() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "dependency-relationships")
+        app = create_application(db, repo)
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={
+                "dependencies": [
+                    {
+                        "purl": "pkg:npm/relationship@1.0.0",
+                        "direct": True,
+                        "scope": "runtime",
+                    }
+                ]
+            },
+        )
+        db.add(scan)
+        db.flush()
+        sbom = Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="relationship", storage_key="relationship.json", active=True)
+        component = Component(purl="pkg:npm/relationship@1.0.0", ecosystem="npm", name="relationship", version="1.0.0")
+        db.add_all([sbom, component])
+        db.flush()
+        db.add(SbomComponent(sbom_id=sbom.id, component_id=component.id))
+        db.flush()
+
+        page = list_dependency_relationships(db=db, _=None)
+        npm_page = list_dependency_relationships(ecosystem="npm", gap_type="missing_dependency_path", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {item["gap_type"] for item in page.items}
+
+        assert gaps == {"missing_dependency_path", "missing_development_flag", "missing_optional_flag"}
+        assert npm_page.items[0]["component_id"] == str(component.id)
+        assert summary.dependency_relationship_gap_items == len(page.items)
+
+
+def test_list_dependency_update_coverage_reports_missing_failed_and_validation_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "dependency-update-coverage")
+        app = create_application(db, repo)
+        missing = create_finding(db, app, severity=Severity.high, fixed_version="2.0.0")
+        failed = create_finding(db, app, severity=Severity.critical, fixed_version="3.0.0")
+        action = RemediationAction(
+            finding_id=failed.id,
+            action_type="github_issue",
+            status="failed",
+            provider="renovate",
+            fixed_version="3.0.0",
+            metadata_json={"update_kind": "dependency", "error": "renovate failed"},
+            updated_at=now_utc() - timedelta(days=8),
+        )
+        db.add(action)
+        db.flush()
+
+        page = list_dependency_update_coverage(db=db, _=None)
+        provider_page = list_dependency_update_coverage(provider="renovate", gap_type="failed_update_action", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["finding_id"], item["gap_type"]) for item in page.items}
+
+        assert (str(missing.id), "missing_update_action") in gaps
+        assert (str(failed.id), "failed_update_action") in gaps
+        assert (str(failed.id), "missing_validation_scan") in gaps
+        assert provider_page.items[0]["action_id"] == str(action.id)
+        assert summary.dependency_update_gap_items == len(page.items)
+
+
+def test_list_remediation_priority_queue_orders_sla_exposed_fixable_findings() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "priority-queue")
+        exposed = create_application(db, repo, "exposed")
+        exposed.production = True
+        exposed.internet_exposed = True
+        internal = create_application(db, repo, "internal")
+        critical = create_finding(db, exposed, severity=Severity.critical, risk_score=8.5, fixed_version="9.9.9")
+        high = create_finding(db, internal, severity=Severity.high, risk_score=8.0, fixed_version=None)
+        critical.created_at = now_utc() - timedelta(days=10)
+        db.get(Vulnerability, critical.vulnerability_id).references = ["https://example.test/cisa-kev", "https://example.test/exploit"]
+        db.flush()
+
+        page = list_remediation_priority_queue(db=db, _=None)
+        breached_page = list_remediation_priority_queue(sla_breached=True, fix_available=True, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert page.items[0]["finding_id"] == str(critical.id)
+        assert page.items[0]["sla_breached"] is True
+        assert "kev" in page.items[0]["priority_reason"]
+        assert breached_page.items[0]["finding_id"] == str(critical.id)
+        assert str(high.id) in {item["finding_id"] for item in page.items}
+        assert summary.remediation_priority_items == len(page.items)
