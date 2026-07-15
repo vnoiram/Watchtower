@@ -134,6 +134,96 @@ class FindingOut(BaseModel):
     updated_at: datetime
 
 
+class TechnologyInventoryOut(BaseModel):
+    id: UUID
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    category: str
+    name: str
+    version: str | None
+    detection_source: str
+    confidence: float
+    detected_at: datetime
+
+
+class SbomInventoryOut(BaseModel):
+    id: UUID
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    scan_id: UUID
+    sbom_kind: str
+    format: str
+    specification_version: str | None
+    commit_sha: str | None
+    generated_at: datetime
+    active: bool
+    component_count: int
+
+
+class ComponentApplicationOut(BaseModel):
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    active_sbom_id: UUID
+    generated_at: datetime
+
+
+class ComponentInventoryOut(BaseModel):
+    id: UUID
+    purl: str
+    ecosystem: str | None
+    namespace: str | None
+    name: str
+    version: str | None
+    supplier: str | None
+    license: str | None
+    active_sbom_count: int
+    application_count: int
+    applications: list[ComponentApplicationOut] = Field(default_factory=list)
+
+
+class VulnerabilityInventoryOut(BaseModel):
+    id: UUID
+    source: str
+    external_id: str
+    title: str | None
+    severity: models.Severity
+    cvss_score: float | None
+    open_finding_count: int
+    affected_application_count: int
+
+
+class RemediationActionOut(BaseModel):
+    id: UUID
+    finding_id: UUID
+    action_type: str
+    status: str
+    provider: str | None
+    provider_id: str | None
+    url: str | None
+    branch: str | None
+    fixed_version: str | None
+    metadata_json: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+    finding_severity: models.Severity | None = None
+    finding_status: models.FindingStatus | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    vulnerability_external_id: str | None = None
+    component_name: str | None = None
+
+
 class VexCreate(BaseModel):
     finding_id: UUID
     status: models.VexStatus

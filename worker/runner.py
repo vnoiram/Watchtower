@@ -86,14 +86,26 @@ def upsert_detected_applications(db: Session, repo: Repository, root: Path) -> l
             )
             db.add(app)
             db.flush()
-        db.add(
-            Technology(
+        technology = (
+            db.query(Technology)
+            .filter(
+                Technology.application_id == app.id,
+                Technology.category == "language-or-platform",
+                Technology.name == detected["technology"],
+                Technology.version.is_(None),
+                Technology.detection_source == detected["detection_source"],
+            )
+            .one_or_none()
+        )
+        if not technology:
+            technology = Technology(
                 application_id=app.id,
                 category="language-or-platform",
                 name=detected["technology"],
                 detection_source=detected["detection_source"],
             )
-        )
+            db.add(technology)
+            db.flush()
         apps.append(app)
     return apps
 

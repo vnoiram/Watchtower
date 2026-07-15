@@ -74,6 +74,16 @@ button:hover {
   border-color: var(--accent);
 }
 
+button.small {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+button:disabled {
+  color: var(--muted);
+  cursor: wait;
+}
+
 .token-row {
   margin-bottom: 18px;
 }
