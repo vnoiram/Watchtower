@@ -6,6 +6,7 @@ from api.app.routers import (
     application_detection,
     applications,
     artifacts,
+    audit,
     audit_logs,
     auto_merge,
     components,
@@ -50,6 +51,7 @@ app.include_router(repositories.router, prefix=api_prefix)
 app.include_router(applications.router, prefix=api_prefix)
 app.include_router(application_detection.router, prefix=api_prefix)
 app.include_router(artifacts.router, prefix=api_prefix)
+app.include_router(audit.router, prefix=api_prefix)
 app.include_router(audit_logs.router, prefix=api_prefix)
 app.include_router(jobs.router, prefix=api_prefix)
 app.include_router(scans.router, prefix=api_prefix)

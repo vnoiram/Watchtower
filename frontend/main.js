@@ -59,6 +59,11 @@ const reopenRisk = document.querySelector("#reopen-risk");
 const qualityKpis = document.querySelector("#quality-kpis");
 const scannerVersions = document.querySelector("#scanner-versions");
 const runtimeEol = document.querySelector("#runtime-eol");
+const auditReview = document.querySelector("#audit-review");
+const rbacReview = document.querySelector("#rbac-review");
+const restoreReadiness = document.querySelector("#restore-readiness");
+const riskAcceptance = document.querySelector("#risk-acceptance");
+const rolloutGaps = document.querySelector("#rollout-gaps");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -129,6 +134,8 @@ function renderMetrics(summary) {
     ["exposure_review_items", "Exposure review", "danger"],
     ["retention_review_items", "Retention review", "warn"],
     ["reopen_risk_items", "Reopen risk", "danger"],
+    ["rbac_review_items", "RBAC review", "warn"],
+    ["rollout_gap_items", "Rollout gaps", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -827,6 +834,64 @@ function renderRuntimeEol(page) {
     : `<tr><td colspan="5">No runtime EOL review items</td></tr>`;
 }
 
+function renderAuditReview(page) {
+  const rows = page.items || [];
+  auditReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.action)}</td><td>${escapeHtml(item.actor)}</td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(formatDateTime(item.created_at))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No audit review items</td></tr>`;
+}
+
+function renderRbacReview(rows) {
+  rbacReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No RBAC review items</td></tr>`;
+}
+
+function renderRestoreReadiness(rows) {
+  restoreReadiness.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No restore readiness checks</td></tr>`;
+}
+
+function renderRiskAcceptance(page) {
+  const rows = page.items || [];
+  riskAcceptance.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.review_date ? formatDateTime(item.review_date) : item.status)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No risk acceptance review items</td></tr>`;
+}
+
+function renderRolloutGaps(page) {
+  const rows = page.items || [];
+  rolloutGaps.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No rollout gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -887,6 +952,11 @@ async function refresh() {
   qualityKpis.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   scannerVersions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   runtimeEol.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  auditReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  rbacReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  restoreReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  riskAcceptance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  rolloutGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -949,6 +1019,11 @@ async function refresh() {
       qualityKpiPage,
       scannerVersionPage,
       runtimeEolPage,
+      auditReviewPage,
+      rbacReviewPage,
+      restoreReadinessPage,
+      riskAcceptancePage,
+      rolloutGapPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -1010,6 +1085,11 @@ async function refresh() {
       loadJson("/kpis/quality"),
       loadJson("/scanner-versions?limit=10"),
       loadJson("/governance/runtime-eol?limit=10"),
+      loadJson("/audit/review?limit=10"),
+      loadJson("/security/rbac-review"),
+      loadJson("/operations/restore-readiness"),
+      loadJson("/governance/risk-acceptance?limit=10"),
+      loadJson("/rollout/gaps?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -1070,6 +1150,11 @@ async function refresh() {
     renderQualityKpis(qualityKpiPage);
     renderScannerVersions(scannerVersionPage);
     renderRuntimeEol(runtimeEolPage);
+    renderAuditReview(auditReviewPage);
+    renderRbacReview(rbacReviewPage);
+    renderRestoreReadiness(restoreReadinessPage);
+    renderRiskAcceptance(riskAcceptancePage);
+    renderRolloutGaps(rolloutGapPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1130,6 +1215,11 @@ async function refresh() {
     qualityKpis.innerHTML = `<tr><td colspan="4">Unable to load quality KPIs</td></tr>`;
     scannerVersions.innerHTML = `<tr><td colspan="5">Unable to load scanner versions</td></tr>`;
     runtimeEol.innerHTML = `<tr><td colspan="5">Unable to load runtime EOL review</td></tr>`;
+    auditReview.innerHTML = `<tr><td colspan="5">Unable to load audit review</td></tr>`;
+    rbacReview.innerHTML = `<tr><td colspan="4">Unable to load RBAC review</td></tr>`;
+    restoreReadiness.innerHTML = `<tr><td colspan="4">Unable to load restore readiness</td></tr>`;
+    riskAcceptance.innerHTML = `<tr><td colspan="5">Unable to load risk acceptance review</td></tr>`;
+    rolloutGaps.innerHTML = `<tr><td colspan="5">Unable to load rollout gaps</td></tr>`;
   }
 }
 

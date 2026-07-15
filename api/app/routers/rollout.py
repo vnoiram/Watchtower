@@ -71,6 +71,66 @@ def list_repository_rollout(
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
+@router.get("/gaps", response_model=schemas.CursorPage)
+def list_rollout_gaps(
+    limit: int = 50,
+    issue_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = rollout_gap_items(db)
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def rollout_gap_count(db: Session) -> int:
+    return len(rollout_gap_items(db))
+
+
+def rollout_gap_items(db: Session) -> list[dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    repositories = list(
+        db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc()))
+    )
+    items = []
+    for repository in repositories:
+        applications = list(
+            db.scalars(select(models.Application).where(models.Application.repository_id == repository.id))
+        )
+        if not applications:
+            items.append(
+                schemas.RolloutGapOut(
+                    issue_type="missing_application",
+                    repository_id=repository.id,
+                    repository_owner=repository.owner,
+                    repository_name=repository.name,
+                    count=1,
+                    detail="Repository has no detected applications",
+                ).model_dump(mode="json")
+            )
+            continue
+
+        application_ids = [application.id for application in applications]
+        active_sbom_app_ids = _active_sbom_application_ids(db, application_ids)
+        latest_scan_by_app = _latest_scan_by_application(_repository_scans(db, repository.id))
+        open_counts = _open_critical_high_counts_by_application(db, application_ids)
+        for application in applications:
+            if application.lifecycle == models.Lifecycle.archived:
+                continue
+            latest_scan = latest_scan_by_app.get(application.id)
+            if not application.owner:
+                items.append(_rollout_gap("missing_owner", repository, application, latest_scan, 1, "Active application has no owner"))
+            if application.id not in active_sbom_app_ids:
+                items.append(_rollout_gap("missing_active_source_sbom", repository, application, latest_scan, 1, "Active application has no active source SBOM"))
+            if latest_scan is None or latest_scan.created_at < _matching_datetime(cutoff, latest_scan.created_at):
+                items.append(_rollout_gap("stale_scan", repository, application, latest_scan, 1, "Application has no scan in the last 30 days"))
+            open_count = open_counts.get(application.id, 0)
+            if open_count:
+                items.append(_rollout_gap("open_critical_high", repository, application, latest_scan, open_count, "Application has open critical or high findings"))
+    return items
+
+
 def _repository_scans(db: Session, repository_id) -> list[models.Scan]:
     return list(
         db.scalars(
@@ -106,6 +166,22 @@ def _open_critical_high_count(db: Session, application_ids: list) -> int:
     )
 
 
+def _open_critical_high_counts_by_application(db: Session, application_ids: list) -> dict:
+    counts = {}
+    if not application_ids:
+        return counts
+    findings = db.scalars(
+        select(models.Finding).where(
+            models.Finding.application_id.in_(application_ids),
+            models.Finding.status == models.FindingStatus.open,
+            models.Finding.severity.in_([models.Severity.critical, models.Severity.high]),
+        )
+    )
+    for finding in findings:
+        counts[finding.application_id] = counts.get(finding.application_id, 0) + 1
+    return counts
+
+
 def _active_sbom_application_ids(db: Session, application_ids: list) -> set:
     if not application_ids:
         return set()
@@ -128,3 +204,26 @@ def _matching_datetime(reference: datetime, value: datetime) -> datetime:
     if value.tzinfo is None:
         return reference.replace(tzinfo=None)
     return reference
+
+
+def _rollout_gap(
+    issue_type: str,
+    repository: models.Repository,
+    application: models.Application,
+    latest_scan: models.Scan | None,
+    count: int,
+    detail: str,
+) -> dict:
+    return schemas.RolloutGapOut(
+        issue_type=issue_type,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        application_id=application.id,
+        application_name=application.name,
+        latest_scan_id=latest_scan.id if latest_scan else None,
+        latest_scan_status=latest_scan.status if latest_scan else None,
+        latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+        count=count,
+        detail=detail,
+    ).model_dump(mode="json")

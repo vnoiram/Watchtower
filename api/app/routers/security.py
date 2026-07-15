@@ -80,6 +80,55 @@ def list_security_findings(
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
+@router.get("/rbac-review", response_model=list[schemas.RbacReviewOut])
+def rbac_review(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    return rbac_review_items(db, settings)
+
+
+def rbac_review_count(db: Session, settings: Settings) -> int:
+    return sum(1 for item in rbac_review_items(db, settings) if item.status != "ok")
+
+
+def rbac_review_items(db: Session, settings: Settings) -> list[schemas.RbacReviewOut]:
+    logs = list(db.scalars(select(models.AuditLog)))
+    default_token = settings.api_token == "change-me"
+    default_role_admin = settings.api_default_role == "admin"
+    non_admin_privileged = [
+        log for log in logs if log.role != "admin" and _privileged_action(log.action)
+    ]
+    roles = {log.role for log in logs}
+    return [
+        _rbac_check(
+            "default_api_token",
+            "fail" if default_token else "ok",
+            1 if default_token else 0,
+            "API token is using the default value" if default_token else "API token is customized",
+        ),
+        _rbac_check(
+            "default_role_admin",
+            "warn" if default_role_admin else "ok",
+            1 if default_role_admin else 0,
+            f"default_role={settings.api_default_role}",
+        ),
+        _rbac_check(
+            "non_admin_privileged_actions",
+            "warn" if non_admin_privileged else "ok",
+            len(non_admin_privileged),
+            "Privileged audit events performed by a non-admin role",
+        ),
+        _rbac_check(
+            "audit_role_coverage",
+            "ok" if roles else "warn",
+            len(roles),
+            "Roles observed in audit logs: " + (", ".join(sorted(roles)) if roles else "none"),
+        ),
+    ]
+
+
 def _protection(check: str, configured: bool, count: int, detail: str) -> schemas.DataProtectionOut:
     return schemas.DataProtectionOut(
         check=check,
@@ -88,6 +137,21 @@ def _protection(check: str, configured: bool, count: int, detail: str) -> schema
         count=count,
         detail=detail,
     )
+
+
+def _rbac_check(check: str, status: str, count: int, detail: str) -> schemas.RbacReviewOut:
+    return schemas.RbacReviewOut(check=check, status=status, count=count, detail=detail)
+
+
+def _privileged_action(action: str) -> bool:
+    return action in {
+        "application.create",
+        "job.create",
+        "repository.create",
+        "repository.scan.enqueue",
+        "scan.create",
+        "vex.create",
+    }
 
 
 def _stored_artifact_count(db: Session) -> int:
