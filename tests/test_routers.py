@@ -62,18 +62,24 @@ from api.app.routers.integrations import github_integration_health, list_webhook
 from api.app.routers.isolated_lane import list_isolated_lane, list_isolated_safeguards
 from api.app.routers.job_health import list_job_health
 from api.app.routers.jobs import list_retry_candidates
-from api.app.routers.kpis import efficiency_kpis, kpi_summary, quality_kpis
+from api.app.routers.kpis import efficiency_kpis, kpi_summary, operational_load_kpis, quality_kpis
 from api.app.routers.maintenance import list_application_maintenance_candidates
-from api.app.routers.notifications import list_notification_slo, list_notifications
+from api.app.routers.notifications import (
+    list_notification_digest_readiness,
+    list_notification_slo,
+    list_notifications,
+)
 from api.app.routers.operations import (
     backup_readiness,
     daily_operations,
     list_failure_signals,
     list_manual_actions,
+    monthly_review,
     operational_workload,
     operations_readiness,
     restore_readiness,
     scan_targets,
+    toolchain_posture,
     worker_posture,
     weekly_review,
 )
@@ -85,6 +91,7 @@ from api.app.routers.remediation import (
     list_github_issue_actions,
     list_issue_closures,
     list_remediation_prs,
+    list_remediation_aging,
     list_remediation_rescans,
     list_remediation_candidates,
     list_remediation_validations,
@@ -1192,6 +1199,38 @@ def test_list_notification_slo_reports_breaches_and_dashboard_count() -> None:
         assert page.items[0]["breached"] is True
         assert page.items[0]["application_name"] == app.name
         assert summary.notification_slo_breaches == 1
+
+
+def test_list_notification_digest_readiness_reports_digest_failures_and_missing_important_notifications() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "digest")
+        app = create_application(db, repo)
+        medium = create_finding(db, app, severity=Severity.medium)
+        critical = create_finding(db, app, severity=Severity.critical)
+        critical.created_at = now_utc() - timedelta(days=2)
+        failed = create_finding(db, app, severity=Severity.low)
+        db.add(
+            Notification(
+                channel="slack",
+                severity=Severity.low,
+                subject="digest failed",
+                body="body",
+                status="failed",
+                metadata_json={"finding_id": str(failed.id)},
+            )
+        )
+        db.flush()
+
+        page = list_notification_digest_readiness(db=db, _=None)
+        failed_page = list_notification_digest_readiness(issue_type="failed_notification", severity=Severity.low, db=db, _=None)
+
+        issues = {(item["issue_type"], item["finding_id"]) for item in page.items}
+        assert ("digest_candidate", str(medium.id)) in issues
+        assert ("digest_candidate", str(failed.id)) in issues
+        assert ("missing_critical_high_notification", str(critical.id)) in issues
+        assert ("failed_notification", str(failed.id)) in issues
+        assert [item["issue_type"] for item in failed_page.items] == ["failed_notification"]
 
 
 def test_list_remediation_prs_reports_ci_and_pr_context() -> None:
@@ -2357,6 +2396,82 @@ def test_scan_targets_reports_success_rate_failures_partials_and_stale_apps() ->
         assert by_check["stale_active_applications"].count == 1
 
 
+def test_monthly_review_reports_monthly_operations_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "monthly")
+        app = create_application(db, repo)
+        accepted = create_finding(db, app, severity=Severity.high, status=FindingStatus.accepted_risk)
+        vex_finding = create_finding(db, app, severity=Severity.medium)
+        db.add_all(
+            [
+                VexStatement(
+                    finding_id=vex_finding.id,
+                    status=VexStatus.not_affected,
+                    justification="temporary",
+                    approved_by="security",
+                    review_date=now_utc() - timedelta(days=1),
+                ),
+                Scan(application_id=app.id, status=ScanStatus.failed, tool="trivy", created_at=now_utc()),
+                Technology(
+                    application_id=app.id,
+                    category="runtime",
+                    name="python",
+                    version="2.7",
+                    detection_source="test",
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = monthly_review(db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_item = {row.item: row for row in rows}
+        assert by_item["vex_reassessment"].count == 1
+        assert by_item["risk_acceptance_reassessment"].count == 1
+        assert by_item["tool_version_review"].count == 1
+        assert by_item["runtime_eol_review"].count == 1
+        assert by_item["scan_success_rate"].status == "warn"
+        assert summary.monthly_review_items >= 4
+        assert accepted.status == FindingStatus.accepted_risk
+
+
+def test_toolchain_posture_reports_scanner_and_runtime_issues() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "toolchain")
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Scan(application_id=app.id, status=ScanStatus.failed, tool="syft", created_at=now_utc()),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    tool="trivy",
+                    tool_version="0.50.0",
+                    created_at=now_utc() - timedelta(days=31),
+                ),
+                Technology(
+                    application_id=app.id,
+                    category="runtime",
+                    name="node",
+                    version="16.0.0",
+                    detection_source="test",
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = toolchain_posture(db=db, _=None)
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["scanner_version_missing"].count == 1
+        assert by_check["stale_scanner_tools"].count == 1
+        assert by_check["scanner_failure_records"].count == 1
+        assert by_check["runtime_eol_items"].count == 1
+
+
 def test_github_integration_health_reports_configuration_and_failure_classes() -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
@@ -2518,6 +2633,85 @@ def test_list_remediation_coverage_reports_missing_actions_and_dashboard_count()
         assert by_finding[str(covered.id)]["coverage_percent"] == 50.0
         assert [item["finding_id"] for item in missing_page.items] == [str(missing.id)]
         assert summary.remediation_coverage_items == 1
+
+
+def test_operational_load_kpis_reports_manual_and_backlog_counts() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "operational-load")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        db.add_all(
+            [
+                AuditLog(
+                    actor="operator",
+                    role="operator",
+                    action="finding.github_issue.enqueue",
+                    resource_type="finding",
+                    resource_id=str(finding.id),
+                    metadata_json={},
+                ),
+                AuditLog(
+                    actor="operator",
+                    role="operator",
+                    action="dependency.update",
+                    resource_type="application",
+                    resource_id=str(app.id),
+                    metadata_json={"mode": "manual", "dependency": "pkg"},
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="github_issue",
+                    status="created",
+                    provider="github",
+                    branch="renovate/pkg",
+                    updated_at=now_utc() - timedelta(days=31),
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = operational_load_kpis(db=db, _=None)
+
+        by_metric = {row.metric: row for row in rows}
+        assert by_metric["monthly_manual_check_count"].value == 2
+        assert by_metric["manual_issue_creation_count"].value == 1
+        assert by_metric["manual_dependency_update_count"].value == 1
+        assert by_metric["unaddressed_finding_count"].value == 1
+        assert by_metric["long_stale_pr_count"].value == 1
+
+
+def test_list_remediation_aging_reports_stale_buckets_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "aging")
+        app = create_application(db, repo)
+        stale_finding = create_finding(db, app, severity=Severity.high)
+        long_stale_finding = create_finding(db, app, severity=Severity.critical)
+        stale = RemediationAction(
+            finding_id=stale_finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            updated_at=now_utc() - timedelta(days=8),
+        )
+        long_stale = RemediationAction(
+            finding_id=long_stale_finding.id,
+            action_type="ai_fix",
+            status="running",
+            provider="watchtower",
+            updated_at=now_utc() - timedelta(days=31),
+        )
+        db.add_all([stale, long_stale])
+        db.flush()
+
+        page = list_remediation_aging(db=db, _=None)
+        critical_page = list_remediation_aging(age_bucket="long_stale", severity=Severity.critical, db=db, _=None)
+
+        buckets = {item["action_id"]: item["age_bucket"] for item in page.items}
+        assert buckets[str(stale.id)] == "stale"
+        assert buckets[str(long_stale.id)] == "long_stale"
+        assert [item["action_id"] for item in critical_page.items] == [str(long_stale.id)]
 
 
 def test_list_resolution_verification_reports_rescan_validation_and_close_gaps() -> None:

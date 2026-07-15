@@ -74,6 +74,22 @@ def list_notification_slo(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/digest-readiness", response_model=schemas.CursorPage)
+def list_notification_digest_readiness(
+    limit: int = 50,
+    issue_type: str | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = notification_digest_readiness_items(db)
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def notification_slo_breach_count(db: Session) -> int:
     return sum(1 for item in notification_slo_items(db) if item["breached"])
 
@@ -124,6 +140,65 @@ def notification_slo_items(db: Session) -> list[dict]:
     return items
 
 
+def notification_digest_readiness_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=24)
+    sent_by_finding = _sent_notifications_by_finding(db)
+    items = []
+    finding_stmt = (
+        select(models.Finding, models.Application, models.Repository)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(models.Finding.status == models.FindingStatus.open)
+        .order_by(models.Finding.created_at.asc(), models.Finding.id.asc())
+    )
+    for finding, application, repository in db.execute(finding_stmt):
+        if finding.severity in {models.Severity.medium, models.Severity.low, models.Severity.info, models.Severity.unknown}:
+            items.append(
+                _digest_item(
+                    "digest_candidate",
+                    finding.severity,
+                    "pending_digest",
+                    "Medium or lower finding eligible for digest notification",
+                    finding.created_at,
+                    finding=finding,
+                    application=application,
+                    repository=repository,
+                )
+            )
+        if finding.severity in {models.Severity.critical, models.Severity.high} and finding.id not in sent_by_finding and _after(cutoff, finding.created_at):
+            items.append(
+                _digest_item(
+                    "missing_critical_high_notification",
+                    finding.severity,
+                    "missing_notification",
+                    "Critical or high finding has no sent notification after 24 hours",
+                    finding.created_at,
+                    finding=finding,
+                    application=application,
+                    repository=repository,
+                )
+            )
+    for notification in db.scalars(select(models.Notification).where(models.Notification.status == "failed")):
+        finding = _finding_from_metadata(db, notification.metadata_json)
+        application = db.get(models.Application, finding.application_id) if finding else None
+        repository = db.get(models.Repository, application.repository_id) if application else None
+        items.append(
+            _digest_item(
+                "failed_notification",
+                notification.severity,
+                notification.status,
+                notification.subject,
+                notification.created_at,
+                finding=finding,
+                application=application,
+                repository=repository,
+                notification=notification,
+            )
+        )
+    return items
+
+
 def _finding_from_metadata(db: Session, metadata: dict | None) -> models.Finding | None:
     if not metadata:
         return None
@@ -163,6 +238,34 @@ def _slo_window(severity: models.Severity) -> timedelta:
     if severity == models.Severity.critical:
         return timedelta(hours=1)
     return timedelta(hours=24)
+
+
+def _digest_item(
+    issue_type: str,
+    severity: models.Severity,
+    status: str,
+    detail: str,
+    created_at: datetime,
+    finding: models.Finding | None = None,
+    application: models.Application | None = None,
+    repository: models.Repository | None = None,
+    notification: models.Notification | None = None,
+) -> dict:
+    return schemas.NotificationDigestReadinessOut(
+        issue_type=issue_type,
+        severity=severity,
+        finding_id=finding.id if finding else None,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        repository_id=repository.id if repository else None,
+        repository_owner=repository.owner if repository else None,
+        repository_name=repository.name if repository else None,
+        notification_id=notification.id if notification else None,
+        channel=notification.channel if notification else None,
+        status=status,
+        detail=detail,
+        created_at=created_at,
+    ).model_dump(mode="json")
 
 
 def _after(value: datetime, reference: datetime) -> bool:

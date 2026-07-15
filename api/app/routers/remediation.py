@@ -338,6 +338,22 @@ def list_resolution_verification(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/aging", response_model=schemas.CursorPage)
+def list_remediation_aging(
+    limit: int = 50,
+    age_bucket: str | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = remediation_aging_items(db)
+    if age_bucket:
+        items = [item for item in items if item["age_bucket"] == age_bucket]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def stale_remediation_count(db: Session) -> int:
     return len(remediation_backlog_items(db))
 
@@ -540,6 +556,42 @@ def resolution_verification_items(db: Session) -> list[dict]:
                     close_state,
                 )
             )
+    return items
+
+
+def remediation_aging_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    items = []
+    stmt = _remediation_action_context_stmt().order_by(
+        models.RemediationAction.updated_at.asc(),
+        models.RemediationAction.id.asc(),
+    )
+    for action, finding, application, vulnerability, component in db.execute(stmt):
+        if action.status not in _BACKLOG_OPEN_STATUSES and action.status not in {"failed", "close_failed"}:
+            continue
+        age_days = max((now.replace(tzinfo=None) - action.updated_at.replace(tzinfo=None)).days, 0)
+        bucket = _age_bucket(age_days)
+        if bucket == "fresh":
+            continue
+        repository = db.get(models.Repository, application.repository_id)
+        items.append(
+            schemas.RemediationAgingOut(
+                action_id=action.id,
+                action_type=action.action_type,
+                action_status=action.status,
+                finding_id=finding.id,
+                severity=finding.severity,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                age_days=age_days,
+                age_bucket=bucket,
+                url=_pr_url(action),
+                updated_at=action.updated_at,
+            ).model_dump(mode="json")
+        )
     return items
 
 
@@ -747,6 +799,14 @@ def _metadata_bool_or_none(value: object) -> bool | None:
     if isinstance(value, str):
         return value.lower() in {"1", "true", "yes", "y"}
     return bool(value)
+
+
+def _age_bucket(age_days: int) -> str:
+    if age_days >= 30:
+        return "long_stale"
+    if age_days >= 7:
+        return "stale"
+    return "fresh"
 
 
 def _percent(numerator: int, denominator: int) -> float:

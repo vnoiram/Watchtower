@@ -1183,6 +1183,53 @@ class ResolutionVerificationOut(BaseModel):
     detail: str
 
 
+class MonthlyReviewOut(BaseModel):
+    item: str
+    status: str
+    count: int
+    detail: str
+
+
+class ToolchainPostureOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class RemediationAgingOut(BaseModel):
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    age_days: int
+    age_bucket: str
+    url: str | None = None
+    updated_at: datetime
+
+
+class NotificationDigestReadinessOut(BaseModel):
+    issue_type: str
+    severity: models.Severity
+    finding_id: UUID | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    notification_id: UUID | None = None
+    channel: str | None = None
+    status: str
+    detail: str
+    created_at: datetime
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1214,3 +1261,4 @@ class DashboardSummary(BaseModel):
     quarterly_review_items: int
     application_readiness_items: int
     remediation_coverage_items: int
+    monthly_review_items: int
