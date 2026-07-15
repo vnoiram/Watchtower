@@ -43,11 +43,11 @@ from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
 from api.app.routers.audit import list_audit_review
 from api.app.routers.artifacts import list_artifact_sbom_coverage, list_artifacts
-from api.app.routers.auto_merge import list_auto_merge_eligibility
+from api.app.routers.auto_merge import list_auto_merge_eligibility, list_auto_merge_pilot_readiness
 from api.app.routers.components import list_component_applications, list_components, list_license_review
 from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
-from api.app.routers.findings import list_findings
+from api.app.routers.findings import list_findings, list_finding_lifecycle_review
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
 from api.app.routers.findings import list_resolution_candidates
 from api.app.routers.governance import (
@@ -77,6 +77,7 @@ from api.app.routers.operations import (
     monthly_review,
     operational_workload,
     operations_readiness,
+    phase_readiness,
     restore_readiness,
     scan_targets,
     toolchain_posture,
@@ -103,6 +104,7 @@ from api.app.routers.rollout import (
     list_application_readiness,
     list_repository_rollout,
     list_rollout_gaps,
+    list_repository_drift,
     rollout_baseline,
 )
 from api.app.routers.scan_health import list_scan_health
@@ -122,7 +124,7 @@ from api.app.routers.sboms import list_sboms
 from api.app.routers.sla import list_sla_findings
 from api.app.routers.storage import list_storage_cleanup_candidates, retention_review
 from api.app.routers.technologies import list_technologies
-from api.app.routers.vex import list_vex_statements
+from api.app.routers.vex import list_vex_invalidation_candidates, list_vex_statements
 from api.app.routers.vulnerabilities import list_vulnerabilities
 from worker.runner import upsert_detected_applications
 
@@ -269,6 +271,36 @@ def test_list_findings_filters_by_status_and_high_severity() -> None:
         page = list_findings(db=db, _=None, status=FindingStatus.open, severity=Severity.high)
 
         assert [item["id"] for item in page.items] == [str(high.id)]
+
+
+def test_list_finding_lifecycle_review_reports_stale_exceptions_and_unclosed_resolved() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "lifecycle")
+        app = create_application(db, repo)
+        stale = create_finding(db, app, severity=Severity.high)
+        stale.updated_at = now_utc() - timedelta(days=31)
+        accepted = create_finding(db, app, severity=Severity.medium, status=FindingStatus.accepted_risk)
+        resolved = create_finding(db, app, severity=Severity.low, status=FindingStatus.resolved)
+        resolved.resolved_at = now_utc()
+        db.add(
+            RemediationAction(
+                finding_id=resolved.id,
+                action_type="github_issue",
+                status="created",
+                provider="github",
+            )
+        )
+        db.flush()
+
+        page = list_finding_lifecycle_review(db=db, _=None)
+        stale_page = list_finding_lifecycle_review(issue_type="stale_open", severity=Severity.high, db=db, _=None)
+
+        issues = {(item["issue_type"], item["finding_id"]) for item in page.items}
+        assert ("stale_open", str(stale.id)) in issues
+        assert ("accepted_risk_review", str(accepted.id)) in issues
+        assert ("resolved_without_close", str(resolved.id)) in issues
+        assert [item["finding_id"] for item in stale_page.items] == [str(stale.id)]
 
 
 def test_upsert_detected_applications_does_not_duplicate_technology(tmp_path: Path) -> None:
@@ -459,6 +491,44 @@ def test_list_vex_statements_filters_expired_status_and_returns_context() -> Non
         assert page.items[0]["repository_name"] == repo.name
         assert page.items[0]["vulnerability_external_id"] == "high-open"
         assert page.items[0]["expired"] is True
+
+
+def test_list_vex_invalidation_candidates_reports_expired_reseen_and_approval_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "vex-invalidation")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        finding.updated_at = now_utc()
+        scan = Scan(
+            id=UUID("aaaaaaaa-1111-1111-1111-111111111111"),
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+        )
+        db.add(scan)
+        db.flush()
+        finding.last_seen_scan_id = scan.id
+        component = db.get(Component, finding.component_id)
+        assert component is not None
+        component.version = "2.0.0"
+        vex = VexStatement(
+            finding_id=finding.id,
+            status=VexStatus.not_affected,
+            justification="not reachable",
+            impact_statement="validated for 1.0.0",
+            approved_by="",
+            review_date=now_utc() - timedelta(days=1),
+            updated_at=now_utc() - timedelta(days=2),
+        )
+        db.add(vex)
+        db.flush()
+
+        page = list_vex_invalidation_candidates(db=db, _=None)
+        expired_page = list_vex_invalidation_candidates(reason="expired_review", expired=True, db=db, _=None)
+
+        reasons = {item["reason"] for item in page.items}
+        assert {"expired_review", "missing_approval", "finding_seen_after_vex", "component_version_drift"} <= reasons
+        assert [item["vex_id"] for item in expired_page.items] == [str(vex.id)]
 
 
 def test_list_scan_health_returns_failed_partial_and_stale_applications() -> None:
@@ -2319,6 +2389,27 @@ def test_list_rollout_gaps_reports_deployment_blockers_and_dashboard_count() -> 
         assert finding.status == FindingStatus.open
 
 
+def test_list_repository_drift_reports_sync_push_archive_and_metadata_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "drift")
+        repo.visibility = None
+        repo.last_synced_at = now_utc() - timedelta(days=31)
+        repo.pushed_at = now_utc()
+        repo.archived = True
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=1))
+        db.add(scan)
+        db.flush()
+
+        page = list_repository_drift(db=db, _=None)
+        archived_page = list_repository_drift(issue_type="archived_or_fork_active_app", provider=RepositoryProvider.github, db=db, _=None)
+
+        issues = {item["issue_type"] for item in page.items}
+        assert {"stale_sync", "missing_visibility", "pushed_after_scan", "archived_or_fork_active_app"} <= issues
+        assert [item["application_name"] for item in archived_page.items] == [app.name]
+
+
 def test_rollout_baseline_reports_inventory_visibility_and_classification() -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
@@ -2394,6 +2485,36 @@ def test_scan_targets_reports_success_rate_failures_partials_and_stale_apps() ->
         assert by_check["failed_scans"].count == 1
         assert by_check["partial_scans"].count == 1
         assert by_check["stale_active_applications"].count == 1
+
+
+def test_phase_readiness_reports_phase_gaps_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "phase")
+        repo.visibility = None
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical)
+        db.add(Scan(application_id=app.id, status=ScanStatus.failed, created_at=now_utc()))
+        db.add(
+            RemediationAction(
+                finding_id=finding.id,
+                action_type="ai_fix",
+                status="created",
+                provider="watchtower",
+                metadata_json={"validation_status": "pending"},
+            )
+        )
+        db.flush()
+
+        rows = phase_readiness(db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["repository_visibility"].count == 1
+        assert by_check["scan_health"].count >= 1
+        assert by_check["issue_pr_rescan"].count >= 1
+        assert by_check["isolated_lane"].count == 1
+        assert summary.phase_readiness_items >= 4
 
 
 def test_monthly_review_reports_monthly_operations_and_dashboard_count() -> None:
@@ -2940,6 +3061,58 @@ def test_list_auto_merge_eligibility_blocks_forbidden_path() -> None:
 
         assert page.items[0]["allowed"] is False
         assert page.items[0]["reason"] == "change touches a forbidden path"
+
+
+def test_list_auto_merge_pilot_readiness_reports_allowed_and_blocked_reasons() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "pilot")
+        allowed_app = create_application(db, repo, "pilot-allowed")
+        allowed_app.auto_merge_enabled = True
+        allowed_app.criticality = "low"
+        blocked_app = create_application(db, repo, "pilot-blocked")
+        blocked_app.auto_merge_enabled = True
+        blocked_app.criticality = "critical"
+        blocked_app.production = True
+        allowed_finding = create_finding(db, allowed_app, severity=Severity.high)
+        blocked_finding = create_finding(db, blocked_app, severity=Severity.critical)
+        allowed = RemediationAction(
+            finding_id=allowed_finding.id,
+            action_type="ai_fix",
+            status="created",
+            provider="watchtower",
+            metadata_json={
+                "update_kind": "patch",
+                "ci_passed": True,
+                "validation_status": "succeeded",
+                "tier_allows": True,
+                "touches_forbidden_path": False,
+            },
+        )
+        blocked = RemediationAction(
+            finding_id=blocked_finding.id,
+            action_type="ai_fix",
+            status="created",
+            provider="watchtower",
+            metadata_json={
+                "update_kind": "patch",
+                "ci_passed": True,
+                "validation_status": "succeeded",
+                "tier_allows": True,
+                "touches_forbidden_path": False,
+            },
+        )
+        db.add_all([allowed, blocked])
+        db.flush()
+
+        page = list_auto_merge_pilot_readiness(db=db, _=None)
+        blocked_page = list_auto_merge_pilot_readiness(allowed=False, reason="production_or_high_criticality", db=db, _=None)
+
+        by_action = {item["action_id"]: item for item in page.items}
+        assert by_action[str(allowed.id)]["allowed"] is True
+        assert by_action[str(allowed.id)]["reason"] == "eligible"
+        assert by_action[str(blocked.id)]["allowed"] is False
+        assert [item["action_id"] for item in blocked_page.items] == [str(blocked.id)]
 
 
 def test_list_isolated_lane_returns_isolated_and_restricted_applications() -> None:

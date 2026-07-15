@@ -19,6 +19,7 @@ from api.app.routers.operations import (
     manual_action_count,
     manual_workload_count,
     monthly_review_count,
+    phase_readiness_count,
 )
 from api.app.routers.quality import reopen_risk_count
 from api.app.routers.remediation import remediation_coverage_count, stale_remediation_count
@@ -86,6 +87,7 @@ def dashboard_summary(
     application_readiness_items = application_readiness_count(db)
     remediation_coverage_items = remediation_coverage_count(db)
     monthly_review_items = monthly_review_count(db)
+    phase_readiness_items = phase_readiness_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -118,4 +120,5 @@ def dashboard_summary(
         application_readiness_items=application_readiness_items,
         remediation_coverage_items=remediation_coverage_items,
         monthly_review_items=monthly_review_items,
+        phase_readiness_items=phase_readiness_items,
     )

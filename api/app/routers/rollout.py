@@ -105,6 +105,22 @@ def list_application_readiness(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/repository-drift", response_model=schemas.CursorPage)
+def list_repository_drift(
+    limit: int = 50,
+    issue_type: str | None = None,
+    provider: models.RepositoryProvider | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = repository_drift_items(db)
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    if provider:
+        items = [item for item in items if item["provider"] == provider.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def rollout_gap_count(db: Session) -> int:
     return len(rollout_gap_items(db))
 
@@ -159,6 +175,43 @@ def application_readiness_items(db: Session) -> list[dict]:
             items.append(_readiness_item("missing_active_source_sbom", application, repository, latest_scan, has_sbom, "Application has no active source SBOM"))
         if latest_scan is None or latest_scan.created_at < _matching_datetime(cutoff, latest_scan.created_at):
             items.append(_readiness_item("stale_scan", application, repository, latest_scan, has_sbom, "Application has no scan in the last 30 days"))
+    return items
+
+
+def repository_drift_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    sync_cutoff = now - timedelta(days=30)
+    items = []
+    repositories = list(
+        db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc()))
+    )
+    for repository in repositories:
+        applications = list(
+            db.scalars(select(models.Application).where(models.Application.repository_id == repository.id))
+        )
+        active_apps = [app for app in applications if app.lifecycle != models.Lifecycle.archived]
+        latest_scan = _repository_scans(db, repository.id)[0] if applications else None
+        context = (repository, None, latest_scan)
+        if repository.last_synced_at is None or _before(repository.last_synced_at, sync_cutoff):
+            items.append(_drift_item("stale_sync", *context, count=1, detail="Repository has not synced in the last 30 days"))
+        if not repository.visibility:
+            items.append(_drift_item("missing_visibility", *context, count=1, detail="Repository visibility is missing"))
+        if repository.source_classification is None:
+            items.append(_drift_item("missing_classification", *context, count=1, detail="Repository source classification is missing"))
+        if repository.pushed_at and latest_scan and repository.pushed_at > _matching_datetime(latest_scan.created_at, repository.pushed_at):
+            items.append(_drift_item("pushed_after_scan", *context, count=1, detail="Repository has commits newer than latest scan"))
+        if (repository.archived or repository.fork) and active_apps:
+            for application in active_apps:
+                items.append(
+                    _drift_item(
+                        "archived_or_fork_active_app",
+                        repository,
+                        application,
+                        latest_scan,
+                        count=1,
+                        detail="Archived or fork repository still has active applications",
+                    )
+                )
     return items
 
 
@@ -346,3 +399,35 @@ def _readiness_item(
         has_active_source_sbom=has_active_source_sbom,
         detail=detail,
     ).model_dump(mode="json")
+
+
+def _drift_item(
+    issue_type: str,
+    repository: models.Repository,
+    application: models.Application | None,
+    latest_scan: models.Scan | None,
+    count: int,
+    detail: str,
+) -> dict:
+    return schemas.RepositoryDriftOut(
+        issue_type=issue_type,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        provider=repository.provider,
+        source_classification=repository.source_classification,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        latest_scan_id=latest_scan.id if latest_scan else None,
+        latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+        count=count,
+        detail=detail,
+    ).model_dump(mode="json")
+
+
+def _before(value: datetime, reference: datetime) -> bool:
+    if value.tzinfo is None:
+        reference = reference.replace(tzinfo=None)
+    elif reference.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return value < reference

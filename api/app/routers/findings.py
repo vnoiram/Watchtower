@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -107,6 +108,25 @@ def list_resolution_candidates(
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
+@router.get("/lifecycle-review", response_model=schemas.CursorPage)
+def list_finding_lifecycle_review(
+    limit: int = 50,
+    issue_type: str | None = None,
+    severity: models.Severity | None = None,
+    status: models.FindingStatus | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = finding_lifecycle_review_items(db)
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if status:
+        items = [item for item in items if item["status"] == status.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.post("/{finding_id}/github-issue", response_model=schemas.RemediationActionOut)
 def enqueue_github_issue(
     finding_id: UUID,
@@ -137,6 +157,30 @@ def enqueue_github_issue(
     db.commit()
     db.refresh(actions[0])
     return _remediation_action_out(db, actions[0])
+
+
+def finding_lifecycle_review_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(days=30)
+    issue_actions = _issue_actions_by_finding(db)
+    items = []
+    stmt = (
+        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .order_by(models.Finding.updated_at.asc(), models.Finding.id.asc())
+    )
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        context = (finding, application, repository, component, vulnerability, now)
+        if finding.status in {models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress} and _before(finding.updated_at, stale_cutoff):
+            items.append(_lifecycle_item("stale_open", *context, detail="Open finding has not been updated in 30 days"))
+        if finding.status in {models.FindingStatus.accepted_risk, models.FindingStatus.false_positive}:
+            items.append(_lifecycle_item(f"{finding.status.value}_review", *context, detail="Exception-like finding status requires periodic review"))
+        if finding.status == models.FindingStatus.resolved and _close_state(issue_actions.get(finding.id)) != "closed":
+            items.append(_lifecycle_item("resolved_without_close", *context, detail="Resolved finding does not have closed GitHub issue evidence"))
+    return items
 
 
 def _existing_open_github_issue_action(
@@ -190,3 +234,66 @@ def _latest_successful_scans_by_application(db: Session) -> dict:
     for scan in scans:
         by_application.setdefault(scan.application_id, scan)
     return by_application
+
+
+def _issue_actions_by_finding(db: Session) -> dict[UUID, models.RemediationAction]:
+    actions = {}
+    stmt = (
+        select(models.RemediationAction)
+        .where(
+            models.RemediationAction.action_type == ACTION_TYPE_GITHUB_ISSUE,
+            models.RemediationAction.provider == "github",
+        )
+        .order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.desc())
+    )
+    for action in db.scalars(stmt):
+        actions.setdefault(action.finding_id, action)
+    return actions
+
+
+def _close_state(action: models.RemediationAction | None) -> str:
+    if action is None:
+        return "not_requested"
+    if action.status == "closed":
+        return "closed"
+    if action.status == "close_failed":
+        return "close_failed"
+    return "pending_close"
+
+
+def _lifecycle_item(
+    issue_type: str,
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    component: models.Component,
+    vulnerability: models.Vulnerability,
+    now: datetime,
+    detail: str,
+) -> dict:
+    updated_at = finding.updated_at
+    age_days = max((now.replace(tzinfo=None) - updated_at.replace(tzinfo=None)).days, 0)
+    return schemas.FindingLifecycleReviewOut(
+        issue_type=issue_type,
+        finding_id=finding.id,
+        severity=finding.severity,
+        status=finding.status,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        component_name=component.name,
+        vulnerability_external_id=vulnerability.external_id,
+        age_days=age_days,
+        updated_at=finding.updated_at,
+        detail=detail,
+    ).model_dump(mode="json")
+
+
+def _before(value: datetime, reference: datetime) -> bool:
+    if value.tzinfo is None:
+        reference = reference.replace(tzinfo=None)
+    elif reference.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return value < reference
