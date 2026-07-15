@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from api.app.errors import install_exception_handlers
 from api.app.routers import (
     ai_fix,
+    application_detection,
     applications,
     artifacts,
     audit_logs,
@@ -22,7 +23,9 @@ from api.app.routers import (
     remediation,
     remediation_actions,
     repositories,
+    repository_sync,
     rollout,
+    scheduled_scan_coverage,
     sbom_coverage,
     sboms,
     scan_health,
@@ -41,6 +44,7 @@ install_exception_handlers(app)
 api_prefix = "/v1"
 app.include_router(repositories.router, prefix=api_prefix)
 app.include_router(applications.router, prefix=api_prefix)
+app.include_router(application_detection.router, prefix=api_prefix)
 app.include_router(artifacts.router, prefix=api_prefix)
 app.include_router(audit_logs.router, prefix=api_prefix)
 app.include_router(jobs.router, prefix=api_prefix)
@@ -65,6 +69,8 @@ app.include_router(maintenance.router, prefix=api_prefix)
 app.include_router(job_health.router, prefix=api_prefix)
 app.include_router(exceptions.router, prefix=api_prefix)
 app.include_router(storage.router, prefix=api_prefix)
+app.include_router(repository_sync.router, prefix=api_prefix)
+app.include_router(scheduled_scan_coverage.router, prefix=api_prefix)
 app.include_router(isolated_lane.router, prefix=api_prefix)
 app.include_router(sla.router, prefix=api_prefix)
 app.include_router(kpis.router, prefix=api_prefix)

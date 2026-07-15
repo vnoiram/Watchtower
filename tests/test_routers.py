@@ -38,6 +38,7 @@ from api.app.models import (
     now_utc,
 )
 from api.app.routers.audit_logs import list_audit_logs
+from api.app.routers.application_detection import list_application_detection
 from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
 from api.app.routers.artifacts import list_artifacts
@@ -47,13 +48,14 @@ from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
 from api.app.routers.findings import list_findings
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
+from api.app.routers.findings import list_resolution_candidates
 from api.app.routers.isolated_lane import list_isolated_lane
 from api.app.routers.job_health import list_job_health
 from api.app.routers.jobs import list_retry_candidates
 from api.app.routers.kpis import kpi_summary
 from api.app.routers.maintenance import list_application_maintenance_candidates
 from api.app.routers.notifications import list_notifications
-from api.app.routers.operations import daily_operations, operational_workload, operations_readiness
+from api.app.routers.operations import backup_readiness, daily_operations, operational_workload, operations_readiness
 from api.app.routers.remediation import (
     list_github_issue_actions,
     list_issue_closures,
@@ -61,9 +63,11 @@ from api.app.routers.remediation import (
     list_remediation_validations,
 )
 from api.app.routers.remediation_actions import list_remediation_actions
+from api.app.routers.repository_sync import list_repository_sync
 from api.app.routers.rollout import list_repository_rollout
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.scanner_inventory import list_scanner_inventory
+from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sboms
 from api.app.routers.sla import list_sla_findings
@@ -942,6 +946,178 @@ def test_operational_workload_reports_manual_queues_and_dashboard_total() -> Non
         assert by_item["close_failed_issue_actions"].count == 1
         assert by_item["close_failed_issue_actions"].status == "fail"
         assert summary.manual_workload_items == 5
+
+
+def test_list_repository_sync_reports_stale_and_failed_sync_context() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        stale_repo = create_repository(db, "stale-sync")
+        stale_repo.last_synced_at = now_utc() - timedelta(days=31)
+        stale_repo.archived = True
+        healthy_repo = create_repository(db, "healthy-sync")
+        healthy_repo.last_synced_at = now_utc()
+        create_repository(db, "never-sync")
+        failed_job = Job(
+            job_type=JobType.repository_sync,
+            status=JobStatus.failed,
+            repository_id=stale_repo.id,
+            last_error="github unavailable",
+        )
+        db.add(failed_job)
+        db.flush()
+
+        page = list_repository_sync(stale=True, provider=RepositoryProvider.github, db=db, _=None)
+
+        by_name = {item["repository_name"]: item for item in page.items}
+        assert set(by_name) == {"never-sync", "stale-sync"}
+        assert "stale_sync" in by_name["stale-sync"]["reasons"]
+        assert "sync_job_failed" in by_name["stale-sync"]["reasons"]
+        assert "archived" in by_name["stale-sync"]["reasons"]
+        assert by_name["stale-sync"]["latest_sync_job_status"] == "failed"
+        assert by_name["never-sync"]["reasons"] == ["never_synced"]
+        assert healthy_repo.name not in by_name
+
+
+def test_list_application_detection_reports_missing_unknown_and_technology_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        empty_repo = create_repository(db, "empty")
+        app_repo = create_repository(db, "app-repo")
+        unknown_app = create_application(db, app_repo, "unknown-app")
+        unknown_app.application_type = ApplicationType.unknown
+        typed_app = create_application(db, app_repo, "typed-app")
+        typed_app.application_type = ApplicationType.api
+        db.add(
+            Technology(
+                application_id=typed_app.id,
+                category="language-or-platform",
+                name="python",
+                detection_source="pyproject.toml",
+            )
+        )
+        db.flush()
+
+        page = list_application_detection(db=db, _=None)
+        missing_technology_page = list_application_detection(issue_type="missing_technology", db=db, _=None)
+
+        issues = {(item["issue_type"], item["repository_name"], item["application_name"]) for item in page.items}
+        assert ("missing_application", empty_repo.name, None) in issues
+        assert ("unknown_application_type", app_repo.name, unknown_app.name) in issues
+        assert ("missing_technology", app_repo.name, unknown_app.name) in issues
+        assert [item["application_name"] for item in missing_technology_page.items] == [unknown_app.name]
+
+
+def test_list_scheduled_scan_coverage_reports_missing_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        covered = create_application(db, repo, "covered-schedule")
+        missing = create_application(db, repo, "missing-schedule")
+        manual_only = create_application(db, repo, "manual-only")
+        db.add_all(
+            [
+                Scan(
+                    application_id=covered.id,
+                    trigger_type=TriggerType.schedule,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=missing.id,
+                    trigger_type=TriggerType.schedule,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc() - timedelta(days=2),
+                ),
+                Scan(
+                    application_id=manual_only.id,
+                    trigger_type=TriggerType.manual,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc(),
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_scheduled_scan_coverage(missing=True, db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        by_name = {item["application_name"]: item for item in page.items}
+        assert set(by_name) == {"manual-only", "missing-schedule"}
+        assert by_name["manual-only"]["manual_only"] is True
+        assert by_name["missing-schedule"]["latest_scheduled_scan_status"] == "succeeded"
+        assert covered.name not in by_name
+        assert summary.missing_scheduled_scans == 2
+
+
+def test_list_resolution_candidates_reports_findings_missing_from_latest_successful_scan() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        older_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=2))
+        latest_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add_all([older_scan, latest_scan])
+        db.flush()
+        candidate = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
+        candidate.last_seen_scan_id = older_scan.id
+        still_present = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
+        still_present.last_seen_scan_id = latest_scan.id
+        resolved = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
+        resolved.last_seen_scan_id = older_scan.id
+        db.flush()
+
+        page = list_resolution_candidates(severity=Severity.high, db=db, _=None)
+
+        assert [item["finding_id"] for item in page.items] == [str(candidate.id)]
+        assert page.items[0]["latest_successful_scan_id"] == str(latest_scan.id)
+        assert page.items[0]["last_seen_scan_id"] == str(older_scan.id)
+        assert page.items[0]["application_name"] == app.name
+        assert str(still_present.id) not in {item["finding_id"] for item in page.items}
+        assert str(resolved.id) not in {item["finding_id"] for item in page.items}
+
+
+def test_backup_readiness_reports_storage_artifact_and_cleanup_state() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        with_artifact = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={"artifacts": {"source_sbom": {"storage_key": "source.json"}}},
+        )
+        without_artifact = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        db.add_all([with_artifact, without_artifact])
+        db.flush()
+        active = Sbom(
+            application_id=app.id,
+            scan_id=with_artifact.id,
+            sbom_digest="active-backup",
+            storage_key="active-backup.json",
+            active=True,
+            sbom_kind="source",
+        )
+        inactive = Sbom(
+            application_id=app.id,
+            scan_id=without_artifact.id,
+            sbom_digest="inactive-backup",
+            storage_key="inactive-backup.json",
+            active=False,
+            sbom_kind="source",
+        )
+        db.add_all([active, inactive])
+        db.flush()
+        settings = Settings(minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket="")
+
+        rows = backup_readiness(db=db, settings=settings, _=None)
+
+        by_check = {row.check: row for row in rows}
+        assert by_check["object_storage"].status == "fail"
+        assert by_check["sbom_storage_keys"].status == "ok"
+        assert by_check["source_sbom_artifacts"].status == "warn"
+        assert by_check["source_sbom_artifacts"].count == 1
+        assert by_check["cleanup_backlog"].status == "warn"
+        assert by_check["cleanup_backlog"].count == 1
 
 
 def test_list_artifacts_returns_scan_artifact_context_and_filters() -> None:

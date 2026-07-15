@@ -591,6 +591,75 @@ class OperationalWorkloadOut(BaseModel):
     detail: str
 
 
+class RepositorySyncOut(BaseModel):
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider: models.RepositoryProvider
+    source_classification: models.SourceClassification
+    archived: bool
+    fork: bool
+    last_synced_at: datetime | None
+    latest_sync_job_id: UUID | None = None
+    latest_sync_job_status: models.JobStatus | None = None
+    latest_sync_job_error: str | None = None
+    stale: bool
+    reasons: list[str] = Field(default_factory=list)
+
+
+class ApplicationDetectionOut(BaseModel):
+    issue_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    application_id: UUID | None = None
+    application_name: str | None = None
+    application_path: str | None = None
+    application_type: models.ApplicationType | None = None
+    technology_count: int = 0
+    detail: str
+
+
+class ScheduledScanCoverageOut(BaseModel):
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    latest_scheduled_scan_id: UUID | None
+    latest_scheduled_scan_status: models.ScanStatus | None
+    latest_scheduled_scan_created_at: datetime | None
+    latest_scan_id: UUID | None
+    latest_scan_status: models.ScanStatus | None
+    latest_scan_trigger_type: models.TriggerType | None
+    manual_only: bool
+    missing_recent_schedule: bool
+
+
+class FindingResolutionCandidateOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    last_seen_scan_id: UUID | None
+    latest_successful_scan_id: UUID
+    latest_successful_scan_created_at: datetime
+
+
+class BackupReadinessOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -607,3 +676,4 @@ class DashboardSummary(BaseModel):
     scan_failure_rate_percent: float
     notification_failure_count: int
     manual_workload_items: int
+    missing_scheduled_scans: int
