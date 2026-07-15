@@ -7,8 +7,11 @@ const technologies = document.querySelector("#technologies");
 const sboms = document.querySelector("#sboms");
 const components = document.querySelector("#components");
 const componentUsage = document.querySelector("#component-usage");
+const dependencyRelationships = document.querySelector("#dependency-relationships");
 const vulnerabilities = document.querySelector("#vulnerabilities");
 const vulnerabilityImpact = document.querySelector("#vulnerability-impact");
+const vulnerabilityEnrichment = document.querySelector("#vulnerability-enrichment");
+const riskScoreExplanations = document.querySelector("#risk-score-explanations");
 const remediationActions = document.querySelector("#remediation-actions");
 const vexReviews = document.querySelector("#vex-reviews");
 const scanHealth = document.querySelector("#scan-health");
@@ -87,6 +90,8 @@ const githubPermissions = document.querySelector("#github-permissions");
 const webhookIntake = document.querySelector("#webhook-intake");
 const scannerFailures = document.querySelector("#scanner-failures");
 const dependencyUpdates = document.querySelector("#dependency-updates");
+const dependencyUpdateCoverage = document.querySelector("#dependency-update-coverage");
+const remediationPriorityQueue = document.querySelector("#remediation-priority-queue");
 const failureSignals = document.querySelector("#failure-signals");
 const isolatedSafeguards = document.querySelector("#isolated-safeguards");
 const isolatedScanHealth = document.querySelector("#isolated-scan-health");
@@ -253,6 +258,11 @@ function renderMetrics(summary) {
     ["sbom_normalization_gap_items", "SBOM normalization", "warn"],
     ["raw_artifact_gap_items", "Raw artifacts", "warn"],
     ["vulnerability_reevaluation_gap_items", "Re-evaluation", "warn"],
+    ["vulnerability_enrichment_gap_items", "Vuln enrichment", "warn"],
+    ["risk_score_gap_items", "Risk score gaps", "warn"],
+    ["dependency_relationship_gap_items", "Dependency relations", "warn"],
+    ["dependency_update_gap_items", "Update coverage", "warn"],
+    ["remediation_priority_items", "Priority queue", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -337,6 +347,18 @@ function renderComponentUsage(page) {
     : `<tr><td colspan="5">No component usage records</td></tr>`;
 }
 
+function renderDependencyRelationships(page) {
+  const rows = page.items || [];
+  dependencyRelationships.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.component_name)} ${escapeHtml(item.component_version || "")}</td><td>${escapeHtml(item.ecosystem || "-")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No dependency relationship gaps</td></tr>`;
+}
+
 function renderVulnerabilities(page) {
   const rows = page.items || [];
   vulnerabilities.innerHTML = rows.length
@@ -359,6 +381,30 @@ function renderVulnerabilityImpact(page) {
         )
         .join("")
     : `<tr><td colspan="5">No vulnerability impact records</td></tr>`;
+}
+
+function renderVulnerabilityEnrichment(page) {
+  const rows = page.items || [];
+  vulnerabilityEnrichment.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.external_id)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.affected_finding_count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No vulnerability enrichment gaps</td></tr>`;
+}
+
+function renderRiskScoreExplanations(page) {
+  const rows = page.items || [];
+  riskScoreExplanations.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.risk_score)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.priority_factors.join(", "))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No risk score gaps</td></tr>`;
 }
 
 function renderRemediationActions(page) {
@@ -1307,6 +1353,30 @@ function renderDependencyUpdates(page) {
     : `<tr><td colspan="5">No dependency update PRs</td></tr>`;
 }
 
+function renderDependencyUpdateCoverage(page) {
+  const rows = page.items || [];
+  dependencyUpdateCoverage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.action_status || "missing")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No dependency update coverage gaps</td></tr>`;
+}
+
+function renderRemediationPriorityQueue(page) {
+  const rows = page.items || [];
+  remediationPriorityQueue.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.priority_rank)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.fix_available ? "fix" : "no fix")}</td><td>${escapeHtml(item.priority_reason)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No remediation priority items</td></tr>`;
+}
+
 function renderFailureSignals(page) {
   const rows = page.items || [];
   failureSignals.innerHTML = rows.length
@@ -1875,8 +1945,11 @@ async function refresh() {
   sboms.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   components.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   componentUsage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  dependencyRelationships.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   vulnerabilities.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   vulnerabilityImpact.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  vulnerabilityEnrichment.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  riskScoreExplanations.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationActions.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   vexReviews.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scanHealth.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1959,6 +2032,8 @@ async function refresh() {
   webhookIntake.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scannerFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   dependencyUpdates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  dependencyUpdateCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  remediationPriorityQueue.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   failureSignals.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   isolatedSafeguards.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   isolatedScanHealth.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2017,8 +2092,11 @@ async function refresh() {
       sbomPage,
       componentPage,
       componentUsagePage,
+      dependencyRelationshipPage,
       vulnerabilityPage,
       vulnerabilityImpactPage,
+      vulnerabilityEnrichmentPage,
+      riskScoreExplanationPage,
       remediationActionPage,
       vexPage,
       scanHealthPage,
@@ -2101,6 +2179,8 @@ async function refresh() {
       webhookIntakePage,
       scannerFailurePage,
       dependencyUpdatePage,
+      dependencyUpdateCoveragePage,
+      remediationPriorityQueuePage,
       failureSignalPage,
       isolatedSafeguardPage,
       isolatedScanHealthPage,
@@ -2158,8 +2238,11 @@ async function refresh() {
       loadJson("/sboms?active=true&limit=10"),
       loadJson("/components?limit=10"),
       loadJson("/components/usage?limit=10"),
+      loadJson("/components/dependency-relationships?limit=10"),
       loadJson("/vulnerabilities?limit=10"),
       loadJson("/vulnerabilities/impact?limit=10"),
+      loadJson("/vulnerabilities/enrichment-coverage?limit=10"),
+      loadJson("/findings/risk-score-explanations?limit=10"),
       loadJson("/remediation-actions?limit=10"),
       loadJson("/vex?expired=true&limit=10"),
       loadJson("/scan-health?limit=10"),
@@ -2242,6 +2325,8 @@ async function refresh() {
       loadJson("/integrations/webhooks?limit=10"),
       loadJson("/scanners/failures?limit=10"),
       loadJson("/remediation/dependency-updates?limit=10"),
+      loadJson("/remediation/dependency-update-coverage?limit=10"),
+      loadJson("/remediation/priority-queue?limit=10"),
       loadJson("/operations/failure-signals?limit=10"),
       loadJson("/isolated-lane/safeguards?limit=10"),
       loadJson("/isolated-lane/scan-health?limit=10"),
@@ -2298,8 +2383,11 @@ async function refresh() {
     renderSboms(sbomPage);
     renderComponents(componentPage);
     renderComponentUsage(componentUsagePage);
+    renderDependencyRelationships(dependencyRelationshipPage);
     renderVulnerabilities(vulnerabilityPage);
     renderVulnerabilityImpact(vulnerabilityImpactPage);
+    renderVulnerabilityEnrichment(vulnerabilityEnrichmentPage);
+    renderRiskScoreExplanations(riskScoreExplanationPage);
     renderRemediationActions(remediationActionPage);
     renderVexReviews(vexPage);
     renderScanHealth(scanHealthPage);
@@ -2382,6 +2470,8 @@ async function refresh() {
     renderWebhookIntake(webhookIntakePage);
     renderScannerFailures(scannerFailurePage);
     renderDependencyUpdates(dependencyUpdatePage);
+    renderDependencyUpdateCoverage(dependencyUpdateCoveragePage);
+    renderRemediationPriorityQueue(remediationPriorityQueuePage);
     renderFailureSignals(failureSignalPage);
     renderIsolatedSafeguards(isolatedSafeguardPage);
     renderIsolatedScanHealth(isolatedScanHealthPage);
@@ -2438,8 +2528,11 @@ async function refresh() {
     sboms.innerHTML = `<tr><td colspan="4">Unable to load SBOMs</td></tr>`;
     components.innerHTML = `<tr><td colspan="4">Unable to load components</td></tr>`;
     componentUsage.innerHTML = `<tr><td colspan="5">Unable to load component usage</td></tr>`;
+    dependencyRelationships.innerHTML = `<tr><td colspan="5">Unable to load dependency relationships</td></tr>`;
     vulnerabilities.innerHTML = `<tr><td colspan="4">Unable to load vulnerabilities</td></tr>`;
     vulnerabilityImpact.innerHTML = `<tr><td colspan="5">Unable to load vulnerability impact</td></tr>`;
+    vulnerabilityEnrichment.innerHTML = `<tr><td colspan="5">Unable to load vulnerability enrichment</td></tr>`;
+    riskScoreExplanations.innerHTML = `<tr><td colspan="5">Unable to load risk score explanations</td></tr>`;
     remediationActions.innerHTML = `<tr><td colspan="4">Unable to load remediation actions</td></tr>`;
     vexReviews.innerHTML = `<tr><td colspan="5">Unable to load VEX reviews</td></tr>`;
     scanHealth.innerHTML = `<tr><td colspan="5">Unable to load scan health</td></tr>`;
@@ -2522,6 +2615,8 @@ async function refresh() {
     webhookIntake.innerHTML = `<tr><td colspan="5">Unable to load webhook intake</td></tr>`;
     scannerFailures.innerHTML = `<tr><td colspan="5">Unable to load scanner failures</td></tr>`;
     dependencyUpdates.innerHTML = `<tr><td colspan="5">Unable to load dependency updates</td></tr>`;
+    dependencyUpdateCoverage.innerHTML = `<tr><td colspan="5">Unable to load dependency update coverage</td></tr>`;
+    remediationPriorityQueue.innerHTML = `<tr><td colspan="5">Unable to load remediation priority queue</td></tr>`;
     failureSignals.innerHTML = `<tr><td colspan="5">Unable to load failure signals</td></tr>`;
     isolatedSafeguards.innerHTML = `<tr><td colspan="5">Unable to load isolated safeguards</td></tr>`;
     isolatedScanHealth.innerHTML = `<tr><td colspan="5">Unable to load isolated scan health</td></tr>`;

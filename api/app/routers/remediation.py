@@ -13,6 +13,7 @@ from api.app.services.remediation import (
     ACTION_TYPE_GITHUB_ISSUE,
     OPEN_REMEDIATION_STATUSES,
 )
+from api.app.routers.sla import is_sla_breached
 
 router = APIRouter(prefix="/remediation", tags=["remediation"])
 
@@ -296,6 +297,44 @@ def list_dependency_updates(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/dependency-update-coverage", response_model=schemas.CursorPage)
+def list_dependency_update_coverage(
+    limit: int = 50,
+    gap_type: str | None = None,
+    severity: models.Severity | None = None,
+    provider: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = dependency_update_coverage_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if provider:
+        items = [item for item in items if item["provider"] == provider]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/priority-queue", response_model=schemas.CursorPage)
+def list_remediation_priority_queue(
+    limit: int = 50,
+    severity: models.Severity | None = None,
+    sla_breached: bool | None = None,
+    fix_available: bool | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = remediation_priority_queue_items(db)
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if sla_breached is not None:
+        items = [item for item in items if item["sla_breached"] is sla_breached]
+    if fix_available is not None:
+        items = [item for item in items if item["fix_available"] is fix_available]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/backlog", response_model=schemas.CursorPage)
 def list_remediation_backlog(
     limit: int = 50,
@@ -541,6 +580,126 @@ def dependency_update_items(db: Session) -> list[dict]:
             ).model_dump(mode="json")
         )
     return items
+
+
+def dependency_update_gap_count(db: Session) -> int:
+    return len(dependency_update_coverage_items(db))
+
+
+def remediation_priority_count(db: Session) -> int:
+    return len(remediation_priority_queue_items(db))
+
+
+def dependency_update_coverage_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(days=7)
+    action_by_finding = _latest_dependency_update_action_by_finding(db)
+    items = []
+    for finding, application, repository, component, vulnerability in _fixed_findings(db):
+        action = action_by_finding.get(finding.id)
+        if action is None:
+            items.append(
+                _dependency_update_coverage_item(
+                    "missing_update_action",
+                    finding,
+                    application,
+                    repository,
+                    component,
+                    vulnerability,
+                    None,
+                    now,
+                    "Fixable finding has no dependency update action",
+                )
+            )
+            continue
+        metadata = action.metadata_json or {}
+        validation_scan = _scan_from_metadata(db, metadata)
+        validation_status = str(metadata.get("validation_status") or "")
+        detail = metadata.get("error") or metadata.get("validation_error") or metadata.get("ci_error")
+        if action.status in {"failed", "close_failed"}:
+            items.append(
+                _dependency_update_coverage_item(
+                    "failed_update_action",
+                    finding,
+                    application,
+                    repository,
+                    component,
+                    vulnerability,
+                    action,
+                    now,
+                    str(detail or "Dependency update action failed"),
+                )
+            )
+        elif action.status in _BACKLOG_OPEN_STATUSES and _before(action.updated_at, stale_cutoff):
+            items.append(
+                _dependency_update_coverage_item(
+                    "stale_update_action",
+                    finding,
+                    application,
+                    repository,
+                    component,
+                    vulnerability,
+                    action,
+                    now,
+                    "Dependency update action has been open for more than 7 days",
+                )
+            )
+        if validation_scan is None and validation_status not in {"succeeded", "passed"}:
+            items.append(
+                _dependency_update_coverage_item(
+                    "missing_validation_scan",
+                    finding,
+                    application,
+                    repository,
+                    component,
+                    vulnerability,
+                    action,
+                    now,
+                    "Dependency update has no validation scan evidence",
+                )
+            )
+    return items
+
+
+def remediation_priority_queue_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(models.Finding.status.in_([models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress]))
+    )
+    items = []
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        rank, reasons = _priority_rank(finding, application, vulnerability, now)
+        items.append(
+            schemas.RemediationPriorityQueueOut(
+                finding_id=finding.id,
+                severity=finding.severity,
+                status=finding.status,
+                risk_score=finding.risk_score,
+                priority_rank=rank,
+                priority_reason=", ".join(reasons),
+                sla_breached=is_sla_breached(finding, now),
+                fix_available=bool(finding.fixed_version),
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                component_name=component.name,
+                vulnerability_external_id=vulnerability.external_id,
+                production=application.production,
+                internet_exposed=application.internet_exposed,
+                has_kev=_vulnerability_has(vulnerability, {"kev", "cisa"}),
+                has_exploit=_vulnerability_has(vulnerability, {"exploit", "poc", "proof-of-concept"}),
+                fixed_version=finding.fixed_version,
+                created_at=finding.created_at,
+            ).model_dump(mode="json")
+        )
+    return sorted(items, key=lambda item: (-item["priority_rank"], item["created_at"], item["finding_id"]))
 
 
 def remediation_backlog_items(db: Session) -> list[dict]:
@@ -1047,6 +1206,27 @@ def _fixed_critical_high_findings(db: Session):
     )
 
 
+def _fixed_findings(db: Session):
+    return db.execute(
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(
+            models.Finding.status.in_([models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress]),
+            models.Finding.fixed_version.is_not(None),
+        )
+        .order_by(models.Finding.risk_score.desc(), models.Finding.created_at.asc(), models.Finding.id.asc())
+    )
+
+
 def _latest_issue_or_pr_action_by_finding(db: Session) -> dict[UUID, models.RemediationAction]:
     actions = {}
     stmt = select(models.RemediationAction).order_by(
@@ -1055,6 +1235,18 @@ def _latest_issue_or_pr_action_by_finding(db: Session) -> dict[UUID, models.Reme
     )
     for action in db.scalars(stmt):
         if action.action_type == ACTION_TYPE_GITHUB_ISSUE or _has_pr_signal(action):
+            actions.setdefault(action.finding_id, action)
+    return actions
+
+
+def _latest_dependency_update_action_by_finding(db: Session) -> dict[UUID, models.RemediationAction]:
+    actions = {}
+    stmt = select(models.RemediationAction).order_by(
+        models.RemediationAction.created_at.desc(),
+        models.RemediationAction.id.desc(),
+    )
+    for action in db.scalars(stmt):
+        if _has_dependency_update_signal(action) or action.action_type in {ACTION_TYPE_AI_FIX, ACTION_TYPE_GITHUB_ISSUE}:
             actions.setdefault(action.finding_id, action)
     return actions
 
@@ -1284,6 +1476,102 @@ def _dependency_update_source(action: models.RemediationAction) -> str:
     if action.action_type == ACTION_TYPE_AI_FIX:
         return "ai_fix"
     return "dependency_update"
+
+
+def _dependency_update_coverage_item(
+    gap_type: str,
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    component: models.Component,
+    vulnerability: models.Vulnerability,
+    action: models.RemediationAction | None,
+    now: datetime,
+    detail: str,
+) -> dict:
+    metadata = action.metadata_json if action else {}
+    reference_time = action.updated_at if action else finding.updated_at
+    comparable_now = _matching_datetime(now, reference_time)
+    return schemas.DependencyUpdateCoverageOut(
+        gap_type=gap_type,
+        finding_id=finding.id,
+        severity=finding.severity,
+        status=finding.status,
+        risk_score=finding.risk_score,
+        fixed_version=finding.fixed_version or "",
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        component_name=component.name,
+        vulnerability_external_id=vulnerability.external_id,
+        provider=action.provider if action else None,
+        update_source=_dependency_update_source(action) if action else None,
+        action_id=action.id if action else None,
+        action_type=action.action_type if action else None,
+        action_status=action.status if action else None,
+        validation_status=str(metadata.get("validation_status")) if metadata.get("validation_status") else None,
+        validation_scan_id=_optional_uuid(metadata.get("validation_scan_id")) if metadata else None,
+        age_days=max((comparable_now - reference_time).days, 0),
+        detail=detail,
+    ).model_dump(mode="json")
+
+
+def _priority_rank(
+    finding: models.Finding,
+    application: models.Application,
+    vulnerability: models.Vulnerability,
+    now: datetime,
+) -> tuple[int, list[str]]:
+    rank = int(finding.risk_score * 10)
+    reasons = [f"risk_score:{finding.risk_score:g}"]
+    severity_bonus = {
+        models.Severity.critical: 50,
+        models.Severity.high: 35,
+        models.Severity.medium: 15,
+        models.Severity.low: 5,
+    }.get(finding.severity, 0)
+    rank += severity_bonus
+    reasons.append(f"severity:{finding.severity.value}")
+    if is_sla_breached(finding, now):
+        rank += 40
+        reasons.append("sla_breached")
+    if application.internet_exposed:
+        rank += 25
+        reasons.append("internet_exposed")
+    if application.production:
+        rank += 20
+        reasons.append("production")
+    if _vulnerability_has(vulnerability, {"kev", "cisa"}):
+        rank += 30
+        reasons.append("kev")
+    if _vulnerability_has(vulnerability, {"exploit", "poc", "proof-of-concept"}):
+        rank += 20
+        reasons.append("exploit")
+    if finding.fixed_version:
+        rank += 10
+        reasons.append("fix_available")
+    return rank, reasons
+
+
+def _vulnerability_has(vulnerability: models.Vulnerability, tokens: set[str]) -> bool:
+    text = _flatten_evidence([vulnerability.title, vulnerability.description, vulnerability.references or []])
+    return any(token in text for token in tokens)
+
+
+def _flatten_evidence(value) -> str:
+    if isinstance(value, dict):
+        return " ".join([str(key).lower() for key in value] + [_flatten_evidence(item) for item in value.values()])
+    if isinstance(value, list | tuple | set):
+        return " ".join(_flatten_evidence(item) for item in value)
+    return str(value or "").lower()
+
+
+def _matching_datetime(reference: datetime, value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return reference.replace(tzinfo=None)
+    return reference
 
 
 def _ci_failure_detail(action: models.RemediationAction) -> str | None:

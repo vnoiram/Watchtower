@@ -162,6 +162,25 @@ def list_medium_review(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/risk-score-explanations", response_model=schemas.CursorPage)
+def list_risk_score_explanations(
+    limit: int = 50,
+    gap_type: str | None = None,
+    severity: models.Severity | None = None,
+    application_id: UUID | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = risk_score_explanation_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if application_id:
+        items = [item for item in items if item["application_id"] == str(application_id)]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.post("/{finding_id}/github-issue", response_model=schemas.RemediationActionOut)
 def enqueue_github_issue(
     finding_id: UUID,
@@ -198,6 +217,52 @@ def medium_review_count(db: Session) -> int:
     return len(medium_review_items(db))
 
 
+def risk_score_gap_count(db: Session) -> int:
+    return len(risk_score_explanation_items(db))
+
+
+def risk_score_explanation_items(db: Session) -> list[dict]:
+    stmt = (
+        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(models.Finding.status.in_([models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress]))
+        .order_by(models.Finding.risk_score.asc(), models.Finding.updated_at.asc(), models.Finding.id.asc())
+    )
+    items = []
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        factors = _risk_factors(finding, application, vulnerability)
+        gap_type = _risk_gap_type(finding, factors)
+        if gap_type is None:
+            continue
+        items.append(
+            schemas.RiskScoreExplanationOut(
+                gap_type=gap_type,
+                finding_id=finding.id,
+                status=finding.status,
+                severity=finding.severity,
+                risk_score=finding.risk_score,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                criticality=application.criticality,
+                internet_exposed=application.internet_exposed,
+                production=application.production,
+                fixed_version=finding.fixed_version,
+                has_kev=_vulnerability_has(vulnerability, {"kev", "cisa"}),
+                has_epss=_vulnerability_has(vulnerability, {"epss"}),
+                priority_factors=factors,
+                detail=f"Risk score evidence for {component.name} / {vulnerability.external_id}",
+                updated_at=finding.updated_at,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
 def finding_lifecycle_review_items(db: Session) -> list[dict]:
     now = datetime.now(timezone.utc)
     stale_cutoff = now - timedelta(days=30)
@@ -220,6 +285,57 @@ def finding_lifecycle_review_items(db: Session) -> list[dict]:
         if finding.status == models.FindingStatus.resolved and _close_state(issue_actions.get(finding.id)) != "closed":
             items.append(_lifecycle_item("resolved_without_close", *context, detail="Resolved finding does not have closed GitHub issue evidence"))
     return items
+
+
+def _risk_factors(
+    finding: models.Finding,
+    application: models.Application,
+    vulnerability: models.Vulnerability,
+) -> list[str]:
+    factors = [f"severity:{finding.severity.value}"]
+    if application.criticality in {"critical", "high"}:
+        factors.append(f"criticality:{application.criticality}")
+    if application.internet_exposed:
+        factors.append("internet_exposed")
+    if application.production:
+        factors.append("production")
+    if finding.fixed_version:
+        factors.append("fix_available")
+    if _vulnerability_has(vulnerability, {"kev", "cisa"}):
+        factors.append("kev")
+    if _vulnerability_has(vulnerability, {"epss"}):
+        factors.append("epss")
+    if _vulnerability_has(vulnerability, {"exploit", "poc", "proof-of-concept"}):
+        factors.append("exploit")
+    return factors
+
+
+def _risk_gap_type(finding: models.Finding, factors: list[str]) -> str | None:
+    high_signal = any(
+        factor in {"internet_exposed", "production", "fix_available", "kev", "epss", "exploit"}
+        or factor.startswith("criticality:")
+        for factor in factors
+    )
+    if finding.risk_score <= 0:
+        return "missing_risk_score"
+    if finding.severity in {models.Severity.critical, models.Severity.high} and finding.risk_score < 7:
+        return "low_score_for_high_severity"
+    if high_signal and finding.risk_score < 5:
+        return "missing_priority_factor_weight"
+    return None
+
+
+def _vulnerability_has(vulnerability: models.Vulnerability, tokens: set[str]) -> bool:
+    text = _flatten_evidence([vulnerability.title, vulnerability.description, vulnerability.references or []])
+    return any(token in text for token in tokens)
+
+
+def _flatten_evidence(value) -> str:
+    if isinstance(value, dict):
+        return " ".join([str(key).lower() for key in value] + [_flatten_evidence(item) for item in value.values()])
+    if isinstance(value, list | tuple | set):
+        return " ".join(_flatten_evidence(item) for item in value)
+    return str(value or "").lower()
 
 
 def medium_review_items(db: Session) -> list[dict]:
