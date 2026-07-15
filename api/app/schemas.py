@@ -1378,6 +1378,78 @@ class ScanEvidenceQualityOut(BaseModel):
     created_at: datetime
 
 
+class AutomationGuardrailOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class AutoMergePolicyViolationOut(BaseModel):
+    violation_type: str
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    ci_passed: bool | None = None
+    validation_status: str | None = None
+    auto_merge_allowed: bool | None = None
+    detail: str
+    updated_at: datetime
+
+
+class AutoMergeDryRunOut(BaseModel):
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    decision: str
+    mismatch: bool
+    auto_merge_allowed: bool | None = None
+    policy_reason: str | None = None
+    ci_passed: bool | None = None
+    validation_status: str | None = None
+    detail: str
+    updated_at: datetime
+
+
+class RollbackReadinessOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class AutomationSuppressionOut(BaseModel):
+    reason: str
+    action_id: UUID
+    action_type: str
+    action_status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    duplicate_of: str | None = None
+    policy_reason: str | None = None
+    detail: str
+    updated_at: datetime
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -1412,3 +1484,5 @@ class DashboardSummary(BaseModel):
     monthly_review_items: int
     phase_readiness_items: int
     control_evidence_items: int
+    automation_guardrail_items: int
+    rollback_readiness_items: int

@@ -94,6 +94,11 @@ const findingEvidenceGaps = document.querySelector("#finding-evidence-gaps");
 const jobBacklog = document.querySelector("#job-backlog");
 const auditEvidenceGaps = document.querySelector("#audit-evidence-gaps");
 const scanEvidenceQuality = document.querySelector("#scan-evidence-quality");
+const automationGuardrails = document.querySelector("#automation-guardrails");
+const policyViolations = document.querySelector("#policy-violations");
+const dryRunDecisions = document.querySelector("#dry-run-decisions");
+const rollbackReadiness = document.querySelector("#rollback-readiness");
+const automationSuppressions = document.querySelector("#automation-suppressions");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -175,6 +180,8 @@ function renderMetrics(summary) {
     ["monthly_review_items", "Monthly review", "warn"],
     ["phase_readiness_items", "Phase readiness", "warn"],
     ["control_evidence_items", "Control evidence", "warn"],
+    ["automation_guardrail_items", "Automation guards", "warn"],
+    ["rollback_readiness_items", "Rollback readiness", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -1281,6 +1288,64 @@ function renderScanEvidenceQuality(page) {
     : `<tr><td colspan="5">No scan evidence quality gaps</td></tr>`;
 }
 
+function renderAutomationGuardrails(rows) {
+  automationGuardrails.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td colspan="2">${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No automation guardrail gaps</td></tr>`;
+}
+
+function renderPolicyViolations(page) {
+  const rows = page.items || [];
+  policyViolations.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.violation_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.action_status)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No policy violations</td></tr>`;
+}
+
+function renderDryRunDecisions(page) {
+  const rows = page.items || [];
+  dryRunDecisions.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.decision)}</td><td>${escapeHtml(item.mismatch ? "mismatch" : "matched")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.action_status)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No dry-run decisions</td></tr>`;
+}
+
+function renderRollbackReadiness(rows) {
+  rollbackReadiness.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td colspan="2">${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No rollback readiness gaps</td></tr>`;
+}
+
+function renderAutomationSuppressions(page) {
+  const rows = page.items || [];
+  automationSuppressions.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No automation suppressions</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1376,6 +1441,11 @@ async function refresh() {
   jobBacklog.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   auditEvidenceGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scanEvidenceQuality.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  automationGuardrails.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  policyViolations.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  dryRunDecisions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  rollbackReadiness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  automationSuppressions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -1473,6 +1543,11 @@ async function refresh() {
       jobBacklogPage,
       auditEvidenceGapPage,
       scanEvidenceQualityPage,
+      automationGuardrailPage,
+      policyViolationPage,
+      dryRunDecisionPage,
+      rollbackReadinessPage,
+      automationSuppressionPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -1569,6 +1644,11 @@ async function refresh() {
       loadJson("/jobs/backlog?limit=10"),
       loadJson("/audit/evidence-gaps?limit=10"),
       loadJson("/scans/evidence-quality?limit=10"),
+      loadJson("/auto-merge/guardrails"),
+      loadJson("/auto-merge/policy-violations?limit=10"),
+      loadJson("/auto-merge/dry-runs?limit=10"),
+      loadJson("/operations/rollback-readiness"),
+      loadJson("/remediation/suppressions?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -1664,6 +1744,11 @@ async function refresh() {
     renderJobBacklog(jobBacklogPage);
     renderAuditEvidenceGaps(auditEvidenceGapPage);
     renderScanEvidenceQuality(scanEvidenceQualityPage);
+    renderAutomationGuardrails(automationGuardrailPage);
+    renderPolicyViolations(policyViolationPage);
+    renderDryRunDecisions(dryRunDecisionPage);
+    renderRollbackReadiness(rollbackReadinessPage);
+    renderAutomationSuppressions(automationSuppressionPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1759,6 +1844,11 @@ async function refresh() {
     jobBacklog.innerHTML = `<tr><td colspan="5">Unable to load job backlog</td></tr>`;
     auditEvidenceGaps.innerHTML = `<tr><td colspan="5">Unable to load audit evidence gaps</td></tr>`;
     scanEvidenceQuality.innerHTML = `<tr><td colspan="5">Unable to load scan evidence quality</td></tr>`;
+    automationGuardrails.innerHTML = `<tr><td colspan="5">Unable to load automation guardrails</td></tr>`;
+    policyViolations.innerHTML = `<tr><td colspan="5">Unable to load policy violations</td></tr>`;
+    dryRunDecisions.innerHTML = `<tr><td colspan="5">Unable to load dry-run decisions</td></tr>`;
+    rollbackReadiness.innerHTML = `<tr><td colspan="5">Unable to load rollback readiness</td></tr>`;
+    automationSuppressions.innerHTML = `<tr><td colspan="5">Unable to load automation suppressions</td></tr>`;
   }
 }
 

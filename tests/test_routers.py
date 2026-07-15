@@ -43,7 +43,13 @@ from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
 from api.app.routers.audit import list_audit_evidence_gaps, list_audit_review
 from api.app.routers.artifacts import list_artifact_sbom_coverage, list_artifacts
-from api.app.routers.auto_merge import list_auto_merge_eligibility, list_auto_merge_pilot_readiness
+from api.app.routers.auto_merge import (
+    automation_guardrails,
+    list_auto_merge_dry_runs,
+    list_auto_merge_eligibility,
+    list_auto_merge_pilot_readiness,
+    list_auto_merge_policy_violations,
+)
 from api.app.routers.components import list_component_applications, list_components, list_license_review
 from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
@@ -79,6 +85,7 @@ from api.app.routers.operations import (
     operational_workload,
     operations_readiness,
     phase_readiness,
+    rollback_readiness,
     restore_readiness,
     scan_targets,
     toolchain_posture,
@@ -95,6 +102,7 @@ from api.app.routers.remediation import (
     list_remediation_prs,
     list_remediation_aging,
     list_remediation_rescans,
+    list_automation_suppressions,
     list_remediation_candidates,
     list_remediation_validations,
     list_resolution_verification,
@@ -3739,3 +3747,205 @@ def test_list_scan_evidence_quality_reports_scan_evidence_gaps() -> None:
         assert ("missing_source_sbom_artifact", str(empty_success.id)) in gaps
         assert ("empty_successful_scan", str(empty_success.id)) in gaps
         assert filtered.items[0]["scan_id"] == str(failed_scanner.id)
+
+
+def test_automation_guardrails_report_safety_gate_counts_and_dashboard() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "automation-guardrails")
+        app = create_application(db, repo)
+        app.production = True
+        app.criticality = "high"
+        app.auto_merge_enabled = False
+        finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="created",
+            metadata_json={
+                "ci_passed": False,
+                "validation_status": "failed",
+                "touches_forbidden_path": True,
+                "tier_allows": False,
+            },
+        )
+        db.add(action)
+        db.flush()
+
+        rows = automation_guardrails(db=db, _=None)
+        by_check = {row.check: row for row in rows}
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert by_check["production_high_criticality"].count == 1
+        assert by_check["auto_merge_disabled"].count == 1
+        assert by_check["ci_not_passed"].count == 1
+        assert by_check["validation_not_passed"].count == 1
+        assert by_check["forbidden_path"].count == 1
+        assert by_check["tier_blocked"].count == 1
+        assert by_check["audit_missing"].count == 1
+        assert summary.automation_guardrail_items >= 7
+
+
+def test_list_auto_merge_policy_violations_reports_merged_policy_failures() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "policy-violations")
+        app = create_application(db, repo)
+        app.production = True
+        app.criticality = "critical"
+        finding = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="merged",
+            metadata_json={
+                "auto_merge_allowed": False,
+                "ci_passed": False,
+                "validation_status": "failed",
+                "auto_processed": True,
+                "touches_forbidden_path": True,
+            },
+        )
+        db.add(action)
+        db.flush()
+
+        page = list_auto_merge_policy_violations(db=db, _=None)
+        filtered = list_auto_merge_policy_violations(
+            violation_type="policy_disallowed_merged",
+            severity=Severity.critical,
+            status="merged",
+            db=db,
+            _=None,
+        )
+        violations = {item["violation_type"] for item in page.items}
+
+        assert {
+            "policy_disallowed_merged",
+            "ci_failed_merged",
+            "validation_missing_merged",
+            "production_high_automated",
+            "forbidden_path",
+        } <= violations
+        assert filtered.items[0]["action_id"] == str(action.id)
+
+
+def test_list_auto_merge_dry_runs_reports_decision_mismatch() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "dry-runs")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="merged",
+            metadata_json={
+                "dry_run": True,
+                "dry_run_decision": "blocked",
+                "auto_merge_allowed": False,
+                "policy_reason": "tier_blocked",
+                "ci_passed": True,
+                "validation_status": "succeeded",
+            },
+        )
+        db.add(action)
+        db.flush()
+
+        page = list_auto_merge_dry_runs(db=db, _=None)
+        filtered = list_auto_merge_dry_runs(decision="blocked", mismatch=True, db=db, _=None)
+
+        assert page.items[0]["mismatch"] is True
+        assert page.items[0]["policy_reason"] == "tier_blocked"
+        assert filtered.items[0]["action_id"] == str(action.id)
+
+
+def test_rollback_readiness_reports_missing_and_present_rollback_evidence() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "rollback-readiness")
+        app = create_application(db, repo)
+        missing = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
+        covered = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
+        validation_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(hours=1))
+        db.add(validation_scan)
+        db.flush()
+        missing_action = RemediationAction(finding_id=missing.id, action_type="ai_fix", status="merged", metadata_json={})
+        covered_action = RemediationAction(
+            finding_id=covered.id,
+            action_type="ai_fix",
+            status="merged",
+            url="https://github.com/local/demo/pull/1",
+            branch="fix/demo",
+            fixed_version="1.0.1",
+            metadata_json={
+                "rollback_plan": "revert PR",
+                "validation_status": "succeeded",
+                "validation_scan_id": str(validation_scan.id),
+            },
+        )
+        db.add_all([missing_action, covered_action])
+        db.flush()
+        db.add(
+            AuditLog(
+                actor="operator",
+                role="operator",
+                action="remediation.action",
+                resource_type="remediation_action",
+                resource_id=str(covered_action.id),
+                metadata_json={"status": "merged"},
+            )
+        )
+        db.add(Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() + timedelta(minutes=1)))
+        db.flush()
+
+        rows = rollback_readiness(db=db, _=None)
+        by_check = {row.check: row for row in rows}
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert by_check["rollback_metadata"].count == 1
+        assert by_check["pr_url"].count == 1
+        assert by_check["branch"].count == 1
+        assert by_check["fixed_version"].count == 1
+        assert by_check["audit_log"].count == 1
+        assert by_check["validation_scan"].count == 1
+        assert summary.rollback_readiness_items >= 6
+
+
+def test_list_automation_suppressions_reports_skip_block_and_policy_reasons() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "automation-suppressions")
+        app = create_application(db, repo)
+        duplicate_finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
+        blocked_finding = create_finding(db, app, severity=Severity.medium, status=FindingStatus.open)
+        policy_finding = create_finding(db, app, severity=Severity.low, status=FindingStatus.open)
+        db.add_all(
+            [
+                RemediationAction(
+                    finding_id=duplicate_finding.id,
+                    action_type="github_issue",
+                    status="skipped_duplicate",
+                    metadata_json={"duplicate_of": "issue-1"},
+                ),
+                RemediationAction(
+                    finding_id=blocked_finding.id,
+                    action_type="ai_fix",
+                    status="blocked",
+                    metadata_json={"block_reason": "forbidden_path"},
+                ),
+                RemediationAction(
+                    finding_id=policy_finding.id,
+                    action_type="ai_fix",
+                    status="created",
+                    metadata_json={"policy_reason": "tier_blocked"},
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_automation_suppressions(db=db, _=None)
+        filtered = list_automation_suppressions(reason="duplicate", action_type="github_issue", severity=Severity.high, db=db, _=None)
+        reasons = {item["reason"] for item in page.items}
+
+        assert {"duplicate", "blocked", "policy"} <= reasons
+        assert filtered.items[0]["duplicate_of"] == "issue-1"

@@ -370,6 +370,14 @@ def control_evidence(
     return control_evidence_items(db)
 
 
+@router.get("/rollback-readiness", response_model=list[schemas.RollbackReadinessOut])
+def rollback_readiness(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return rollback_readiness_items(db)
+
+
 def failure_signal_count(db: Session) -> int:
     return len(failure_signal_items(db))
 
@@ -384,6 +392,10 @@ def phase_readiness_count(db: Session) -> int:
 
 def control_evidence_count(db: Session) -> int:
     return sum(item.count for item in control_evidence_items(db) if item.status != "ok")
+
+
+def rollback_readiness_count(db: Session) -> int:
+    return sum(item.count for item in rollback_readiness_items(db) if item.status != "ok")
 
 
 def manual_action_count(db: Session, days: int = 30) -> int:
@@ -674,6 +686,46 @@ def control_evidence_items(db: Session) -> list[schemas.ControlEvidenceOut]:
     ]
 
 
+def rollback_readiness_items(db: Session) -> list[schemas.RollbackReadinessOut]:
+    actions = [action for action in db.scalars(select(models.RemediationAction)) if _is_merged_action(action)]
+    scans = list(db.scalars(select(models.Scan)))
+    audit_logs = list(db.scalars(select(models.AuditLog)))
+    rollback_missing = 0
+    pr_missing = 0
+    branch_missing = 0
+    fixed_version_missing = 0
+    audit_missing = 0
+    validation_missing = 0
+    post_merge_scan_missing = 0
+    for action in actions:
+        metadata = action.metadata_json or {}
+        if not (metadata.get("rollback_branch") or metadata.get("rollback_plan") or metadata.get("rollback_commit")):
+            rollback_missing += 1
+        if not (action.url or metadata.get("pull_request_url") or metadata.get("html_url")):
+            pr_missing += 1
+        if not action.branch:
+            branch_missing += 1
+        if not action.fixed_version:
+            fixed_version_missing += 1
+        if not _has_audit_log(audit_logs, "remediation_action", str(action.id)):
+            audit_missing += 1
+        validation_scan = _scan_from_metadata(scans, metadata)
+        if metadata.get("validation_status") != "succeeded" and validation_scan is None:
+            validation_missing += 1
+        application_id = _application_id_for_action(db, action)
+        if application_id is None or not _has_scan_after(scans, application_id, action.updated_at):
+            post_merge_scan_missing += 1
+    return [
+        _rollback("rollback_metadata", "warn", rollback_missing, "Merged actions without rollback metadata"),
+        _rollback("pr_url", "warn", pr_missing, "Merged actions without PR URL evidence"),
+        _rollback("branch", "warn", branch_missing, "Merged actions without branch evidence"),
+        _rollback("fixed_version", "warn", fixed_version_missing, "Merged actions without fixed version evidence"),
+        _rollback("audit_log", "warn", audit_missing, "Merged actions without audit log evidence"),
+        _rollback("validation_scan", "fail", validation_missing, "Merged actions without successful validation scan evidence"),
+        _rollback("post_merge_scan", "fail", post_merge_scan_missing, "Merged actions without post-merge scan evidence"),
+    ]
+
+
 def manual_workload_count(db: Session) -> int:
     return sum(row.count for row in _workload_rows(db))
 
@@ -927,6 +979,15 @@ def _control_evidence(check: str, status: str, count: int, detail: str) -> schem
     return schemas.ControlEvidenceOut(check=check, status=status, count=count, detail=detail)
 
 
+def _rollback(check: str, nonzero_status: str, count: int, detail: str) -> schemas.RollbackReadinessOut:
+    return schemas.RollbackReadinessOut(
+        check=check,
+        status=nonzero_status if count else "ok",
+        count=count,
+        detail=detail,
+    )
+
+
 def _count(db: Session, stmt) -> int:
     subquery = stmt.subquery()
     return db.scalar(select(func.count()).select_from(subquery)) or 0
@@ -977,6 +1038,27 @@ def _has_audit_log(audit_logs: list[models.AuditLog], resource_type: str, resour
     return any(log.resource_type == resource_type and log.resource_id == resource_id for log in audit_logs)
 
 
+def _is_merged_action(action: models.RemediationAction) -> bool:
+    metadata = action.metadata_json or {}
+    return action.status in {"merged", "succeeded", "closed"} or bool(metadata.get("merged_at"))
+
+
+def _scan_from_metadata(scans: list[models.Scan], metadata: dict) -> models.Scan | None:
+    scan_id = _metadata_uuid(metadata, "validation_scan_id")
+    if scan_id is None:
+        return None
+    return next((scan for scan in scans if scan.id == scan_id), None)
+
+
+def _application_id_for_action(db: Session, action: models.RemediationAction):
+    finding = db.get(models.Finding, action.finding_id)
+    return finding.application_id if finding else None
+
+
+def _has_scan_after(scans: list[models.Scan], application_id, created_at: datetime) -> bool:
+    return any(scan.application_id == application_id and _after_cutoff(scan.created_at, created_at) for scan in scans)
+
+
 def _recent_restore_logs(db: Session) -> list[models.AuditLog]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     actions = {"backup.restore", "restore.verify", "backup.restore.verify"}
@@ -989,9 +1071,13 @@ def _recent_restore_logs(db: Session) -> list[models.AuditLog]:
 
 def _latest_scan_by_application(scans: list[models.Scan]) -> dict:
     latest = {}
-    for scan in sorted(scans, key=lambda item: (item.created_at, item.id), reverse=True):
+    for scan in sorted(scans, key=lambda item: (_sort_datetime(item.created_at), item.id), reverse=True):
         latest.setdefault(scan.application_id, scan)
     return latest
+
+
+def _sort_datetime(value: datetime) -> datetime:
+    return value.replace(tzinfo=None) if value.tzinfo else value
 
 
 def _fixed_without_issue_or_pr_count(db: Session) -> int:
