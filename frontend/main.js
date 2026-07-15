@@ -44,6 +44,8 @@ const operationalWorkload = document.querySelector("#operational-workload");
 const repositorySync = document.querySelector("#repository-sync");
 const importFailures = document.querySelector("#import-failures");
 const applicationDetection = document.querySelector("#application-detection");
+const inputCoverage = document.querySelector("#input-coverage");
+const containerInputs = document.querySelector("#container-inputs");
 const scheduledScanCoverage = document.querySelector("#scheduled-scan-coverage");
 const dailyScanSlo = document.querySelector("#daily-scan-slo");
 const resolutionCandidates = document.querySelector("#resolution-candidates");
@@ -118,6 +120,9 @@ const findingEvidenceGaps = document.querySelector("#finding-evidence-gaps");
 const jobBacklog = document.querySelector("#job-backlog");
 const auditEvidenceGaps = document.querySelector("#audit-evidence-gaps");
 const scanEvidenceQuality = document.querySelector("#scan-evidence-quality");
+const rawScanArtifacts = document.querySelector("#raw-scan-artifacts");
+const sbomNormalization = document.querySelector("#sbom-normalization");
+const vulnerabilityReevaluation = document.querySelector("#vulnerability-reevaluation");
 const automationGuardrails = document.querySelector("#automation-guardrails");
 const policyViolations = document.querySelector("#policy-violations");
 const dryRunDecisions = document.querySelector("#dry-run-decisions");
@@ -243,6 +248,11 @@ function renderMetrics(summary) {
     ["false_positive_review_items", "False positive", "warn"],
     ["worker_hardening_items", "Worker hardening", "warn"],
     ["storage_encryption_items", "Storage encryption", "warn"],
+    ["input_coverage_gap_items", "Input coverage", "warn"],
+    ["container_input_gap_items", "Container inputs", "warn"],
+    ["sbom_normalization_gap_items", "SBOM normalization", "warn"],
+    ["raw_artifact_gap_items", "Raw artifacts", "warn"],
+    ["vulnerability_reevaluation_gap_items", "Re-evaluation", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -764,6 +774,30 @@ function renderApplicationDetection(page) {
         )
         .join("")
     : `<tr><td colspan="5">No application detection gaps</td></tr>`;
+}
+
+function renderInputCoverage(page) {
+  const rows = page.items || [];
+  inputCoverage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.ecosystem || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No input coverage gaps</td></tr>`;
+}
+
+function renderContainerInputs(page) {
+  const rows = page.items || [];
+  containerInputs.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.application_type)}</td><td>${escapeHtml(item.latest_scan_status || "missing")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No container input gaps</td></tr>`;
 }
 
 function renderScheduledScanCoverage(page) {
@@ -1611,6 +1645,42 @@ function renderScanEvidenceQuality(page) {
     : `<tr><td colspan="5">No scan evidence quality gaps</td></tr>`;
 }
 
+function renderRawScanArtifacts(page) {
+  const rows = page.items || [];
+  rawScanArtifacts.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.artifact_type || "-")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No raw scan artifact gaps</td></tr>`;
+}
+
+function renderSbomNormalization(page) {
+  const rows = page.items || [];
+  sbomNormalization.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.component_name)} ${escapeHtml(item.component_version || "")}</td><td>${escapeHtml(item.ecosystem || "-")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No SBOM normalization gaps</td></tr>`;
+}
+
+function renderVulnerabilityReevaluation(page) {
+  const rows = page.items || [];
+  vulnerabilityReevaluation.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No vulnerability re-evaluation gaps</td></tr>`;
+}
+
 function renderAutomationGuardrails(rows) {
   automationGuardrails.innerHTML = rows.length
     ? rows
@@ -1842,6 +1912,8 @@ async function refresh() {
   repositorySync.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   importFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   applicationDetection.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  inputCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  containerInputs.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scheduledScanCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   dailyScanSlo.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   resolutionCandidates.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1916,6 +1988,9 @@ async function refresh() {
   jobBacklog.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   auditEvidenceGaps.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scanEvidenceQuality.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  rawScanArtifacts.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  sbomNormalization.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  vulnerabilityReevaluation.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   automationGuardrails.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   policyViolations.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   dryRunDecisions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1979,6 +2054,8 @@ async function refresh() {
       repositorySyncPage,
       importFailurePage,
       applicationDetectionPage,
+      inputCoveragePage,
+      containerInputPage,
       scheduledScanCoveragePage,
       dailyScanSloPage,
       resolutionCandidatePage,
@@ -2053,6 +2130,9 @@ async function refresh() {
       jobBacklogPage,
       auditEvidenceGapPage,
       scanEvidenceQualityPage,
+      rawScanArtifactPage,
+      sbomNormalizationPage,
+      vulnerabilityReevaluationPage,
       automationGuardrailPage,
       policyViolationPage,
       dryRunDecisionPage,
@@ -2115,6 +2195,8 @@ async function refresh() {
       loadJson("/repository-sync?stale=true&limit=10"),
       loadJson("/repository-sync/import-failures?limit=10"),
       loadJson("/application-detection?limit=10"),
+      loadJson("/application-detection/input-coverage?limit=10"),
+      loadJson("/application-detection/container-inputs?limit=10"),
       loadJson("/scheduled-scan-coverage?missing=true&limit=10"),
       loadJson("/scans/daily-slo?breached=true&limit=10"),
       loadJson("/findings/resolution-candidates?limit=10"),
@@ -2189,6 +2271,9 @@ async function refresh() {
       loadJson("/jobs/backlog?limit=10"),
       loadJson("/audit/evidence-gaps?limit=10"),
       loadJson("/scans/evidence-quality?limit=10"),
+      loadJson("/scans/raw-artifacts?limit=10"),
+      loadJson("/sboms/normalization-quality?limit=10"),
+      loadJson("/vulnerabilities/reevaluation-coverage?limit=10"),
       loadJson("/auto-merge/guardrails"),
       loadJson("/auto-merge/policy-violations?limit=10"),
       loadJson("/auto-merge/dry-runs?limit=10"),
@@ -2250,6 +2335,8 @@ async function refresh() {
     renderRepositorySync(repositorySyncPage);
     renderImportFailures(importFailurePage);
     renderApplicationDetection(applicationDetectionPage);
+    renderInputCoverage(inputCoveragePage);
+    renderContainerInputs(containerInputPage);
     renderScheduledScanCoverage(scheduledScanCoveragePage);
     renderDailyScanSlo(dailyScanSloPage);
     renderResolutionCandidates(resolutionCandidatePage);
@@ -2324,6 +2411,9 @@ async function refresh() {
     renderJobBacklog(jobBacklogPage);
     renderAuditEvidenceGaps(auditEvidenceGapPage);
     renderScanEvidenceQuality(scanEvidenceQualityPage);
+    renderRawScanArtifacts(rawScanArtifactPage);
+    renderSbomNormalization(sbomNormalizationPage);
+    renderVulnerabilityReevaluation(vulnerabilityReevaluationPage);
     renderAutomationGuardrails(automationGuardrailPage);
     renderPolicyViolations(policyViolationPage);
     renderDryRunDecisions(dryRunDecisionPage);
@@ -2385,6 +2475,8 @@ async function refresh() {
     repositorySync.innerHTML = `<tr><td colspan="5">Unable to load repository sync coverage</td></tr>`;
     importFailures.innerHTML = `<tr><td colspan="5">Unable to load import failures</td></tr>`;
     applicationDetection.innerHTML = `<tr><td colspan="5">Unable to load application detection coverage</td></tr>`;
+    inputCoverage.innerHTML = `<tr><td colspan="5">Unable to load input coverage</td></tr>`;
+    containerInputs.innerHTML = `<tr><td colspan="5">Unable to load container inputs</td></tr>`;
     scheduledScanCoverage.innerHTML = `<tr><td colspan="5">Unable to load scheduled scan coverage</td></tr>`;
     dailyScanSlo.innerHTML = `<tr><td colspan="5">Unable to load daily scan SLO</td></tr>`;
     resolutionCandidates.innerHTML = `<tr><td colspan="5">Unable to load resolution candidates</td></tr>`;
@@ -2459,6 +2551,9 @@ async function refresh() {
     jobBacklog.innerHTML = `<tr><td colspan="5">Unable to load job backlog</td></tr>`;
     auditEvidenceGaps.innerHTML = `<tr><td colspan="5">Unable to load audit evidence gaps</td></tr>`;
     scanEvidenceQuality.innerHTML = `<tr><td colspan="5">Unable to load scan evidence quality</td></tr>`;
+    rawScanArtifacts.innerHTML = `<tr><td colspan="5">Unable to load raw scan artifacts</td></tr>`;
+    sbomNormalization.innerHTML = `<tr><td colspan="5">Unable to load SBOM normalization</td></tr>`;
+    vulnerabilityReevaluation.innerHTML = `<tr><td colspan="5">Unable to load vulnerability re-evaluation</td></tr>`;
     automationGuardrails.innerHTML = `<tr><td colspan="5">Unable to load automation guardrails</td></tr>`;
     policyViolations.innerHTML = `<tr><td colspan="5">Unable to load policy violations</td></tr>`;
     dryRunDecisions.innerHTML = `<tr><td colspan="5">Unable to load dry-run decisions</td></tr>`;

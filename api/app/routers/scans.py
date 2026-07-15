@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -64,6 +66,25 @@ def list_scan_evidence_quality(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/raw-artifacts", response_model=schemas.CursorPage)
+def list_raw_scan_artifacts(
+    limit: int = 50,
+    artifact_type: str | None = None,
+    gap_type: str | None = None,
+    repository_id: UUID | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = raw_scan_artifact_items(db)
+    if artifact_type:
+        items = [item for item in items if item["artifact_type"] == artifact_type]
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if repository_id:
+        items = [item for item in items if item["repository_id"] == str(repository_id)]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/daily-slo", response_model=schemas.CursorPage)
 def list_daily_scan_slo(
     limit: int = 50,
@@ -82,6 +103,52 @@ def list_daily_scan_slo(
 
 def daily_scan_slo_breach_count(db: Session) -> int:
     return sum(1 for item in daily_scan_slo_items(db) if item["breached"])
+
+
+def raw_scan_artifact_gap_count(db: Session) -> int:
+    return sum(1 for item in raw_scan_artifact_items(db) if item["gap_type"] != "complete")
+
+
+def raw_scan_artifact_items(db: Session) -> list[dict]:
+    stmt = (
+        select(models.Scan, models.Application, models.Repository)
+        .join(models.Application, models.Scan.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Scan.created_at.desc(), models.Scan.id.asc())
+    )
+    items = []
+    for scan, application, repository in db.execute(stmt):
+        artifacts = _scan_artifact_payloads(scan.result_summary)
+        if not artifacts:
+            items.append(
+                _raw_artifact_item(
+                    "missing_raw_artifact",
+                    scan,
+                    application,
+                    repository,
+                    None,
+                    {},
+                    "Scan has no raw artifact metadata",
+                )
+            )
+            continue
+        for current_type, artifact in artifacts:
+            storage_key = artifact.get("storage_key")
+            digest = artifact.get("digest") or artifact.get("sha256")
+            encrypted = _artifact_encrypted(artifact)
+            gap = "complete"
+            detail = "Raw scan artifact has storage and digest evidence"
+            if not storage_key:
+                gap = "missing_storage_key"
+                detail = "Raw scan artifact has no storage key"
+            elif not digest:
+                gap = "missing_digest"
+                detail = "Raw scan artifact has no digest evidence"
+            elif not encrypted:
+                gap = "missing_encryption_metadata"
+                detail = "Raw scan artifact has no encryption metadata"
+            items.append(_raw_artifact_item(gap, scan, application, repository, current_type, artifact, detail))
+    return items
 
 
 def daily_scan_slo_items(db: Session) -> list[dict]:
@@ -226,6 +293,62 @@ def _scan_quality_item(
         tool=scan.tool,
         tool_version=scan.tool_version,
         commit_sha=scan.commit_sha,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        detail=detail,
+        created_at=scan.created_at,
+    ).model_dump(mode="json")
+
+
+def _scan_artifact_payloads(result_summary: dict[str, Any] | None) -> list[tuple[str, dict[str, Any]]]:
+    raw = (result_summary or {}).get("artifacts") if isinstance(result_summary, dict) else None
+    if isinstance(raw, dict):
+        return [(str(key), value) for key, value in raw.items() if isinstance(value, dict)]
+    if isinstance(raw, list):
+        payloads = []
+        for index, value in enumerate(raw):
+            if isinstance(value, dict):
+                payloads.append((str(value.get("type") or value.get("artifact_type") or f"artifact_{index}"), value))
+        return payloads
+    return []
+
+
+def _artifact_encrypted(artifact: dict[str, Any]) -> bool:
+    if artifact.get("encrypted") or artifact.get("encryption") or artifact.get("kms_key_id"):
+        return True
+    text = " ".join(str(artifact.get(key) or "").lower() for key in ("storage_key", "digest", "metadata"))
+    return "encrypted" in text or "kms" in text
+
+
+def _artifact_size(artifact: dict[str, Any]) -> int | None:
+    for key in ("size_bytes", "bytes", "size"):
+        value = artifact.get(key)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _raw_artifact_item(
+    gap_type: str,
+    scan: models.Scan,
+    application: models.Application,
+    repository: models.Repository,
+    artifact_type: str | None,
+    artifact: dict[str, Any],
+    detail: str,
+) -> dict:
+    return schemas.RawScanArtifactOut(
+        gap_type=gap_type,
+        scan_id=scan.id,
+        status=scan.status,
+        artifact_type=artifact_type,
+        storage_key=artifact.get("storage_key"),
+        digest=artifact.get("digest") or artifact.get("sha256"),
+        size_bytes=_artifact_size(artifact),
+        encrypted=_artifact_encrypted(artifact),
         application_id=application.id,
         application_name=application.name,
         repository_id=repository.id,

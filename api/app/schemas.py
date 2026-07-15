@@ -657,6 +657,37 @@ class ApplicationDetectionOut(BaseModel):
     detail: str
 
 
+class ApplicationInputCoverageOut(BaseModel):
+    gap_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    application_id: UUID
+    application_name: str
+    application_path: str
+    ecosystem: str | None = None
+    technology_count: int
+    detected_sources: list[str] = Field(default_factory=list)
+    detail: str
+
+
+class ContainerInputCoverageOut(BaseModel):
+    gap_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    application_id: UUID
+    application_name: str
+    application_path: str
+    application_type: models.ApplicationType
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    has_container_input: bool
+    has_container_artifact: bool
+    artifact_types: list[str] = Field(default_factory=list)
+    detail: str
+
+
 class ScheduledScanCoverageOut(BaseModel):
     application_id: UUID
     application_name: str
@@ -1513,6 +1544,24 @@ class ScanEvidenceQualityOut(BaseModel):
     created_at: datetime
 
 
+class RawScanArtifactOut(BaseModel):
+    gap_type: str
+    scan_id: UUID
+    status: models.ScanStatus
+    artifact_type: str | None = None
+    storage_key: str | None = None
+    digest: str | None = None
+    size_bytes: int | None = None
+    encrypted: bool
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    detail: str
+    created_at: datetime
+
+
 class AutomationGuardrailOut(BaseModel):
     check: str
     status: str
@@ -1961,6 +2010,46 @@ class StorageEncryptionPostureOut(BaseModel):
     detail: str
 
 
+class SbomNormalizationQualityOut(BaseModel):
+    gap_type: str
+    sbom_id: UUID
+    component_id: UUID
+    purl: str
+    ecosystem: str | None = None
+    component_name: str
+    component_version: str | None = None
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    detail: str
+    generated_at: datetime
+
+
+class VulnerabilityReevaluationCoverageOut(BaseModel):
+    gap_type: str
+    finding_id: UUID
+    status: models.FindingStatus
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    component_version: str | None = None
+    vulnerability_id: UUID
+    vulnerability_external_id: str
+    vulnerability_modified_at: datetime | None = None
+    latest_scan_id: UUID | None = None
+    latest_scan_created_at: datetime | None = None
+    last_seen_scan_id: UUID | None = None
+    last_seen_scan_created_at: datetime | None = None
+    detail: str
+    updated_at: datetime
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2023,3 +2112,8 @@ class DashboardSummary(BaseModel):
     false_positive_review_items: int
     worker_hardening_items: int
     storage_encryption_items: int
+    input_coverage_gap_items: int
+    container_input_gap_items: int
+    sbom_normalization_gap_items: int
+    raw_artifact_gap_items: int
+    vulnerability_reevaluation_gap_items: int
