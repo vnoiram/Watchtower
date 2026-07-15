@@ -65,6 +65,8 @@ class ApplicationOut(ApplicationCreate):
 
     id: UUID
     support_status: str
+    latest_scan_at: datetime | None = None
+    latest_scan_status: models.ScanStatus | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -163,4 +165,3 @@ class DashboardSummary(BaseModel):
     stale_scans: int
     failed_jobs: int
     expired_vex: int
-
