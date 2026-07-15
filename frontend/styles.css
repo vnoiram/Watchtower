@@ -123,6 +123,7 @@ button:hover {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 16px;
+  margin-bottom: 20px;
 }
 
 table {
@@ -144,4 +145,3 @@ th {
   color: var(--muted);
   font-weight: 600;
 }
-

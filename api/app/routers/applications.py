@@ -40,5 +40,23 @@ def list_applications(
         last = rows[limit - 1]
         next_cursor = encode_cursor(last.created_at, last.id)
         rows = rows[:limit]
-    return schemas.CursorPage(items=[schemas.ApplicationOut.model_validate(row).model_dump(mode="json") for row in rows], next_cursor=next_cursor)
+    latest_scans = {}
+    if rows:
+        app_ids = [row.id for row in rows]
+        scan_rows = db.execute(
+            select(models.Scan)
+            .where(models.Scan.application_id.in_(app_ids))
+            .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+        ).scalars()
+        for scan in scan_rows:
+            latest_scans.setdefault(scan.application_id, scan)
 
+    items = []
+    for row in rows:
+        payload = schemas.ApplicationOut.model_validate(row).model_dump()
+        latest_scan = latest_scans.get(row.id)
+        payload["latest_scan_at"] = latest_scan.created_at if latest_scan else None
+        payload["latest_scan_status"] = latest_scan.status if latest_scan else None
+        items.append(schemas.ApplicationOut.model_validate(payload).model_dump(mode="json"))
+
+    return schemas.CursorPage(items=items, next_cursor=next_cursor)
