@@ -360,6 +360,38 @@ def list_pr_ci_failures(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/issue-slo", response_model=schemas.CursorPage)
+def list_issue_creation_slo(
+    limit: int = 50,
+    breached: bool | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = issue_creation_slo_items(db)
+    if breached is not None:
+        items = [item for item in items if item["breached"] is breached]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/auto-resolution", response_model=schemas.CursorPage)
+def list_auto_resolution_evidence(
+    limit: int = 50,
+    complete: bool | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = auto_resolution_evidence_items(db)
+    if complete is not None:
+        items = [item for item in items if item["complete"] is complete]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/resolution-verification", response_model=schemas.CursorPage)
 def list_resolution_verification(
     limit: int = 50,
@@ -422,6 +454,14 @@ def fixable_gap_count(db: Session) -> int:
 
 def pr_ci_failure_count(db: Session) -> int:
     return len(pr_ci_failure_items(db))
+
+
+def issue_slo_breach_count(db: Session) -> int:
+    return sum(1 for item in issue_creation_slo_items(db) if item["breached"])
+
+
+def auto_resolution_gap_count(db: Session) -> int:
+    return sum(1 for item in auto_resolution_evidence_items(db) if not item["complete"])
 
 
 def dependency_update_items(db: Session) -> list[dict]:
@@ -651,6 +691,103 @@ def pr_ci_failure_items(db: Session) -> list[dict]:
                 ci_passed=_metadata_bool_or_none(metadata.get("ci_passed")),
                 detail=detail,
                 updated_at=action.updated_at,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
+def issue_creation_slo_items(db: Session) -> list[dict]:
+    notification_evidence = _sent_notification_evidence_by_finding(db)
+    action_evidence = _first_issue_or_pr_action_by_finding(db)
+    stmt = (
+        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(
+            models.Finding.severity.in_([models.Severity.critical, models.Severity.high]),
+            models.Finding.status == models.FindingStatus.open,
+        )
+        .order_by(models.Finding.created_at.asc(), models.Finding.id.asc())
+    )
+    items = []
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        deadline = finding.created_at + timedelta(hours=1 if finding.severity == models.Severity.critical else 24)
+        notification = notification_evidence.get(finding.id)
+        action = action_evidence.get(finding.id)
+        evidence_candidates = []
+        if notification and notification.sent_at:
+            evidence_candidates.append(("notification", notification.sent_at, None))
+        if action:
+            evidence_candidates.append(("issue_or_pr", action.created_at, action))
+        evidence = min(evidence_candidates, key=lambda item: item[1]) if evidence_candidates else None
+        evidence_type = evidence[0] if evidence else None
+        evidence_at = evidence[1] if evidence else None
+        evidence_action = evidence[2] if evidence else None
+        breached = evidence_at is None or _after(evidence_at, deadline)
+        items.append(
+            schemas.IssueCreationSloOut(
+                finding_id=finding.id,
+                severity=finding.severity,
+                finding_status=finding.status,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                component_name=component.name,
+                vulnerability_external_id=vulnerability.external_id,
+                created_at=finding.created_at,
+                deadline_at=deadline,
+                first_evidence_at=evidence_at,
+                evidence_type=evidence_type,
+                action_id=evidence_action.id if evidence_action else None,
+                breached=breached,
+                detail="Issue creation SLO is satisfied" if not breached else "Notification, Issue, or PR evidence is missing or late",
+            ).model_dump(mode="json")
+        )
+    return items
+
+
+def auto_resolution_evidence_items(db: Session) -> list[dict]:
+    actions_by_finding = _actions_by_finding(db)
+    stmt = (
+        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(models.Finding.status == models.FindingStatus.resolved)
+        .order_by(models.Finding.resolved_at.desc().nullslast(), models.Finding.updated_at.desc())
+    )
+    items = []
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        actions = actions_by_finding.get(finding.id, [])
+        successful_action = next((action for action in actions if _successful_action(action)), None)
+        validation_scan = next((_scan_from_metadata(db, action.metadata_json or {}) for action in actions if _scan_from_metadata(db, action.metadata_json or {})), None)
+        issue_action = next((action for action in actions if action.action_type == ACTION_TYPE_GITHUB_ISSUE), None)
+        close_state = _close_state(issue_action)
+        complete = successful_action is not None and validation_scan is not None and close_state == "closed"
+        items.append(
+            schemas.AutoResolutionEvidenceOut(
+                finding_id=finding.id,
+                severity=finding.severity,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                component_name=component.name,
+                vulnerability_external_id=vulnerability.external_id,
+                resolved_at=finding.resolved_at,
+                successful_action_id=successful_action.id if successful_action else None,
+                validation_scan_id=validation_scan.id if validation_scan else None,
+                validation_scan_status=validation_scan.status if validation_scan else None,
+                issue_action_id=issue_action.id if issue_action else None,
+                close_state=close_state,
+                complete=complete,
+                detail="Auto-resolution evidence is complete" if complete else "Resolved finding is missing action, validation, or closure evidence",
             ).model_dump(mode="json")
         )
     return items
@@ -953,6 +1090,43 @@ def _issue_actions_by_finding(db: Session) -> dict[UUID, models.RemediationActio
     return actions
 
 
+def _actions_by_finding(db: Session) -> dict[UUID, list[models.RemediationAction]]:
+    actions: dict[UUID, list[models.RemediationAction]] = {}
+    stmt = select(models.RemediationAction).order_by(
+        models.RemediationAction.created_at.asc(),
+        models.RemediationAction.id.asc(),
+    )
+    for action in db.scalars(stmt):
+        actions.setdefault(action.finding_id, []).append(action)
+    return actions
+
+
+def _sent_notification_evidence_by_finding(db: Session) -> dict[UUID, models.Notification]:
+    notifications = {}
+    stmt = (
+        select(models.Notification)
+        .where(models.Notification.status == "sent")
+        .order_by(models.Notification.sent_at.asc().nullslast(), models.Notification.created_at.asc())
+    )
+    for notification in db.scalars(stmt):
+        finding_id = _optional_uuid((notification.metadata_json or {}).get("finding_id"))
+        if finding_id is not None:
+            notifications.setdefault(finding_id, notification)
+    return notifications
+
+
+def _first_issue_or_pr_action_by_finding(db: Session) -> dict[UUID, models.RemediationAction]:
+    actions = {}
+    stmt = select(models.RemediationAction).order_by(
+        models.RemediationAction.created_at.asc(),
+        models.RemediationAction.id.asc(),
+    )
+    for action in db.scalars(stmt):
+        if action.action_type == ACTION_TYPE_GITHUB_ISSUE or _has_pr_signal(action):
+            actions.setdefault(action.finding_id, action)
+    return actions
+
+
 def _close_state(action: models.RemediationAction | None) -> str:
     if action is None:
         return "not_requested"
@@ -1050,6 +1224,11 @@ def _ci_failure_detail(action: models.RemediationAction) -> str | None:
     return None
 
 
+def _successful_action(action: models.RemediationAction) -> bool:
+    metadata = action.metadata_json or {}
+    return action.status in {"succeeded", "merged", "closed"} or metadata.get("validation_status") == "succeeded"
+
+
 def _pr_url(action: models.RemediationAction) -> str | None:
     metadata = action.metadata_json or {}
     return metadata.get("pull_request_url") or metadata.get("github_issue_url") or metadata.get("html_url") or action.url
@@ -1083,6 +1262,14 @@ def _before(value: datetime, reference: datetime) -> bool:
     elif reference.tzinfo is None:
         value = value.replace(tzinfo=None)
     return value < reference
+
+
+def _after(value: datetime, reference: datetime) -> bool:
+    if value.tzinfo is None and reference.tzinfo is not None:
+        reference = reference.replace(tzinfo=None)
+    elif value.tzinfo is not None and reference.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return value > reference
 
 
 def _scan_from_metadata(db: Session, metadata: dict) -> models.Scan | None:

@@ -78,6 +78,7 @@ from api.app.routers.kpis import (
     kpi_summary,
     list_efficiency_timeline,
     list_kpi_evidence,
+    mvp_target_compliance,
     operational_load_kpis,
     quality_kpis,
 )
@@ -109,7 +110,9 @@ from api.app.routers.operations import (
 )
 from api.app.routers.quality import list_duplicate_review, list_reopen_risk
 from api.app.routers.remediation import (
+    list_auto_resolution_evidence,
     list_fixable_gaps,
+    list_issue_creation_slo,
     list_remediation_backlog,
     list_remediation_coverage,
     list_dependency_updates,
@@ -131,6 +134,7 @@ from api.app.routers.rollout import (
     list_application_readiness,
     list_initial_inventory,
     list_mvp_target_readiness,
+    list_repository_inventory_gaps,
     list_repository_rollout,
     list_rollout_gaps,
     list_repository_drift,
@@ -138,7 +142,7 @@ from api.app.routers.rollout import (
     rollout_baseline,
 )
 from api.app.routers.scan_health import list_scan_health
-from api.app.routers.scans import list_scan_evidence_quality
+from api.app.routers.scans import list_daily_scan_slo, list_scan_evidence_quality
 from api.app.routers.scanner_inventory import list_scanner_inventory
 from api.app.routers.scanners import list_scanner_failures
 from api.app.routers.scanner_versions import list_scanner_versions
@@ -4397,3 +4401,152 @@ def test_list_isolated_scan_health_reports_scan_sbom_and_artifact_gaps() -> None
         assert failed_filter.items[0]["application_id"] == str(failed_app.id)
         assert any(item["application_id"] == str(missing_app.id) for item in page.items)
         assert summary.isolated_scan_health_items >= 5
+
+
+def test_mvp_target_compliance_reports_target_breaches() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "mvp-target-compliance")
+        app = create_application(db, repo)
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.failed,
+            trigger_type=TriggerType.schedule,
+            created_at=now_utc() - timedelta(hours=2),
+        )
+        db.add(scan)
+        db.flush()
+
+        rows = mvp_target_compliance(db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        by_target = {row.target: row for row in rows}
+
+        assert by_target["repository_registration"].breached is True
+        assert by_target["daily_scan_success_percent"].breached is True
+        assert summary.mvp_target_breaches >= 1
+
+
+def test_list_repository_inventory_gaps_reports_missing_inventory_fields_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "inventory-gaps")
+        repo.visibility = None
+        repo.default_branch = None
+        repo.primary_language = None
+        db.flush()
+
+        page = list_repository_inventory_gaps(db=db, _=None)
+        filtered = list_repository_inventory_gaps(gap_type="missing_visibility", provider=RepositoryProvider.github, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gap_types = {item["gap_type"] for item in page.items}
+
+        assert {"repository_registration", "missing_visibility", "missing_default_branch", "missing_primary_language"} <= gap_types
+        assert filtered.items[0]["repository_name"] == repo.name
+        assert summary.repository_inventory_gap_items >= 4
+
+
+def test_list_daily_scan_slo_reports_breaches_manual_only_and_status_filter() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "daily-slo")
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.failed,
+                    trigger_type=TriggerType.schedule,
+                    created_at=now_utc() - timedelta(hours=2),
+                ),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    trigger_type=TriggerType.manual,
+                    created_at=now_utc(),
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_daily_scan_slo(breached=True, db=db, _=None)
+        filtered = list_daily_scan_slo(status=ScanStatus.failed, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert page.items[0]["application_name"] == app.name
+        assert page.items[0]["manual_only"] is True
+        assert filtered.items[0]["latest_scheduled_scan_status"] == ScanStatus.failed.value
+        assert summary.daily_scan_slo_breaches >= 1
+
+
+def test_list_issue_creation_slo_reports_notification_or_issue_evidence() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "issue-slo")
+        app = create_application(db, repo)
+        breached = create_finding(db, app, severity=Severity.critical, risk_score=9.9)
+        breached.created_at = now_utc() - timedelta(hours=2)
+        on_time = create_finding(db, app, severity=Severity.high, risk_score=8.8)
+        db.get(Component, on_time.component_id).purl = "pkg:pypi/high-issue-slo@1.0.0"
+        db.get(Vulnerability, on_time.vulnerability_id).external_id = "high-issue-slo"
+        on_time.created_at = now_utc() - timedelta(hours=3)
+        db.add(
+            RemediationAction(
+                finding_id=on_time.id,
+                action_type="github_issue",
+                provider="github",
+                status="created",
+                created_at=now_utc() - timedelta(hours=1),
+            )
+        )
+        db.flush()
+
+        page = list_issue_creation_slo(db=db, _=None)
+        filtered = list_issue_creation_slo(breached=True, severity=Severity.critical, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        by_finding = {item["finding_id"]: item for item in page.items}
+
+        assert by_finding[str(breached.id)]["breached"] is True
+        assert by_finding[str(on_time.id)]["breached"] is False
+        assert filtered.items[0]["finding_id"] == str(breached.id)
+        assert summary.issue_slo_breaches >= 1
+
+
+def test_list_auto_resolution_evidence_reports_complete_and_gap_records() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "auto-resolution")
+        app = create_application(db, repo)
+        complete = create_finding(db, app, severity=Severity.critical, status=FindingStatus.resolved)
+        complete.resolved_at = now_utc()
+        gap = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
+        db.get(Component, gap.component_id).purl = "pkg:pypi/high-auto-resolution@1.0.0"
+        db.get(Vulnerability, gap.vulnerability_id).external_id = "high-auto-resolution"
+        gap.resolved_at = now_utc()
+        validation_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            trigger_type=TriggerType.remediation_validation,
+            created_at=now_utc().replace(tzinfo=None),
+        )
+        db.add(validation_scan)
+        db.flush()
+        db.add(
+            RemediationAction(
+                finding_id=complete.id,
+                action_type="github_issue",
+                provider="github",
+                status="closed",
+                metadata_json={"validation_scan_id": str(validation_scan.id), "validation_status": "succeeded"},
+            )
+        )
+        db.flush()
+
+        page = list_auto_resolution_evidence(db=db, _=None)
+        filtered = list_auto_resolution_evidence(complete=False, severity=Severity.high, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        by_finding = {item["finding_id"]: item for item in page.items}
+
+        assert by_finding[str(complete.id)]["complete"] is True
+        assert by_finding[str(gap.id)]["complete"] is False
+        assert filtered.items[0]["finding_id"] == str(gap.id)
+        assert summary.auto_resolution_gap_items >= 1

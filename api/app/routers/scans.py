@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -62,6 +64,78 @@ def list_scan_evidence_quality(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/daily-slo", response_model=schemas.CursorPage)
+def list_daily_scan_slo(
+    limit: int = 50,
+    breached: bool | None = None,
+    status: models.ScanStatus | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = daily_scan_slo_items(db)
+    if breached is not None:
+        items = [item for item in items if item["breached"] is breached]
+    if status:
+        items = [item for item in items if item["latest_scheduled_scan_status"] == status.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def daily_scan_slo_breach_count(db: Session) -> int:
+    return sum(1 for item in daily_scan_slo_items(db) if item["breached"])
+
+
+def daily_scan_slo_items(db: Session) -> list[dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    rows = list(
+        db.execute(
+            select(models.Application, models.Repository)
+            .join(models.Repository, models.Application.repository_id == models.Repository.id)
+            .where(models.Application.lifecycle != models.Lifecycle.archived)
+            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        )
+    )
+    application_ids = [application.id for application, _ in rows]
+    latest_scans = _latest_scans_by_application(db, application_ids)
+    latest_scheduled_scans = _latest_scheduled_scans_by_application(db, application_ids)
+    items = []
+    for application, repository in rows:
+        latest_scan = latest_scans.get(application.id)
+        scheduled_scan = latest_scheduled_scans.get(application.id)
+        manual_only = latest_scan is not None and latest_scan.trigger_type == models.TriggerType.manual
+        breached = (
+            scheduled_scan is None
+            or scheduled_scan.status != models.ScanStatus.succeeded
+            or scheduled_scan.created_at < _matching_datetime(cutoff, scheduled_scan.created_at)
+        )
+        if scheduled_scan is None:
+            detail = "Application has no scheduled scan record"
+        elif scheduled_scan.status != models.ScanStatus.succeeded:
+            detail = "Latest scheduled scan did not succeed"
+        elif breached:
+            detail = "Latest successful scheduled scan is older than 24 hours"
+        else:
+            detail = "Daily scheduled scan SLO is satisfied"
+        items.append(
+            schemas.DailyScanSloOut(
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                latest_scheduled_scan_id=scheduled_scan.id if scheduled_scan else None,
+                latest_scheduled_scan_status=scheduled_scan.status if scheduled_scan else None,
+                latest_scheduled_scan_created_at=scheduled_scan.created_at if scheduled_scan else None,
+                latest_scan_id=latest_scan.id if latest_scan else None,
+                latest_scan_status=latest_scan.status if latest_scan else None,
+                latest_scan_trigger_type=latest_scan.trigger_type if latest_scan else None,
+                manual_only=manual_only,
+                breached=breached,
+                detail=detail,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
 def scan_evidence_quality_items(db: Session) -> list[dict]:
     sbom_scan_ids = set(db.scalars(select(models.Sbom.scan_id)))
     finding_scan_ids = {
@@ -99,6 +173,43 @@ def scan_evidence_quality_items(db: Session) -> list[dict]:
         if scan.status == models.ScanStatus.succeeded and scan.id not in sbom_scan_ids and scan.id not in finding_scan_ids:
             items.append(_scan_quality_item("empty_successful_scan", scan, application, repository, "Succeeded scan produced no SBOM or finding evidence"))
     return items
+
+
+def _latest_scans_by_application(db: Session, application_ids: list) -> dict:
+    if not application_ids:
+        return {}
+    scans = db.execute(
+        select(models.Scan)
+        .where(models.Scan.application_id.in_(application_ids))
+        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+    ).scalars()
+    by_application = {}
+    for scan in scans:
+        by_application.setdefault(scan.application_id, scan)
+    return by_application
+
+
+def _latest_scheduled_scans_by_application(db: Session, application_ids: list) -> dict:
+    if not application_ids:
+        return {}
+    scans = db.execute(
+        select(models.Scan)
+        .where(
+            models.Scan.application_id.in_(application_ids),
+            models.Scan.trigger_type == models.TriggerType.schedule,
+        )
+        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+    ).scalars()
+    by_application = {}
+    for scan in scans:
+        by_application.setdefault(scan.application_id, scan)
+    return by_application
+
+
+def _matching_datetime(reference: datetime, value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return reference.replace(tzinfo=None)
+    return reference
 
 
 def _scan_quality_item(

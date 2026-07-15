@@ -242,6 +242,14 @@ def operational_load_kpis(
     ]
 
 
+@router.get("/targets", response_model=list[schemas.MvpTargetComplianceOut])
+def mvp_target_compliance(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return mvp_target_compliance_items(db)
+
+
 @router.get("/evidence", response_model=schemas.CursorPage)
 def list_kpi_evidence(
     limit: int = 50,
@@ -293,6 +301,76 @@ def notification_failure_count(db: Session) -> int:
         )
         or 0
     )
+
+
+def mvp_target_breach_count(db: Session) -> int:
+    return sum(1 for item in mvp_target_compliance_items(db) if item.breached)
+
+
+def mvp_target_compliance_items(db: Session) -> list[schemas.MvpTargetComplianceOut]:
+    applications = [
+        application
+        for application in db.scalars(select(models.Application))
+        if application.lifecycle != models.Lifecycle.archived
+    ]
+    application_ids = [application.id for application in applications]
+    scans = list(db.scalars(select(models.Scan)))
+    findings = list(db.scalars(select(models.Finding)))
+    actions = list(db.scalars(select(models.RemediationAction)))
+    active_sbom_app_ids = set(
+        db.scalars(
+            select(models.Sbom.application_id).where(
+                models.Sbom.active.is_(True),
+                models.Sbom.sbom_kind == "source",
+            )
+        )
+    )
+    daily_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    latest_scheduled = _latest_scan_by_application(
+        [
+            scan
+            for scan in scans
+            if scan.trigger_type == models.TriggerType.schedule and scan.application_id in application_ids
+        ]
+    )
+    successful_daily = sum(
+        1
+        for application_id, scan in latest_scheduled.items()
+        if scan.status == models.ScanStatus.succeeded and _after_cutoff(scan.created_at, daily_cutoff)
+    )
+    fixable_findings = [
+        finding
+        for finding in findings
+        if finding.status == models.FindingStatus.open
+        and finding.severity in {models.Severity.critical, models.Severity.high}
+        and finding.fixed_version
+    ]
+    action_finding_ids = {
+        action.finding_id
+        for action in actions
+        if action.action_type in {"github_issue", "ai_fix"} or _has_pr_signal(action)
+    }
+    remediation_actions = [action for action in actions if action.action_type in {"github_issue", "ai_fix"} or _has_pr_signal(action)]
+    rescanned_actions = [
+        action
+        for action in remediation_actions
+        if (action.metadata_json or {}).get("validation_scan_id") or (action.metadata_json or {}).get("validation_status") == "succeeded"
+    ]
+    exception_like = [
+        finding
+        for finding in findings
+        if finding.status in {models.FindingStatus.accepted_risk, models.FindingStatus.false_positive}
+    ]
+    vex_finding_ids = set(db.scalars(select(models.VexStatement.finding_id)))
+    timeless_exceptions = sum(1 for finding in exception_like if finding.id not in vex_finding_ids)
+    return [
+        _target("repository_registration", _repository_count(db), 54, "count", at_least=True, detail="Registered repository count"),
+        _target("sbom_coverage_percent", _percent(len(active_sbom_app_ids & set(application_ids)), len(applications)), 90, "percent", at_least=True, detail="Active applications with active source SBOM"),
+        _target("daily_scan_success_percent", _percent(successful_daily, len(applications)), 95, "percent", at_least=True, detail="Active applications with successful scheduled scan in the last 24 hours"),
+        _target("auto_pr_creation_percent", _percent(len([finding for finding in fixable_findings if finding.id in action_finding_ids]), len(fixable_findings)), 70, "percent", at_least=True, detail="Fixable critical/high findings with Issue or PR evidence"),
+        _target("post_remediation_rescan_percent", _percent(len(rescanned_actions), len(remediation_actions)), 100, "percent", at_least=True, detail="Issue or PR remediation actions with validation rescan evidence"),
+        _target("timeless_exception_count", timeless_exceptions, 0, "count", at_least=False, detail="Exception-like findings without VEX review evidence"),
+    ]
 
 
 def kpi_evidence_items(db: Session) -> list[dict]:
@@ -386,6 +464,31 @@ def efficiency_timeline_items(db: Session) -> list[dict]:
 
 def _metric(metric: str, value: float, unit: str, detail: str) -> schemas.KpiMetricOut:
     return schemas.KpiMetricOut(metric=metric, value=value, unit=unit, detail=detail)
+
+
+def _target(
+    target: str,
+    current_value: float,
+    target_value: float,
+    unit: str,
+    *,
+    at_least: bool,
+    detail: str,
+) -> schemas.MvpTargetComplianceOut:
+    breached = current_value < target_value if at_least else current_value > target_value
+    return schemas.MvpTargetComplianceOut(
+        target=target,
+        status="breached" if breached else "ok",
+        current_value=current_value,
+        target_value=target_value,
+        unit=unit,
+        breached=breached,
+        detail=detail,
+    )
+
+
+def _repository_count(db: Session) -> int:
+    return db.scalar(select(func.count()).select_from(models.Repository)) or 0
 
 
 def _kpi_evidence(
