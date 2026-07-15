@@ -16,8 +16,8 @@ from api.app.routers.kpis import notification_failure_count, scan_failure_rate_p
 from api.app.routers.notifications import notification_slo_breach_count
 from api.app.routers.operations import failure_signal_count, manual_action_count, manual_workload_count
 from api.app.routers.quality import reopen_risk_count
-from api.app.routers.remediation import stale_remediation_count
-from api.app.routers.rollout import rollout_gap_count
+from api.app.routers.remediation import remediation_coverage_count, stale_remediation_count
+from api.app.routers.rollout import application_readiness_count, rollout_gap_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import rbac_review_count
 from api.app.routers.sla import count_sla_breached_findings
@@ -78,6 +78,8 @@ def dashboard_summary(
     failure_signal_items = failure_signal_count(db)
     isolated_safeguard_items = isolated_safeguard_count(db)
     quarterly_review_items = quarterly_review_count(db)
+    application_readiness_items = application_readiness_count(db)
+    remediation_coverage_items = remediation_coverage_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -107,4 +109,6 @@ def dashboard_summary(
         failure_signal_items=failure_signal_items,
         isolated_safeguard_items=isolated_safeguard_items,
         quarterly_review_items=quarterly_review_items,
+        application_readiness_items=application_readiness_items,
+        remediation_coverage_items=remediation_coverage_items,
     )

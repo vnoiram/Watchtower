@@ -84,8 +84,82 @@ def list_rollout_gaps(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/baseline", response_model=list[schemas.RolloutBaselineOut])
+def rollout_baseline(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return rollout_baseline_items(db)
+
+
+@router.get("/application-readiness", response_model=schemas.CursorPage)
+def list_application_readiness(
+    limit: int = 50,
+    issue_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = application_readiness_items(db)
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def rollout_gap_count(db: Session) -> int:
     return len(rollout_gap_items(db))
+
+
+def application_readiness_count(db: Session) -> int:
+    return len(application_readiness_items(db))
+
+
+def rollout_baseline_items(db: Session) -> list[schemas.RolloutBaselineOut]:
+    repositories = list(db.scalars(select(models.Repository)))
+    total = len(repositories)
+    visibility_known = sum(1 for repo in repositories if repo.visibility)
+    classification_known = sum(1 for repo in repositories if repo.source_classification)
+    archived = sum(1 for repo in repositories if repo.archived)
+    forks = sum(1 for repo in repositories if repo.fork)
+    active = total - archived
+    return [
+        _baseline("repository_inventory", total >= 54, total, 54, _percent(total, 54), "Registered repositories"),
+        _baseline("visibility_known", visibility_known == total, total - visibility_known, 0, _percent(visibility_known, total), "Repositories without visibility"),
+        _baseline("classification_known", classification_known == total, total - classification_known, 0, _percent(classification_known, total), "Repositories without source classification"),
+        _baseline("archived_repositories", True, archived, None, _percent(archived, total), "Archived repositories in inventory"),
+        _baseline("fork_repositories", True, forks, None, _percent(forks, total), "Fork repositories in inventory"),
+        _baseline("active_repositories", True, active, None, _percent(active, total), "Non-archived repositories in inventory"),
+    ]
+
+
+def application_readiness_items(db: Session) -> list[dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    rows = list(
+        db.execute(
+            select(models.Application, models.Repository)
+            .join(models.Repository, models.Application.repository_id == models.Repository.id)
+            .where(models.Application.lifecycle != models.Lifecycle.archived)
+            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        )
+    )
+    application_ids = [application.id for application, _ in rows]
+    active_sbom_app_ids = _active_sbom_application_ids(db, application_ids)
+    scans = []
+    for application, repository in rows:
+        scans.extend(_repository_scans(db, repository.id))
+    latest_scan_by_app = _latest_scan_by_application(scans)
+    items = []
+    for application, repository in rows:
+        latest_scan = latest_scan_by_app.get(application.id)
+        has_sbom = application.id in active_sbom_app_ids
+        if not application.owner:
+            items.append(_readiness_item("missing_owner", application, repository, latest_scan, has_sbom, "Active application has no owner"))
+        if (application.criticality or "").lower() not in {"low", "medium", "high", "critical"}:
+            items.append(_readiness_item("unknown_criticality", application, repository, latest_scan, has_sbom, "Application criticality is not classified"))
+        if not has_sbom:
+            items.append(_readiness_item("missing_active_source_sbom", application, repository, latest_scan, has_sbom, "Application has no active source SBOM"))
+        if latest_scan is None or latest_scan.created_at < _matching_datetime(cutoff, latest_scan.created_at):
+            items.append(_readiness_item("stale_scan", application, repository, latest_scan, has_sbom, "Application has no scan in the last 30 days"))
+    return items
 
 
 def rollout_gap_items(db: Session) -> list[dict]:
@@ -200,6 +274,24 @@ def _percent(numerator: int, denominator: int) -> float:
     return round((numerator / denominator) * 100, 1) if denominator else 0.0
 
 
+def _baseline(
+    check: str,
+    ok: bool,
+    count: int,
+    target: int | None,
+    percent: float | None,
+    detail: str,
+) -> schemas.RolloutBaselineOut:
+    return schemas.RolloutBaselineOut(
+        check=check,
+        status="ok" if ok else "warn",
+        count=count,
+        target=target,
+        percent=percent,
+        detail=detail,
+    )
+
+
 def _matching_datetime(reference: datetime, value: datetime) -> datetime:
     if value.tzinfo is None:
         return reference.replace(tzinfo=None)
@@ -225,5 +317,32 @@ def _rollout_gap(
         latest_scan_status=latest_scan.status if latest_scan else None,
         latest_scan_created_at=latest_scan.created_at if latest_scan else None,
         count=count,
+        detail=detail,
+    ).model_dump(mode="json")
+
+
+def _readiness_item(
+    issue_type: str,
+    application: models.Application,
+    repository: models.Repository,
+    latest_scan: models.Scan | None,
+    has_active_source_sbom: bool,
+    detail: str,
+) -> dict:
+    return schemas.ApplicationReadinessOut(
+        issue_type=issue_type,
+        application_id=application.id,
+        application_name=application.name,
+        application_path=application.path,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        owner=application.owner,
+        criticality=application.criticality,
+        lifecycle=application.lifecycle,
+        latest_scan_id=latest_scan.id if latest_scan else None,
+        latest_scan_status=latest_scan.status if latest_scan else None,
+        latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+        has_active_source_sbom=has_active_source_sbom,
         detail=detail,
     ).model_dump(mode="json")

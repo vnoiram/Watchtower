@@ -309,8 +309,41 @@ def list_remediation_rescans(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/coverage", response_model=schemas.CursorPage)
+def list_remediation_coverage(
+    limit: int = 50,
+    missing_action: bool | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = remediation_coverage_items(db)
+    if missing_action is not None:
+        items = [item for item in items if item["has_issue_or_pr"] is not missing_action]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/resolution-verification", response_model=schemas.CursorPage)
+def list_resolution_verification(
+    limit: int = 50,
+    issue_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = resolution_verification_items(db)
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def stale_remediation_count(db: Session) -> int:
     return len(remediation_backlog_items(db))
+
+
+def remediation_coverage_count(db: Session) -> int:
+    return sum(1 for item in remediation_coverage_items(db) if not item["has_issue_or_pr"])
 
 
 def dependency_update_items(db: Session) -> list[dict]:
@@ -419,6 +452,97 @@ def remediation_rescan_items(db: Session) -> list[dict]:
     return items
 
 
+def remediation_coverage_items(db: Session) -> list[dict]:
+    rows = list(_fixed_critical_high_findings(db))
+    action_by_finding = _latest_issue_or_pr_action_by_finding(db)
+    covered = sum(1 for finding, *_ in rows if finding.id in action_by_finding)
+    coverage_percent = _percent(covered, len(rows))
+    items = []
+    for finding, application, repository, component, vulnerability in rows:
+        action = action_by_finding.get(finding.id)
+        items.append(
+            schemas.RemediationCoverageOut(
+                finding_id=finding.id,
+                severity=finding.severity,
+                risk_score=finding.risk_score,
+                fixed_version=finding.fixed_version or "",
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                component_name=component.name,
+                vulnerability_external_id=vulnerability.external_id,
+                has_issue_or_pr=action is not None,
+                action_id=action.id if action else None,
+                action_type=action.action_type if action else None,
+                action_status=action.status if action else None,
+                provider=action.provider if action else None,
+                url=_pr_url(action) if action else None,
+                coverage_percent=coverage_percent,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
+def resolution_verification_items(db: Session) -> list[dict]:
+    items = []
+    issue_actions = _issue_actions_by_finding(db)
+    for action, finding, application, vulnerability, component in db.execute(_remediation_action_context_stmt()):
+        metadata = action.metadata_json or {}
+        validation_status = str(metadata.get("validation_status") or "pending")
+        validation_scan = _scan_from_metadata(db, metadata)
+        latest_rescan = validation_scan or _latest_scan_after(db, application.id, action.created_at)
+        repository = db.get(models.Repository, application.repository_id)
+        close_state = _close_state(issue_actions.get(finding.id))
+        if latest_rescan is None:
+            items.append(
+                _resolution_verification_item(
+                    "missing_rescan",
+                    "Remediation action has no validation or later rescan",
+                    action,
+                    finding,
+                    application,
+                    repository,
+                    validation_status,
+                    validation_scan,
+                    latest_rescan,
+                    close_state,
+                )
+            )
+        if validation_status in {"failed", "error"} or (validation_scan and validation_scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out}):
+            items.append(
+                _resolution_verification_item(
+                    "failed_validation",
+                    "Validation scan or validation status failed",
+                    action,
+                    finding,
+                    application,
+                    repository,
+                    validation_status,
+                    validation_scan,
+                    latest_rescan,
+                    close_state,
+                )
+            )
+        if finding.status == models.FindingStatus.resolved and close_state != "closed":
+            items.append(
+                _resolution_verification_item(
+                    "missing_issue_close",
+                    "Resolved finding does not have a closed GitHub issue action",
+                    action,
+                    finding,
+                    application,
+                    repository,
+                    validation_status,
+                    validation_scan,
+                    latest_rescan,
+                    close_state,
+                )
+            )
+    return items
+
+
 def _remediation_action_context_stmt():
     return (
         select(
@@ -433,6 +557,40 @@ def _remediation_action_context_stmt():
         .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
     )
+
+
+def _fixed_critical_high_findings(db: Session):
+    return db.execute(
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .where(
+            models.Finding.status == models.FindingStatus.open,
+            models.Finding.severity.in_([models.Severity.critical, models.Severity.high]),
+            models.Finding.fixed_version.is_not(None),
+        )
+        .order_by(models.Finding.risk_score.desc(), models.Finding.created_at.asc())
+    )
+
+
+def _latest_issue_or_pr_action_by_finding(db: Session) -> dict[UUID, models.RemediationAction]:
+    actions = {}
+    stmt = select(models.RemediationAction).order_by(
+        models.RemediationAction.created_at.desc(),
+        models.RemediationAction.id.desc(),
+    )
+    for action in db.scalars(stmt):
+        if action.action_type == ACTION_TYPE_GITHUB_ISSUE or _has_pr_signal(action):
+            actions.setdefault(action.finding_id, action)
+    return actions
 
 
 def _remediation_action_payload(
@@ -462,6 +620,41 @@ def _remediation_action_payload(
         vulnerability_external_id=vulnerability.external_id,
         component_name=component.name,
     ).model_dump()
+
+
+def _resolution_verification_item(
+    issue_type: str,
+    detail: str,
+    action: models.RemediationAction,
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    validation_status: str,
+    validation_scan: models.Scan | None,
+    latest_rescan: models.Scan | None,
+    close_state: str,
+) -> dict:
+    return schemas.ResolutionVerificationOut(
+        issue_type=issue_type,
+        finding_id=finding.id,
+        severity=finding.severity,
+        finding_status=finding.status,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        action_id=action.id,
+        action_type=action.action_type,
+        action_status=action.status,
+        validation_status=validation_status,
+        validation_scan_id=validation_scan.id if validation_scan else None,
+        validation_scan_status=validation_scan.status if validation_scan else None,
+        latest_rescan_id=latest_rescan.id if latest_rescan else None,
+        latest_rescan_status=latest_rescan.status if latest_rescan else None,
+        close_state=close_state,
+        detail=detail,
+    ).model_dump(mode="json")
 
 
 def _issue_actions_by_finding(db: Session) -> dict[UUID, models.RemediationAction]:
@@ -554,6 +747,10 @@ def _metadata_bool_or_none(value: object) -> bool | None:
     if isinstance(value, str):
         return value.lower() in {"1", "true", "yes", "y"}
     return bool(value)
+
+
+def _percent(numerator: int, denominator: int) -> float:
+    return round((numerator / denominator) * 100, 1) if denominator else 0.0
 
 
 def _before(value: datetime, reference: datetime) -> bool:

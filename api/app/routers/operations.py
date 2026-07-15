@@ -329,6 +329,14 @@ def worker_posture(
     return worker_posture_items(db, settings)
 
 
+@router.get("/scan-targets", response_model=list[schemas.ScanTargetOut])
+def scan_targets(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return scan_target_items(db)
+
+
 def failure_signal_count(db: Session) -> int:
     return len(failure_signal_items(db))
 
@@ -395,6 +403,29 @@ def worker_posture_items(db: Session, settings: Settings) -> list[schemas.Worker
         _worker_check("timed_out_jobs", "fail" if timed_out else "ok", len(timed_out), "Jobs with timed_out status"),
         _worker_check("isolated_scan_failures", "warn" if isolated_scan_failures else "ok", len(isolated_scan_failures), "Failed scans for restricted or isolated lane applications"),
         _worker_check("credential_failure_signals", "fail" if credential_signals else "ok", len(credential_signals), "Failure signals mentioning auth or credentials"),
+    ]
+
+
+def scan_target_items(db: Session) -> list[schemas.ScanTargetOut]:
+    scans = list(db.scalars(select(models.Scan)))
+    total = len(scans)
+    succeeded = sum(1 for scan in scans if scan.status == models.ScanStatus.succeeded)
+    failed = sum(1 for scan in scans if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out})
+    partial = sum(1 for scan in scans if scan.status == models.ScanStatus.partially_succeeded)
+    stale = _stale_active_application_count(db)
+    success_rate = _percent(succeeded, total)
+    return [
+        _scan_target(
+            "daily_scan_success_rate",
+            "ok" if success_rate >= 95.0 else "warn",
+            succeeded,
+            95.0,
+            success_rate,
+            f"Succeeded scans among {total} scan records",
+        ),
+        _scan_target("failed_scans", "fail" if failed else "ok", failed, None, None, "Failed or timed out scan records"),
+        _scan_target("partial_scans", "warn" if partial else "ok", partial, None, None, "Partially succeeded scan records"),
+        _scan_target("stale_active_applications", "warn" if stale else "ok", stale, None, None, "Active applications without a scan in the last 30 days"),
     ]
 
 
@@ -583,6 +614,24 @@ def _worker_check(check: str, status: str, count: int, detail: str) -> schemas.W
     return schemas.WorkerPostureOut(check=check, status=status, count=count, detail=detail)
 
 
+def _scan_target(
+    check: str,
+    status: str,
+    count: int,
+    target_percent: float | None,
+    actual_percent: float | None,
+    detail: str,
+) -> schemas.ScanTargetOut:
+    return schemas.ScanTargetOut(
+        check=check,
+        status=status,
+        count=count,
+        target_percent=target_percent,
+        actual_percent=actual_percent,
+        detail=detail,
+    )
+
+
 def _backup_check(check: str, status: str, count: int, detail: str) -> schemas.BackupReadinessOut:
     return schemas.BackupReadinessOut(check=check, status=status, count=count, detail=detail)
 
@@ -603,6 +652,10 @@ def _weekly(item: str, nonzero_status: str, count: int, detail: str) -> schemas.
 def _count(db: Session, stmt) -> int:
     subquery = stmt.subquery()
     return db.scalar(select(func.count()).select_from(subquery)) or 0
+
+
+def _percent(numerator: int, denominator: int) -> float:
+    return round((numerator / denominator) * 100, 1) if denominator else 0.0
 
 
 def _source_sbom_artifact_count(db: Session) -> int:
@@ -644,6 +697,20 @@ def _isolated_scan_failures(db: Session) -> list[models.Scan]:
         )
     )
     return list(scans)
+
+
+def _stale_active_application_count(db: Session) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    count = 0
+    for application in db.scalars(select(models.Application).where(models.Application.lifecycle != models.Lifecycle.archived)):
+        latest = db.scalar(
+            select(models.Scan)
+            .where(models.Scan.application_id == application.id)
+            .order_by(models.Scan.created_at.desc(), models.Scan.id.desc())
+        )
+        if latest is None or _before(latest.created_at, cutoff):
+            count += 1
+    return count
 
 
 def _manual_action_reason(audit_log: models.AuditLog) -> str | None:

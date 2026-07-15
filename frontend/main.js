@@ -74,6 +74,11 @@ const secretsReview = document.querySelector("#secrets-review");
 const workerPosture = document.querySelector("#worker-posture");
 const exploitIntel = document.querySelector("#exploit-intel");
 const quarterlyReview = document.querySelector("#quarterly-review");
+const rolloutBaseline = document.querySelector("#rollout-baseline");
+const applicationReadiness = document.querySelector("#application-readiness");
+const scanTargets = document.querySelector("#scan-targets");
+const remediationCoverage = document.querySelector("#remediation-coverage");
+const resolutionVerification = document.querySelector("#resolution-verification");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -150,6 +155,8 @@ function renderMetrics(summary) {
     ["failure_signal_items", "Failure signals", "danger"],
     ["isolated_safeguard_items", "Isolation safeguards", "warn"],
     ["quarterly_review_items", "Quarterly review", "warn"],
+    ["application_readiness_items", "App readiness", "warn"],
+    ["remediation_coverage_items", "Remediation coverage", "danger"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -1023,6 +1030,64 @@ function renderQuarterlyReview(rows) {
     : `<tr><td colspan="4">No quarterly review items</td></tr>`;
 }
 
+function renderRolloutBaseline(rows) {
+  rolloutBaseline.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.target ?? "-")}</td><td>${escapeHtml(item.percent === null || item.percent === undefined ? "-" : item.percent)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="6">No rollout baseline checks</td></tr>`;
+}
+
+function renderApplicationReadiness(page) {
+  const rows = page.items || [];
+  applicationReadiness.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.latest_scan_status || "missing")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No application readiness issues</td></tr>`;
+}
+
+function renderScanTargets(rows) {
+  scanTargets.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.actual_percent === null || item.actual_percent === undefined ? "-" : item.actual_percent)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scan target checks</td></tr>`;
+}
+
+function renderRemediationCoverage(page) {
+  const rows = page.items || [];
+  remediationCoverage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.has_issue_or_pr ? "covered" : "missing")}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.action_status || "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No remediation coverage items</td></tr>`;
+}
+
+function renderResolutionVerification(page) {
+  const rows = page.items || [];
+  resolutionVerification.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.validation_status)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No resolution verification issues</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1098,6 +1163,11 @@ async function refresh() {
   workerPosture.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   exploitIntel.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   quarterlyReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  rolloutBaseline.innerHTML = `<tr><td colspan="6">Loading</td></tr>`;
+  applicationReadiness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scanTargets.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  remediationCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  resolutionVerification.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -1175,6 +1245,11 @@ async function refresh() {
       workerPosturePage,
       exploitIntelPage,
       quarterlyReviewPage,
+      rolloutBaselinePage,
+      applicationReadinessPage,
+      scanTargetPage,
+      remediationCoveragePage,
+      resolutionVerificationPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -1251,6 +1326,11 @@ async function refresh() {
       loadJson("/operations/worker-posture"),
       loadJson("/security/exploit-intel?limit=10"),
       loadJson("/governance/quarterly-review"),
+      loadJson("/rollout/baseline"),
+      loadJson("/rollout/application-readiness?limit=10"),
+      loadJson("/operations/scan-targets"),
+      loadJson("/remediation/coverage?missing_action=true&limit=10"),
+      loadJson("/remediation/resolution-verification?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -1326,6 +1406,11 @@ async function refresh() {
     renderWorkerPosture(workerPosturePage);
     renderExploitIntel(exploitIntelPage);
     renderQuarterlyReview(quarterlyReviewPage);
+    renderRolloutBaseline(rolloutBaselinePage);
+    renderApplicationReadiness(applicationReadinessPage);
+    renderScanTargets(scanTargetPage);
+    renderRemediationCoverage(remediationCoveragePage);
+    renderResolutionVerification(resolutionVerificationPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1401,6 +1486,11 @@ async function refresh() {
     workerPosture.innerHTML = `<tr><td colspan="4">Unable to load worker posture</td></tr>`;
     exploitIntel.innerHTML = `<tr><td colspan="5">Unable to load exploit intelligence</td></tr>`;
     quarterlyReview.innerHTML = `<tr><td colspan="4">Unable to load quarterly review</td></tr>`;
+    rolloutBaseline.innerHTML = `<tr><td colspan="6">Unable to load rollout baseline</td></tr>`;
+    applicationReadiness.innerHTML = `<tr><td colspan="5">Unable to load application readiness</td></tr>`;
+    scanTargets.innerHTML = `<tr><td colspan="5">Unable to load scan targets</td></tr>`;
+    remediationCoverage.innerHTML = `<tr><td colspan="5">Unable to load remediation coverage</td></tr>`;
+    resolutionVerification.innerHTML = `<tr><td colspan="5">Unable to load resolution verification</td></tr>`;
   }
 }
 
