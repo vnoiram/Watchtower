@@ -35,8 +35,20 @@ def retention_review(
     return retention_review_items(db)
 
 
+@router.get("/pressure", response_model=list[schemas.StoragePressureOut])
+def storage_pressure(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    return storage_pressure_items(db)
+
+
 def retention_review_count(db: Session) -> int:
     return sum(item.count for item in retention_review_items(db))
+
+
+def storage_pressure_count(db: Session) -> int:
+    return sum(item.count for item in storage_pressure_items(db) if item.status != "ok")
 
 
 def retention_review_items(db: Session) -> list[schemas.RetentionReviewOut]:
@@ -52,6 +64,34 @@ def retention_review_items(db: Session) -> list[schemas.RetentionReviewOut]:
         _retention_item("inactive_sboms", inactive_sboms, "Inactive SBOM records eligible for review"),
         _retention_item("old_audit_logs", old_audit_logs, "Audit logs older than 90 days"),
         _retention_item("cleanup_candidates", cleanup_candidates, "Storage cleanup candidates awaiting review"),
+    ]
+
+
+def storage_pressure_items(db: Session) -> list[schemas.StoragePressureOut]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    missing_storage_keys = _count(
+        db,
+        select(models.Sbom).where((models.Sbom.storage_key.is_(None)) | (models.Sbom.storage_key == "")),
+    )
+    inactive_sboms = db.scalar(
+        select(func.count()).select_from(models.Sbom).where(models.Sbom.active.is_(False))
+    ) or 0
+    old_artifacts = _old_scan_artifacts(db, cutoff)
+    failed_without_sbom = _failed_scans_without_sbom(db)
+    artifact_count = 0
+    estimated_bytes = 0
+    for scan in db.scalars(select(models.Scan)):
+        for artifact in _artifacts(scan.result_summary):
+            artifact_count += 1
+            estimated_bytes += _artifact_size(artifact)
+    cleanup = len(list_storage_cleanup_candidates(db=db, _=None).items)
+    return [
+        _pressure("missing_storage_keys", "fail", missing_storage_keys, 0, "SBOM records without storage_key"),
+        _pressure("inactive_sboms", "warn", inactive_sboms, 0, "Inactive SBOM records"),
+        _pressure("old_scan_artifacts", "warn", len(old_artifacts), _cleanup_estimated_bytes(old_artifacts), "Scan artifacts older than 90 days"),
+        _pressure("failed_scan_without_sbom", "warn", len(failed_without_sbom), 0, "Failed scans that did not store SBOM output"),
+        _pressure("artifact_inventory", "ok", artifact_count, estimated_bytes, "Stored artifact records found in scan summaries"),
+        _pressure("cleanup_backlog", "warn", cleanup, _cleanup_estimated_bytes(old_artifacts), "Storage cleanup candidates awaiting review"),
     ]
 
 
@@ -168,6 +208,35 @@ def _artifacts(result_summary: dict[str, Any] | None) -> list[dict[str, Any]]:
     if isinstance(raw, list):
         return [value for value in raw if isinstance(value, dict)]
     return []
+
+
+def _artifact_size(artifact: dict[str, Any]) -> int:
+    for key in ("size_bytes", "bytes", "size"):
+        value = artifact.get(key)
+        if isinstance(value, int | float):
+            return int(value)
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    return 0
+
+
+def _count(db: Session, stmt) -> int:
+    subquery = stmt.subquery()
+    return db.scalar(select(func.count()).select_from(subquery)) or 0
+
+
+def _cleanup_estimated_bytes(items: list[dict]) -> int:
+    return sum(int(item.get("estimated_bytes") or 0) for item in items)
+
+
+def _pressure(check: str, nonzero_status: str, count: int, estimated_bytes: int, detail: str) -> schemas.StoragePressureOut:
+    return schemas.StoragePressureOut(
+        check=check,
+        status=nonzero_status if count else "ok",
+        count=count,
+        estimated_bytes=estimated_bytes,
+        detail=detail,
+    )
 
 
 def _before(value: datetime, cutoff: datetime) -> bool:

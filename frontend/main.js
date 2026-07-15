@@ -104,6 +104,11 @@ const mvpTargets = document.querySelector("#mvp-targets");
 const kpiEvidence = document.querySelector("#kpi-evidence");
 const efficiencyTimeline = document.querySelector("#efficiency-timeline");
 const initialInventory = document.querySelector("#initial-inventory");
+const queuePressure = document.querySelector("#queue-pressure");
+const schedulerDrift = document.querySelector("#scheduler-drift");
+const storagePressure = document.querySelector("#storage-pressure");
+const githubSyncLag = document.querySelector("#github-sync-lag");
+const credentialFailures = document.querySelector("#credential-failures");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -188,6 +193,8 @@ function renderMetrics(summary) {
     ["automation_guardrail_items", "Automation guards", "warn"],
     ["rollback_readiness_items", "Rollback readiness", "warn"],
     ["rollout_wave_gap_items", "Wave gaps", "warn"],
+    ["queue_pressure_items", "Queue pressure", "warn"],
+    ["storage_pressure_items", "Storage pressure", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -1411,6 +1418,64 @@ function renderInitialInventory(page) {
     : `<tr><td colspan="5">No initial inventory records</td></tr>`;
 }
 
+function renderQueuePressure(rows) {
+  queuePressure.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.job_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.oldest_age_hours)}h</td><td>${escapeHtml(item.stale_count + item.overdue_count + item.retry_exhausted_count)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No queue pressure records</td></tr>`;
+}
+
+function renderSchedulerDrift(page) {
+  const rows = page.items || [];
+  schedulerDrift.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.drift_type)}</td><td>${escapeHtml(item.job_type || "-")}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scheduler drift records</td></tr>`;
+}
+
+function renderStoragePressure(rows) {
+  storagePressure.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.estimated_bytes)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No storage pressure records</td></tr>`;
+}
+
+function renderGithubSyncLag(page) {
+  const rows = page.items || [];
+  githubSyncLag.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.lag_type)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.provider)}</td><td>${escapeHtml(formatDateTime(item.last_synced_at))}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No GitHub sync lag records</td></tr>`;
+}
+
+function renderCredentialFailures(page) {
+  const rows = page.items || [];
+  credentialFailures.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.failure_type)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.repository_name || item.application_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No credential failure records</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -1516,6 +1581,11 @@ async function refresh() {
   kpiEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   efficiencyTimeline.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   initialInventory.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  queuePressure.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  schedulerDrift.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  storagePressure.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  githubSyncLag.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  credentialFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -1623,6 +1693,11 @@ async function refresh() {
       kpiEvidencePage,
       efficiencyTimelinePage,
       initialInventoryPage,
+      queuePressurePage,
+      schedulerDriftPage,
+      storagePressurePage,
+      githubSyncLagPage,
+      credentialFailurePage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -1729,6 +1804,11 @@ async function refresh() {
       loadJson("/kpis/evidence?limit=10"),
       loadJson("/kpis/timeline?limit=10"),
       loadJson("/rollout/initial-inventory?limit=10"),
+      loadJson("/operations/queue-pressure"),
+      loadJson("/operations/scheduler-drift?limit=10"),
+      loadJson("/storage/pressure"),
+      loadJson("/repository-sync/lag?limit=10"),
+      loadJson("/operations/credential-failures?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -1834,6 +1914,11 @@ async function refresh() {
     renderKpiEvidence(kpiEvidencePage);
     renderEfficiencyTimeline(efficiencyTimelinePage);
     renderInitialInventory(initialInventoryPage);
+    renderQueuePressure(queuePressurePage);
+    renderSchedulerDrift(schedulerDriftPage);
+    renderStoragePressure(storagePressurePage);
+    renderGithubSyncLag(githubSyncLagPage);
+    renderCredentialFailures(credentialFailurePage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1939,6 +2024,11 @@ async function refresh() {
     kpiEvidence.innerHTML = `<tr><td colspan="5">Unable to load KPI evidence</td></tr>`;
     efficiencyTimeline.innerHTML = `<tr><td colspan="5">Unable to load efficiency timeline</td></tr>`;
     initialInventory.innerHTML = `<tr><td colspan="5">Unable to load initial inventory</td></tr>`;
+    queuePressure.innerHTML = `<tr><td colspan="5">Unable to load queue pressure</td></tr>`;
+    schedulerDrift.innerHTML = `<tr><td colspan="5">Unable to load scheduler drift</td></tr>`;
+    storagePressure.innerHTML = `<tr><td colspan="5">Unable to load storage pressure</td></tr>`;
+    githubSyncLag.innerHTML = `<tr><td colspan="5">Unable to load GitHub sync lag</td></tr>`;
+    credentialFailures.innerHTML = `<tr><td colspan="5">Unable to load credential failures</td></tr>`;
   }
 }
 

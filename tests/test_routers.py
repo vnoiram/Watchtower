@@ -86,12 +86,15 @@ from api.app.routers.operations import (
     backup_readiness,
     control_evidence,
     daily_operations,
+    list_credential_failures,
     list_failure_signals,
     list_manual_actions,
+    list_scheduler_drift,
     monthly_review,
     operational_workload,
     operations_readiness,
     phase_readiness,
+    queue_pressure,
     rollback_readiness,
     restore_readiness,
     scan_targets,
@@ -116,6 +119,7 @@ from api.app.routers.remediation import (
 )
 from api.app.routers.remediation_actions import list_remediation_actions
 from api.app.routers.repository_sync import list_repository_sync
+from api.app.routers.repository_sync import list_repository_sync_lag
 from api.app.routers.rollout import (
     list_application_readiness,
     list_initial_inventory,
@@ -142,7 +146,7 @@ from api.app.routers.security import (
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sboms
 from api.app.routers.sla import list_sla_findings
-from api.app.routers.storage import list_storage_cleanup_candidates, retention_review
+from api.app.routers.storage import list_storage_cleanup_candidates, retention_review, storage_pressure
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_invalidation_candidates, list_vex_statements
 from api.app.routers.vulnerabilities import list_vulnerabilities
@@ -4091,3 +4095,148 @@ def test_list_initial_inventory_reports_completion_and_filters() -> None:
         assert by_app["inventory-complete"]["complete"] is True
         assert by_app["inventory-missing"]["complete"] is False
         assert filtered.items[0]["application_name"] == "inventory-missing"
+
+
+def test_queue_pressure_reports_stale_overdue_and_retry_exhausted() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        db.add_all(
+            [
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.queued,
+                    run_after=now_utc() - timedelta(days=2),
+                    created_at=now_utc() - timedelta(days=2),
+                ),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.running,
+                    started_at=now_utc() - timedelta(days=2),
+                    created_at=now_utc() - timedelta(days=2),
+                ),
+                Job(
+                    job_type=JobType.notification,
+                    status=JobStatus.failed,
+                    attempts=3,
+                    max_attempts=3,
+                    created_at=now_utc() - timedelta(hours=5),
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = queue_pressure(db=db, _=None)
+        scan_queued = next(row for row in rows if row.job_type == JobType.scan and row.status == JobStatus.queued)
+        scan_running = next(row for row in rows if row.job_type == JobType.scan and row.status == JobStatus.running)
+        notification_failed = next(row for row in rows if row.job_type == JobType.notification and row.status == JobStatus.failed)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert scan_queued.overdue_count == 1
+        assert scan_running.stale_count == 1
+        assert notification_failed.retry_exhausted_count == 1
+        assert summary.queue_pressure_items >= 3
+
+
+def test_list_scheduler_drift_reports_missing_jobs_schedules_and_overdue_queue() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "scheduler-drift")
+        app = create_application(db, repo)
+        db.add(
+            Job(
+                job_type=JobType.scan,
+                status=JobStatus.queued,
+                application_id=app.id,
+                run_after=now_utc() - timedelta(days=2),
+                created_at=now_utc() - timedelta(days=2),
+            )
+        )
+        db.flush()
+
+        page = list_scheduler_drift(db=db, _=None)
+        filtered = list_scheduler_drift(drift_type="overdue_queued_job", job_type=JobType.scan, db=db, _=None)
+        drift_types = {item["drift_type"] for item in page.items}
+
+        assert "missing_recent_job" in drift_types
+        assert "missing_scheduled_scan" in drift_types
+        assert "overdue_queued_job" in drift_types
+        assert filtered.items[0]["application_name"] == app.name
+
+
+def test_storage_pressure_reports_missing_inactive_old_and_failed_artifacts() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "storage-pressure")
+        app = create_application(db, repo)
+        old_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=100),
+            result_summary={"artifacts": {"osv": {"storage_key": "old.json", "size_bytes": 123}}},
+        )
+        failed_scan = Scan(application_id=app.id, status=ScanStatus.failed, result_summary={"sbom_stored": False})
+        db.add_all([old_scan, failed_scan])
+        db.flush()
+        db.add_all(
+            [
+                Sbom(application_id=app.id, scan_id=old_scan.id, sbom_digest="missing-key", storage_key="", active=True),
+                Sbom(application_id=app.id, scan_id=old_scan.id, sbom_digest="inactive-pressure", storage_key="inactive.json", active=False),
+            ]
+        )
+        db.flush()
+
+        rows = storage_pressure(db=db, _=None)
+        by_check = {row.check: row for row in rows}
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert by_check["missing_storage_keys"].count == 1
+        assert by_check["inactive_sboms"].count == 1
+        assert by_check["old_scan_artifacts"].count == 1
+        assert by_check["failed_scan_without_sbom"].count == 1
+        assert by_check["artifact_inventory"].estimated_bytes == 123
+        assert summary.storage_pressure_items >= 4
+
+
+def test_list_repository_sync_lag_reports_sync_and_scan_lag_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "sync-lag")
+        repo.provider_repository_id = None
+        repo.last_synced_at = now_utc() - timedelta(days=40)
+        repo.pushed_at = now_utc()
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=1))
+        db.add(scan)
+        db.flush()
+
+        page = list_repository_sync_lag(db=db, _=None)
+        filtered = list_repository_sync_lag(lag_type="missing_provider_repository_id", provider=RepositoryProvider.github, db=db, _=None)
+        lag_types = {item["lag_type"] for item in page.items}
+
+        assert {"stale_sync", "pushed_after_sync", "pushed_after_scan", "missing_provider_repository_id"} <= lag_types
+        assert filtered.items[0]["repository_name"] == repo.name
+
+
+def test_list_credential_failures_reports_sources_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "credential-failures")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
+        db.add_all(
+            [
+                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, last_error="GitHub token 403"),
+                Scan(application_id=app.id, status=ScanStatus.failed, error_message="auth failed"),
+                RemediationAction(finding_id=finding.id, action_type="github_issue", status="failed", metadata_json={"error": "permission denied"}),
+                Notification(channel="slack", severity=Severity.high, subject="failed", body="rate limit 403", status="failed"),
+                AuditLog(actor="worker", role="operator", action="github.sync", resource_type="repository", resource_id=str(repo.id), metadata_json={"error": "credential expired"}),
+            ]
+        )
+        db.flush()
+
+        page = list_credential_failures(db=db, _=None)
+        filtered = list_credential_failures(source="job", failure_type="private_auth_failure", db=db, _=None)
+        sources = {item["source"] for item in page.items}
+
+        assert {"job", "scan", "remediation_action", "notification", "audit_log"} <= sources
+        assert filtered.items[0]["source"] == "job"
