@@ -49,15 +49,17 @@ from api.app.routers.exceptions import list_exceptions
 from api.app.routers.findings import list_findings
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
 from api.app.routers.findings import list_resolution_candidates
+from api.app.routers.governance import list_auto_merge_scope, list_exposure_review, list_ownership_review
 from api.app.routers.isolated_lane import list_isolated_lane
 from api.app.routers.job_health import list_job_health
 from api.app.routers.jobs import list_retry_candidates
-from api.app.routers.kpis import kpi_summary
+from api.app.routers.kpis import efficiency_kpis, kpi_summary
 from api.app.routers.maintenance import list_application_maintenance_candidates
 from api.app.routers.notifications import list_notification_slo, list_notifications
 from api.app.routers.operations import (
     backup_readiness,
     daily_operations,
+    list_manual_actions,
     operational_workload,
     operations_readiness,
     weekly_review,
@@ -1329,6 +1331,240 @@ def test_weekly_review_reports_operational_review_counts() -> None:
         assert by_item["auto_fix_failed"].count == 1
         assert by_item["scanner_version_missing"].count == 1
         assert by_item["stale_prs"].count == 1
+
+
+def test_efficiency_kpis_reports_detection_notification_and_remediation_metrics() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(hours=10))
+        db.add(scan)
+        db.flush()
+        resolved = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
+        resolved.first_seen_scan_id = scan.id
+        resolved.created_at = now_utc() - timedelta(hours=8)
+        resolved.resolved_at = now_utc() - timedelta(hours=2)
+        open_finding = create_finding(db, app, severity=Severity.critical)
+        open_finding.created_at = now_utc() - timedelta(hours=4)
+        db.add_all(
+            [
+                Notification(
+                    channel="slack",
+                    severity=Severity.high,
+                    subject="high",
+                    body="body",
+                    status="sent",
+                    sent_at=resolved.created_at + timedelta(hours=1),
+                    metadata_json={"finding_id": str(resolved.id)},
+                ),
+                RemediationAction(
+                    finding_id=resolved.id,
+                    action_type="github_issue",
+                    status="created",
+                    provider="github",
+                    metadata_json={},
+                ),
+                RemediationAction(
+                    finding_id=resolved.id,
+                    action_type="ai_fix",
+                    status="created",
+                    provider="watchtower",
+                    metadata_json={"validation_status": "succeeded"},
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = efficiency_kpis(db=db, _=None)
+
+        by_metric = {row.metric: row for row in rows}
+        assert by_metric["mean_time_to_detect_hours"].value == 2.0
+        assert by_metric["mean_time_to_notify_hours"].value == 1.0
+        assert by_metric["mean_time_to_remediate_hours"].value == 6.0
+        assert by_metric["issue_creation_rate_percent"].value == 50.0
+        assert by_metric["auto_resolution_rate_percent"].value == 100.0
+        assert open_finding.status == FindingStatus.open
+
+
+def test_list_manual_actions_filters_and_updates_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        matching = AuditLog(
+            actor="operator",
+            role="operator",
+            action="scan.create",
+            resource_type="scan",
+            resource_id="scan-1",
+            metadata_json={},
+            created_at=now_utc(),
+        )
+        dependency = AuditLog(
+            actor="operator",
+            role="operator",
+            action="dependency.update",
+            resource_type="repository",
+            resource_id="repo-1",
+            metadata_json={"mode": "manual"},
+            created_at=now_utc(),
+        )
+        old = AuditLog(
+            actor="operator",
+            role="operator",
+            action="job.create",
+            resource_type="job",
+            resource_id="job-1",
+            metadata_json={},
+            created_at=now_utc() - timedelta(days=40),
+        )
+        skipped = AuditLog(
+            actor="system",
+            role="admin",
+            action="repository.sync",
+            resource_type="repository",
+            resource_id="repo-2",
+            metadata_json={},
+            created_at=now_utc(),
+        )
+        db.add_all([matching, dependency, old, skipped])
+        db.flush()
+
+        page = list_manual_actions(action="scan.create", actor="operator", db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        assert [item["id"] for item in page.items] == [str(matching.id)]
+        assert page.items[0]["reason"] == "manual_scan"
+        assert summary.manual_action_count == 2
+
+
+def test_list_ownership_review_reports_owner_tier_and_lifecycle_issues() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        missing_owner = create_application(db, repo, "governance-missing-owner")
+        unknown = create_application(db, repo, "governance-unknown")
+        unknown.owner = "team"
+        unknown.criticality = "unknown"
+        production_low = create_application(db, repo, "governance-prod-low")
+        production_low.owner = "team"
+        production_low.production = True
+        production_low.criticality = "low"
+        unsupported = create_application(db, repo, "governance-unsupported")
+        unsupported.owner = "team"
+        unsupported.support_status = "unsupported"
+        deprecated = create_application(db, repo, "governance-deprecated")
+        deprecated.owner = "team"
+        deprecated.lifecycle = Lifecycle.deprecated
+        db.flush()
+
+        page = list_ownership_review(db=db, _=None)
+        missing_page = list_ownership_review(issue_type="missing_owner", db=db, _=None)
+
+        issues = {(item["application_name"], item["issue_type"]) for item in page.items}
+        assert (missing_owner.name, "missing_owner") in issues
+        assert (unknown.name, "unknown_criticality") in issues
+        assert (production_low.name, "production_low_criticality") in issues
+        assert (unsupported.name, "unsupported") in issues
+        assert (deprecated.name, "deprecated") in issues
+        assert [item["application_name"] for item in missing_page.items] == [missing_owner.name]
+
+
+def test_list_exposure_review_reports_public_risk_reasons_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        exposed = create_application(db, repo, "exposed-risk")
+        exposed.internet_exposed = True
+        exposed.production = True
+        failed_scan = Scan(
+            application_id=exposed.id,
+            status=ScanStatus.failed,
+            created_at=now_utc() - timedelta(days=31),
+        )
+        db.add(failed_scan)
+        finding = create_finding(db, exposed, severity=Severity.critical)
+        safe = create_application(db, repo, "exposed-safe")
+        safe.internet_exposed = True
+        safe_scan = Scan(application_id=safe.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add(safe_scan)
+        db.flush()
+        db.add(
+            Sbom(
+                application_id=safe.id,
+                scan_id=safe_scan.id,
+                sbom_digest="safe-exposure",
+                storage_key="safe-exposure.json",
+                active=True,
+                sbom_kind="source",
+            )
+        )
+        db.flush()
+
+        page = list_exposure_review(db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        assert [item["application_name"] for item in page.items] == [exposed.name]
+        assert set(page.items[0]["reasons"]) == {
+            "missing_active_source_sbom",
+            "stale_scan",
+            "latest_scan_failed",
+            "open_critical_high",
+        }
+        assert page.items[0]["open_critical_high_count"] == 1
+        assert page.items[0]["latest_scan_status"] == "failed"
+        assert summary.exposure_review_items == 1
+        assert finding.status == FindingStatus.open
+
+
+def test_list_auto_merge_scope_reports_scope_risks_and_validation_state() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        risky = create_application(db, repo, "auto-merge-risky")
+        risky.auto_merge_enabled = True
+        risky.production = True
+        risky.internet_exposed = True
+        risky.criticality = "critical"
+        safe = create_application(db, repo, "auto-merge-safe")
+        safe.auto_merge_enabled = True
+        safe.criticality = "medium"
+        finding_risky = create_finding(db, risky, severity=Severity.high)
+        finding_safe = create_finding(db, safe, severity=Severity.low)
+        db.add_all(
+            [
+                RemediationAction(
+                    finding_id=finding_risky.id,
+                    action_type="ai_fix",
+                    status="failed",
+                    provider="watchtower",
+                    metadata_json={},
+                ),
+                RemediationAction(
+                    finding_id=finding_safe.id,
+                    action_type="ai_fix",
+                    status="created",
+                    provider="watchtower",
+                    metadata_json={"validation_status": "succeeded"},
+                    updated_at=now_utc(),
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_auto_merge_scope(db=db, _=None)
+
+        by_name = {item["application_name"]: item for item in page.items}
+        assert set(by_name) == {risky.name, safe.name}
+        assert set(by_name[risky.name]["reasons"]) == {
+            "production",
+            "high_criticality",
+            "internet_exposed",
+            "missing_recent_validation",
+            "blocked_auto_merge_action",
+        }
+        assert by_name[risky.name]["blocked_action_count"] == 1
+        assert by_name[safe.name]["recent_validation"] is True
+        assert by_name[safe.name]["reasons"] == []
 
 
 def test_list_artifacts_returns_scan_artifact_context_and_filters() -> None:

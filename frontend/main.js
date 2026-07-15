@@ -44,6 +44,11 @@ const remediationPrs = document.querySelector("#remediation-prs");
 const remediationBacklog = document.querySelector("#remediation-backlog");
 const remediationRescans = document.querySelector("#remediation-rescans");
 const weeklyReview = document.querySelector("#weekly-review");
+const efficiencyKpis = document.querySelector("#efficiency-kpis");
+const manualActions = document.querySelector("#manual-actions");
+const ownershipReview = document.querySelector("#ownership-review");
+const exposureReview = document.querySelector("#exposure-review");
+const autoMergeScope = document.querySelector("#auto-merge-scope");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -110,6 +115,8 @@ function renderMetrics(summary) {
     ["missing_scheduled_scans", "Missing schedules", "warn"],
     ["notification_slo_breaches", "SLO breaches", "danger"],
     ["stale_remediation_items", "Stale remediation", "danger"],
+    ["manual_action_count", "Manual actions", "warn"],
+    ["exposure_review_items", "Exposure review", "danger"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -632,6 +639,65 @@ function renderWeeklyReview(rows) {
     : `<tr><td colspan="4">No weekly review checks</td></tr>`;
 }
 
+function renderEfficiencyKpis(rows) {
+  efficiencyKpis.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.metric)}</td><td>${escapeHtml(item.value)}</td><td>${escapeHtml(item.unit)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No efficiency KPIs</td></tr>`;
+}
+
+function renderManualActions(page) {
+  const rows = page.items || [];
+  manualActions.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.action)}</td><td>${escapeHtml(item.actor)}</td><td>${escapeHtml(item.resource_type)}</td><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(formatDateTime(item.created_at))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No manual actions</td></tr>`;
+}
+
+function renderOwnershipReview(page) {
+  const rows = page.items || [];
+  ownershipReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.owner || "-")}</td><td>${escapeHtml(item.criticality)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No ownership review items</td></tr>`;
+}
+
+function renderExposureReview(page) {
+  const rows = page.items || [];
+  exposureReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.internet_exposed ? "internet" : "production")}</td><td>${escapeHtml(item.open_critical_high_count)}</td><td>${escapeHtml(item.reasons.join(", "))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No exposure review items</td></tr>`;
+}
+
+function renderAutoMergeScope(page) {
+  const rows = page.items || [];
+  autoMergeScope.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.criticality)}</td><td>${escapeHtml(item.recent_validation ? "recent" : "missing")}</td><td>${escapeHtml(item.reasons.join(", ") || "ok")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No auto-merge scope items</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -677,6 +743,11 @@ async function refresh() {
   remediationBacklog.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationRescans.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   weeklyReview.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  efficiencyKpis.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  manualActions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  ownershipReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  exposureReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  autoMergeScope.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -724,6 +795,11 @@ async function refresh() {
       remediationBacklogPage,
       remediationRescanPage,
       weeklyReviewPage,
+      efficiencyKpiPage,
+      manualActionPage,
+      ownershipReviewPage,
+      exposureReviewPage,
+      autoMergeScopePage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -770,6 +846,11 @@ async function refresh() {
       loadJson("/remediation/backlog?limit=10"),
       loadJson("/remediation/rescans?missing=true&limit=10"),
       loadJson("/operations/weekly-review"),
+      loadJson("/kpis/efficiency"),
+      loadJson("/operations/manual-actions?limit=10"),
+      loadJson("/governance/ownership?limit=10"),
+      loadJson("/governance/exposure?limit=10"),
+      loadJson("/governance/auto-merge-scope?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -815,6 +896,11 @@ async function refresh() {
     renderRemediationBacklog(remediationBacklogPage);
     renderRemediationRescans(remediationRescanPage);
     renderWeeklyReview(weeklyReviewPage);
+    renderEfficiencyKpis(efficiencyKpiPage);
+    renderManualActions(manualActionPage);
+    renderOwnershipReview(ownershipReviewPage);
+    renderExposureReview(exposureReviewPage);
+    renderAutoMergeScope(autoMergeScopePage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -860,6 +946,11 @@ async function refresh() {
     remediationBacklog.innerHTML = `<tr><td colspan="5">Unable to load remediation backlog</td></tr>`;
     remediationRescans.innerHTML = `<tr><td colspan="5">Unable to load remediation rescans</td></tr>`;
     weeklyReview.innerHTML = `<tr><td colspan="4">Unable to load weekly review</td></tr>`;
+    efficiencyKpis.innerHTML = `<tr><td colspan="4">Unable to load efficiency KPIs</td></tr>`;
+    manualActions.innerHTML = `<tr><td colspan="5">Unable to load manual actions</td></tr>`;
+    ownershipReview.innerHTML = `<tr><td colspan="5">Unable to load ownership review</td></tr>`;
+    exposureReview.innerHTML = `<tr><td colspan="5">Unable to load exposure review</td></tr>`;
+    autoMergeScope.innerHTML = `<tr><td colspan="5">Unable to load auto-merge scope</td></tr>`;
   }
 }
 

@@ -740,6 +740,67 @@ class WeeklyReviewOut(BaseModel):
     detail: str
 
 
+class ManualActionOut(BaseModel):
+    id: UUID
+    actor: str
+    role: str
+    action: str
+    resource_type: str
+    resource_id: str | None
+    metadata_json: dict[str, Any]
+    created_at: datetime
+    reason: str
+
+
+class GovernanceOwnershipOut(BaseModel):
+    issue_type: str
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    owner: str | None
+    criticality: str
+    production: bool
+    lifecycle: models.Lifecycle
+    support_status: str
+    detail: str
+
+
+class ExposureReviewOut(BaseModel):
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    internet_exposed: bool
+    production: bool
+    latest_scan_id: UUID | None
+    latest_scan_status: models.ScanStatus | None
+    latest_scan_created_at: datetime | None
+    open_critical_high_count: int
+    has_active_source_sbom: bool
+    reasons: list[str] = Field(default_factory=list)
+
+
+class AutoMergeScopeOut(BaseModel):
+    application_id: UUID
+    application_name: str
+    application_path: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    auto_merge_enabled: bool
+    production: bool
+    criticality: str
+    internet_exposed: bool
+    recent_validation: bool
+    blocked_action_count: int
+    reasons: list[str] = Field(default_factory=list)
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -759,3 +820,5 @@ class DashboardSummary(BaseModel):
     missing_scheduled_scans: int
     notification_slo_breaches: int
     stale_remediation_items: int
+    manual_action_count: int
+    exposure_review_items: int
