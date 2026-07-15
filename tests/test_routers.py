@@ -49,11 +49,16 @@ from api.app.routers.exceptions import list_exceptions
 from api.app.routers.findings import list_findings
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
 from api.app.routers.findings import list_resolution_candidates
-from api.app.routers.governance import list_auto_merge_scope, list_exposure_review, list_ownership_review
+from api.app.routers.governance import (
+    list_auto_merge_scope,
+    list_exposure_review,
+    list_ownership_review,
+    list_runtime_eol,
+)
 from api.app.routers.isolated_lane import list_isolated_lane
 from api.app.routers.job_health import list_job_health
 from api.app.routers.jobs import list_retry_candidates
-from api.app.routers.kpis import efficiency_kpis, kpi_summary
+from api.app.routers.kpis import efficiency_kpis, kpi_summary, quality_kpis
 from api.app.routers.maintenance import list_application_maintenance_candidates
 from api.app.routers.notifications import list_notification_slo, list_notifications
 from api.app.routers.operations import (
@@ -64,6 +69,7 @@ from api.app.routers.operations import (
     operations_readiness,
     weekly_review,
 )
+from api.app.routers.quality import list_duplicate_review, list_reopen_risk
 from api.app.routers.remediation import (
     list_remediation_backlog,
     list_github_issue_actions,
@@ -78,6 +84,7 @@ from api.app.routers.repository_sync import list_repository_sync
 from api.app.routers.rollout import list_repository_rollout
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.scanner_inventory import list_scanner_inventory
+from api.app.routers.scanner_versions import list_scanner_versions
 from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
 from api.app.routers.security import data_protection, list_security_findings
 from api.app.routers.sbom_coverage import list_sbom_coverage
@@ -1791,6 +1798,257 @@ def test_list_artifacts_returns_scan_artifact_context_and_filters() -> None:
         assert page.items[0]["digest"] == "sha-source"
         assert page.items[0]["sbom_id"] == str(sbom.id)
         assert page.items[0]["application_name"] == app.name
+
+
+def test_list_duplicate_review_reports_notification_remediation_and_skipped_duplicates() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        db.add_all(
+            [
+                Notification(
+                    channel="slack",
+                    severity=Severity.high,
+                    subject="duplicate",
+                    body="body",
+                    status="queued",
+                    metadata_json={"finding_id": str(finding.id)},
+                ),
+                Notification(
+                    channel="slack",
+                    severity=Severity.high,
+                    subject="duplicate",
+                    body="body",
+                    status="queued",
+                    metadata_json={"finding_id": str(finding.id)},
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="ai_fix",
+                    status="queued",
+                    provider="watchtower",
+                    metadata_json={},
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="ai_fix",
+                    status="created",
+                    provider="watchtower",
+                    metadata_json={},
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="github_issue",
+                    status="skipped_duplicate",
+                    provider="github",
+                    metadata_json={},
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_duplicate_review(db=db, _=None)
+        notification_page = list_duplicate_review(duplicate_type="notification", db=db, _=None)
+
+        by_type = {item["duplicate_type"]: item for item in page.items}
+        assert set(by_type) == {"notification", "remediation_action", "skipped_duplicate"}
+        assert by_type["notification"]["count"] == 2
+        assert by_type["notification"]["application_name"] == app.name
+        assert by_type["remediation_action"]["action_type"] == "ai_fix"
+        assert [item["duplicate_type"] for item in notification_page.items] == ["notification"]
+
+
+def test_list_reopen_risk_reports_seen_after_resolution_and_dashboard_count() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        resolved = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
+        resolved.resolved_at = now_utc() - timedelta(days=2)
+        later_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=1),
+        )
+        db.add(later_scan)
+        db.flush()
+        resolved.last_seen_scan_id = later_scan.id
+        db.flush()
+
+        page = list_reopen_risk(severity=Severity.high, db=db, _=None)
+        summary = dashboard_summary(db=db, _=None)
+
+        assert [item["finding_id"] for item in page.items] == [str(resolved.id)]
+        assert page.items[0]["reason"] == "seen_after_resolved"
+        assert page.items[0]["last_seen_scan_id"] == str(later_scan.id)
+        assert page.items[0]["application_name"] == app.name
+        assert summary.reopen_risk_items == 1
+
+
+def test_quality_kpis_reports_false_positive_vex_auto_merge_ci_and_reopen_rates() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        reopened = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
+        reopened.resolved_at = now_utc() - timedelta(days=2)
+        false_positive = create_finding(
+            db,
+            app,
+            severity=Severity.low,
+            status=FindingStatus.false_positive,
+        )
+        open_finding = create_finding(db, app, severity=Severity.critical)
+        later_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=1),
+        )
+        db.add(later_scan)
+        db.flush()
+        reopened.last_seen_scan_id = later_scan.id
+        db.add_all(
+            [
+                VexStatement(
+                    finding_id=open_finding.id,
+                    status=VexStatus.not_affected,
+                    justification="not reachable",
+                    approved_by="security",
+                    review_date=now_utc() - timedelta(days=1),
+                ),
+                VexStatement(
+                    finding_id=reopened.id,
+                    status=VexStatus.under_investigation,
+                    justification="review pending",
+                    approved_by="security",
+                    review_date=now_utc() + timedelta(days=10),
+                ),
+                RemediationAction(
+                    finding_id=open_finding.id,
+                    action_type="ai_fix",
+                    status="failed",
+                    provider="watchtower",
+                    metadata_json={"ci_passed": False},
+                ),
+                RemediationAction(
+                    finding_id=reopened.id,
+                    action_type="ai_fix",
+                    status="created",
+                    provider="watchtower",
+                    metadata_json={"ci_passed": True},
+                ),
+            ]
+        )
+        db.flush()
+
+        rows = quality_kpis(db=db, _=None)
+
+        by_metric = {row.metric: row for row in rows}
+        assert by_metric["false_positive_rate_percent"].value == 33.3
+        assert by_metric["expired_vex_rate_percent"].value == 50.0
+        assert by_metric["auto_merge_failure_rate_percent"].value == 50.0
+        assert by_metric["pr_ci_failure_rate_percent"].value == 50.0
+        assert by_metric["reopen_risk_count"].value == 1
+        assert false_positive.status == FindingStatus.false_positive
+
+
+def test_list_scanner_versions_reports_missing_stale_and_tool_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    tool="syft",
+                    tool_version=None,
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    tool="trivy",
+                    tool_version="0.1.0",
+                    created_at=now_utc() - timedelta(days=31),
+                ),
+            ]
+        )
+        db.flush()
+
+        missing_page = list_scanner_versions(missing_version=True, db=db, _=None)
+        stale_page = list_scanner_versions(stale=True, db=db, _=None)
+        trivy_page = list_scanner_versions(tool="trivy", db=db, _=None)
+
+        assert [item["tool"] for item in missing_page.items] == ["syft"]
+        assert missing_page.items[0]["missing_version"] is True
+        assert [item["tool"] for item in stale_page.items] == ["trivy"]
+        assert stale_page.items[0]["stale"] is True
+        assert trivy_page.items[0]["scan_count"] == 1
+        assert trivy_page.items[0]["application_name"] == app.name
+
+
+def test_list_runtime_eol_reports_missing_old_major_and_component_context() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        db.add(scan)
+        db.flush()
+        sbom = Sbom(
+            application_id=app.id,
+            scan_id=scan.id,
+            sbom_digest="runtime-eol",
+            storage_key="runtime-eol.json",
+            active=True,
+        )
+        old_ruby = Component(purl="pkg:generic/ruby@2.7", ecosystem="runtime", name="ruby", version="2.7")
+        current_java = Technology(
+            application_id=app.id,
+            category="language-or-platform",
+            name="java",
+            version="17",
+            detection_source="build.gradle",
+        )
+        db.add_all(
+            [
+                sbom,
+                old_ruby,
+                current_java,
+                Technology(
+                    application_id=app.id,
+                    category="language-or-platform",
+                    name="python",
+                    version="2.7",
+                    detection_source="runtime.txt",
+                ),
+                Technology(
+                    application_id=app.id,
+                    category="runtime",
+                    name="node",
+                    version=None,
+                    detection_source="package.json",
+                ),
+            ]
+        )
+        db.flush()
+        db.add(SbomComponent(sbom_id=sbom.id, component_id=old_ruby.id))
+        db.flush()
+
+        page = list_runtime_eol(db=db, _=None)
+        missing_page = list_runtime_eol(issue_type="missing_version", db=db, _=None)
+
+        issues = {(item["source"], item["name"], item["issue_type"]) for item in page.items}
+        assert ("technology", "python", "old_major") in issues
+        assert ("technology", "node", "missing_version") in issues
+        assert ("component", "ruby", "old_major") in issues
+        assert ("technology", "java", "old_major") not in issues
+        assert [item["name"] for item in missing_page.items] == ["node"]
+        assert missing_page.items[0]["application_name"] == app.name
 
 
 def test_list_ai_fix_actions_filters_and_returns_context() -> None:

@@ -859,6 +859,71 @@ class SecurityFindingOut(BaseModel):
     repository_name: str
 
 
+class DuplicateReviewOut(BaseModel):
+    duplicate_type: str
+    key: str
+    count: int
+    finding_id: UUID | None = None
+    action_type: str | None = None
+    channel: str | None = None
+    subject: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    detail: str
+
+
+class ReopenRiskOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_name: str
+    vulnerability_external_id: str
+    resolved_at: datetime | None
+    last_seen_scan_id: UUID | None = None
+    last_seen_scan_created_at: datetime | None = None
+    reason: str
+
+
+class ScannerVersionOut(BaseModel):
+    tool: str | None
+    tool_version: str | None
+    scan_count: int
+    latest_scan_id: UUID
+    latest_scan_status: models.ScanStatus
+    latest_scan_created_at: datetime
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    missing_version: bool
+    stale: bool
+
+
+class RuntimeEolOut(BaseModel):
+    source: str
+    source_id: UUID
+    issue_type: str
+    name: str
+    version: str | None = None
+    category: str | None = None
+    ecosystem: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -881,3 +946,4 @@ class DashboardSummary(BaseModel):
     manual_action_count: int
     exposure_review_items: int
     retention_review_items: int
+    reopen_risk_items: int

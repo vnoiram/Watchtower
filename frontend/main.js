@@ -54,6 +54,11 @@ const retentionReview = document.querySelector("#retention-review");
 const artifactSbomCoverage = document.querySelector("#artifact-sbom-coverage");
 const licenseReview = document.querySelector("#license-review");
 const securityFindings = document.querySelector("#security-findings");
+const duplicateReview = document.querySelector("#duplicate-review");
+const reopenRisk = document.querySelector("#reopen-risk");
+const qualityKpis = document.querySelector("#quality-kpis");
+const scannerVersions = document.querySelector("#scanner-versions");
+const runtimeEol = document.querySelector("#runtime-eol");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -123,6 +128,7 @@ function renderMetrics(summary) {
     ["manual_action_count", "Manual actions", "warn"],
     ["exposure_review_items", "Exposure review", "danger"],
     ["retention_review_items", "Retention review", "warn"],
+    ["reopen_risk_items", "Reopen risk", "danger"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -762,6 +768,65 @@ function renderSecurityFindings(page) {
     : `<tr><td colspan="5">No security findings</td></tr>`;
 }
 
+function renderDuplicateReview(page) {
+  const rows = page.items || [];
+  duplicateReview.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.duplicate_type)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.action_type || item.channel || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No duplicate review items</td></tr>`;
+}
+
+function renderReopenRisk(page) {
+  const rows = page.items || [];
+  reopenRisk.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.vulnerability_external_id)}</td><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.last_seen_scan_created_at ? formatDateTime(item.last_seen_scan_created_at) : "-")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No reopen risk items</td></tr>`;
+}
+
+function renderQualityKpis(rows) {
+  qualityKpis.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.metric)}</td><td>${escapeHtml(item.value)}</td><td>${escapeHtml(item.unit)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No quality KPIs</td></tr>`;
+}
+
+function renderScannerVersions(page) {
+  const rows = page.items || [];
+  scannerVersions.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.tool || "-")}</td><td>${escapeHtml(item.tool_version || "-")}</td><td>${escapeHtml(item.scan_count)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.missing_version ? "missing version" : item.stale ? "stale" : "current")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scanner version review items</td></tr>`;
+}
+
+function renderRuntimeEol(page) {
+  const rows = page.items || [];
+  runtimeEol.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.name)} ${escapeHtml(item.version || "")}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No runtime EOL review items</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -817,6 +882,11 @@ async function refresh() {
   artifactSbomCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   licenseReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   securityFindings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  duplicateReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  reopenRisk.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  qualityKpis.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  scannerVersions.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  runtimeEol.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -874,6 +944,11 @@ async function refresh() {
       artifactSbomCoveragePage,
       licenseReviewPage,
       securityFindingPage,
+      duplicateReviewPage,
+      reopenRiskPage,
+      qualityKpiPage,
+      scannerVersionPage,
+      runtimeEolPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -930,6 +1005,11 @@ async function refresh() {
       loadJson("/artifacts/sbom-coverage?missing=true&limit=10"),
       loadJson("/components/licenses?limit=10"),
       loadJson("/security/findings?limit=10"),
+      loadJson("/quality/duplicates?limit=10"),
+      loadJson("/quality/reopen-risk?limit=10"),
+      loadJson("/kpis/quality"),
+      loadJson("/scanner-versions?limit=10"),
+      loadJson("/governance/runtime-eol?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -985,6 +1065,11 @@ async function refresh() {
     renderArtifactSbomCoverage(artifactSbomCoveragePage);
     renderLicenseReview(licenseReviewPage);
     renderSecurityFindings(securityFindingPage);
+    renderDuplicateReview(duplicateReviewPage);
+    renderReopenRisk(reopenRiskPage);
+    renderQualityKpis(qualityKpiPage);
+    renderScannerVersions(scannerVersionPage);
+    renderRuntimeEol(runtimeEolPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -1040,6 +1125,11 @@ async function refresh() {
     artifactSbomCoverage.innerHTML = `<tr><td colspan="5">Unable to load artifact SBOM coverage</td></tr>`;
     licenseReview.innerHTML = `<tr><td colspan="5">Unable to load license review</td></tr>`;
     securityFindings.innerHTML = `<tr><td colspan="5">Unable to load security findings</td></tr>`;
+    duplicateReview.innerHTML = `<tr><td colspan="5">Unable to load duplicate review</td></tr>`;
+    reopenRisk.innerHTML = `<tr><td colspan="5">Unable to load reopen risk</td></tr>`;
+    qualityKpis.innerHTML = `<tr><td colspan="4">Unable to load quality KPIs</td></tr>`;
+    scannerVersions.innerHTML = `<tr><td colspan="5">Unable to load scanner versions</td></tr>`;
+    runtimeEol.innerHTML = `<tr><td colspan="5">Unable to load runtime EOL review</td></tr>`;
   }
 }
 

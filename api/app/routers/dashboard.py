@@ -13,6 +13,7 @@ from api.app.routers.job_health import job_health_reason
 from api.app.routers.kpis import notification_failure_count, scan_failure_rate_percent
 from api.app.routers.notifications import notification_slo_breach_count
 from api.app.routers.operations import manual_action_count, manual_workload_count
+from api.app.routers.quality import reopen_risk_count
 from api.app.routers.remediation import stale_remediation_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.sla import count_sla_breached_findings
@@ -63,6 +64,7 @@ def dashboard_summary(
     manual_actions = manual_action_count(db)
     exposure_items = exposure_review_count(db)
     retention_items = retention_review_count(db)
+    reopen_risk_items = reopen_risk_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -85,4 +87,5 @@ def dashboard_summary(
         manual_action_count=manual_actions,
         exposure_review_items=exposure_items,
         retention_review_items=retention_items,
+        reopen_risk_items=reopen_risk_items,
     )

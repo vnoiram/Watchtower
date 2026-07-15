@@ -21,6 +21,7 @@ from api.app.routers import (
     maintenance,
     notifications,
     operations,
+    quality,
     remediation,
     remediation_actions,
     repositories,
@@ -32,6 +33,7 @@ from api.app.routers import (
     scan_health,
     scans,
     scanner_inventory,
+    scanner_versions,
     security,
     sla,
     storage,
@@ -65,9 +67,11 @@ app.include_router(notifications.router, prefix=api_prefix)
 app.include_router(dashboard.router, prefix=api_prefix)
 app.include_router(github.router, prefix=api_prefix)
 app.include_router(governance.router, prefix=api_prefix)
+app.include_router(quality.router, prefix=api_prefix)
 app.include_router(vex.router, prefix=api_prefix)
 app.include_router(scan_health.router, prefix=api_prefix)
 app.include_router(scanner_inventory.router, prefix=api_prefix)
+app.include_router(scanner_versions.router, prefix=api_prefix)
 app.include_router(security.router, prefix=api_prefix)
 app.include_router(maintenance.router, prefix=api_prefix)
 app.include_router(job_health.router, prefix=api_prefix)

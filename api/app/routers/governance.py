@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -45,6 +46,19 @@ def list_auto_merge_scope(
     _: Principal = Depends(get_principal),
 ):
     return schemas.CursorPage(items=auto_merge_scope_items(db)[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/runtime-eol", response_model=schemas.CursorPage)
+def list_runtime_eol(
+    limit: int = 50,
+    issue_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = runtime_eol_items(db)
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
 def exposure_review_count(db: Session) -> int:
@@ -171,6 +185,78 @@ def auto_merge_scope_items(db: Session) -> list[dict]:
     return items
 
 
+def runtime_eol_items(db: Session) -> list[dict]:
+    items = []
+    rows = db.execute(
+        select(models.Technology, models.Application, models.Repository)
+        .join(models.Application, models.Technology.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Technology.name.asc(), models.Technology.id.asc())
+    )
+    for technology, application, repository in rows:
+        if not _runtime_candidate(technology.name, technology.category):
+            continue
+        issue = _runtime_issue(technology.name, technology.version)
+        if not issue:
+            continue
+        issue_type, detail = issue
+        items.append(
+            schemas.RuntimeEolOut(
+                source="technology",
+                source_id=technology.id,
+                issue_type=issue_type,
+                name=technology.name,
+                version=technology.version,
+                category=technology.category,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                detail=detail,
+            ).model_dump(mode="json")
+        )
+
+    component_rows = db.execute(
+        select(models.Component, models.Sbom, models.Application, models.Repository)
+        .join(models.SbomComponent, models.Component.id == models.SbomComponent.component_id)
+        .join(models.Sbom, models.SbomComponent.sbom_id == models.Sbom.id)
+        .join(models.Application, models.Sbom.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(models.Sbom.active.is_(True))
+        .order_by(models.Component.name.asc(), models.Component.id.asc())
+    )
+    seen_components: set[tuple] = set()
+    for component, _, application, repository in component_rows:
+        if not _runtime_candidate(component.name, component.ecosystem or ""):
+            continue
+        key = (component.id, application.id)
+        if key in seen_components:
+            continue
+        seen_components.add(key)
+        issue = _runtime_issue(component.name, component.version)
+        if not issue:
+            continue
+        issue_type, detail = issue
+        items.append(
+            schemas.RuntimeEolOut(
+                source="component",
+                source_id=component.id,
+                issue_type=issue_type,
+                name=component.name,
+                version=component.version,
+                ecosystem=component.ecosystem,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                detail=detail,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
 def _ownership_issues(application: models.Application) -> list[tuple[str, str]]:
     issues = []
     criticality = (application.criticality or "").lower()
@@ -185,6 +271,71 @@ def _ownership_issues(application: models.Application) -> list[tuple[str, str]]:
     if application.lifecycle in {models.Lifecycle.deprecated, models.Lifecycle.archived}:
         issues.append((application.lifecycle.value, "Application lifecycle requires governance review"))
     return issues
+
+
+def _runtime_candidate(name: str | None, category: str | None) -> bool:
+    normalized_name = (name or "").lower()
+    normalized_category = (category or "").lower()
+    if any(token in normalized_category for token in ["runtime", "platform", "language", "container"]):
+        return True
+    return _runtime_key(normalized_name) is not None
+
+
+def _runtime_issue(name: str | None, version: str | None) -> tuple[str, str] | None:
+    key = _runtime_key((name or "").lower())
+    if not version:
+        return "missing_version", "Runtime or platform version is missing"
+    if not key:
+        return None
+    major = _major_version(version)
+    if major is None:
+        return "unparseable_version", "Runtime or platform version could not be parsed"
+    thresholds = {
+        "python": 3,
+        "node": 18,
+        "java": 17,
+        "ruby": 3,
+        "php": 8,
+        "dotnet": 6,
+        "go": 1,
+    }
+    threshold = thresholds.get(key)
+    if threshold is not None and major < threshold:
+        return "old_major", f"{name} major version is below the maintenance review threshold"
+    if key == "go":
+        minor = _minor_version(version)
+        if minor is not None and minor < 20:
+            return "old_major", "Go 1.x minor version is below the maintenance review threshold"
+    return None
+
+
+def _runtime_key(value: str) -> str | None:
+    normalized = value.lower().replace(".js", "").replace(" ", "")
+    if normalized in {"python", "python3"}:
+        return "python"
+    if normalized in {"node", "nodejs", "node.js"}:
+        return "node"
+    if normalized in {"java", "jdk", "openjdk"}:
+        return "java"
+    if normalized == "go" or normalized == "golang":
+        return "go"
+    if normalized == "ruby":
+        return "ruby"
+    if normalized == "php":
+        return "php"
+    if normalized in {"dotnet", ".net", "aspnet"}:
+        return "dotnet"
+    return None
+
+
+def _major_version(version: str) -> int | None:
+    match = re.search(r"(\d+)", version)
+    return int(match.group(1)) if match else None
+
+
+def _minor_version(version: str) -> int | None:
+    match = re.search(r"\d+\.(\d+)", version)
+    return int(match.group(1)) if match else None
 
 
 def _ownership_item(
