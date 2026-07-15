@@ -80,6 +80,38 @@ def list_security_findings(
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
+@router.get("/secrets-review", response_model=schemas.CursorPage)
+def list_secrets_review(
+    limit: int = 50,
+    source: str | None = None,
+    severity: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = secrets_review_items(db)
+    if source:
+        items = [item for item in items if item["source"] == source]
+    if severity:
+        items = [item for item in items if item["severity"] == severity]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/exploit-intel", response_model=schemas.CursorPage)
+def list_exploit_intel(
+    limit: int = 50,
+    kev: bool | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = exploit_intel_items(db)
+    if kev is not None:
+        items = [item for item in items if item["kev"] is kev]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/rbac-review", response_model=list[schemas.RbacReviewOut])
 def rbac_review(
     db: Session = Depends(get_db),
@@ -91,6 +123,74 @@ def rbac_review(
 
 def rbac_review_count(db: Session, settings: Settings) -> int:
     return sum(1 for item in rbac_review_items(db, settings) if item.status != "ok")
+
+
+def secrets_review_items(db: Session) -> list[dict]:
+    items = []
+    scan_stmt = (
+        select(models.Scan, models.Application, models.Repository)
+        .join(models.Application, models.Scan.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Scan.created_at.desc(), models.Scan.id.asc())
+    )
+    for scan, application, repository in db.execute(scan_stmt):
+        for finding_type, finding in _security_findings(scan.result_summary):
+            if finding_type != "secret" and not _secretish(finding):
+                continue
+            items.append(
+                schemas.SecretReviewOut(
+                    source="scan",
+                    source_id=str(scan.id),
+                    severity=_finding_severity(finding),
+                    title=_finding_title(finding),
+                    detail=_safe_secret_detail(finding),
+                    application_id=application.id,
+                    application_name=application.name,
+                    repository_id=repository.id,
+                    repository_owner=repository.owner,
+                    repository_name=repository.name,
+                    created_at=scan.created_at,
+                ).model_dump(mode="json")
+            )
+    for item in _secret_error_items(db):
+        items.append(item)
+    return items
+
+
+def exploit_intel_items(db: Session) -> list[dict]:
+    stmt = (
+        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Component, models.Finding.component_id == models.Component.id)
+        .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
+        .order_by(models.Finding.risk_score.desc(), models.Finding.created_at.asc())
+    )
+    items = []
+    for finding, application, repository, component, vulnerability in db.execute(stmt):
+        kev = _kev_signal(vulnerability)
+        epss = _epss_signal(vulnerability, finding)
+        if not kev and not epss:
+            continue
+        items.append(
+            schemas.ExploitIntelOut(
+                finding_id=finding.id,
+                severity=finding.severity,
+                risk_score=finding.risk_score,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                component_name=component.name,
+                vulnerability_external_id=vulnerability.external_id,
+                cvss_score=vulnerability.cvss_score,
+                kev=kev,
+                epss_signal=epss,
+                detail=_exploit_detail(vulnerability, kev, epss),
+            ).model_dump(mode="json")
+        )
+    return items
 
 
 def rbac_review_items(db: Session, settings: Settings) -> list[schemas.RbacReviewOut]:
@@ -183,6 +283,81 @@ def _security_findings(result_summary: dict[str, Any] | None) -> list[tuple[str,
             if isinstance(finding, dict):
                 items.append((finding_type, finding))
     return items
+
+
+def _secret_error_items(db: Session) -> list[dict]:
+    items = []
+    for audit_log in db.scalars(select(models.AuditLog)):
+        metadata = audit_log.metadata_json or {}
+        text = f"{audit_log.action} {metadata}".lower()
+        if not _secret_text(text):
+            continue
+        items.append(
+            schemas.SecretReviewOut(
+                source="audit",
+                source_id=str(audit_log.id),
+                title=audit_log.action,
+                detail="Audit metadata references secret-like material",
+                created_at=audit_log.created_at,
+            ).model_dump(mode="json")
+        )
+    for job in db.scalars(select(models.Job).where(models.Job.last_error.is_not(None))):
+        if not _secret_text(job.last_error or ""):
+            continue
+        items.append(
+            schemas.SecretReviewOut(
+                source="job",
+                source_id=str(job.id),
+                title=job.job_type.value,
+                detail="Job error references secret-like material",
+                created_at=job.created_at,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
+def _secretish(finding: dict) -> bool:
+    return _secret_text(" ".join(str(value) for value in finding.values()))
+
+
+def _secret_text(value: str) -> bool:
+    text = value.lower()
+    return any(token in text for token in ["secret", "credential", "token", "api key", "apikey", "private key"])
+
+
+def _safe_secret_detail(finding: dict) -> str | None:
+    value = finding.get("path") or finding.get("file") or finding.get("rule_id") or finding.get("type")
+    return str(value) if value else None
+
+
+def _kev_signal(vulnerability: models.Vulnerability) -> bool:
+    text = _vulnerability_text(vulnerability)
+    return "cisa" in text or "kev" in text or "known exploited" in text
+
+
+def _epss_signal(vulnerability: models.Vulnerability, finding: models.Finding) -> bool:
+    text = _vulnerability_text(vulnerability)
+    return "epss" in text or (vulnerability.cvss_score or 0) >= 9.0 or finding.severity == models.Severity.critical
+
+
+def _vulnerability_text(vulnerability: models.Vulnerability) -> str:
+    return " ".join(
+        [
+            vulnerability.external_id or "",
+            vulnerability.title or "",
+            vulnerability.description or "",
+            " ".join(vulnerability.references or []),
+        ]
+    ).lower()
+
+
+def _exploit_detail(vulnerability: models.Vulnerability, kev: bool, epss: bool) -> str:
+    signals = []
+    if kev:
+        signals.append("KEV-like metadata")
+    if epss:
+        signals.append("EPSS/high exploitability signal")
+    return ", ".join(signals) or vulnerability.external_id
 
 
 def _finding_severity(finding: dict) -> str | None:

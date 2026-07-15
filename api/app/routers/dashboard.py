@@ -8,9 +8,9 @@ from api.app import models, schemas
 from api.app.config import Settings, get_settings
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
-from api.app.routers.governance import exposure_review_count
+from api.app.routers.governance import exposure_review_count, quarterly_review_count
 from api.app.routers.integrations import github_integration_issue_count
-from api.app.routers.isolated_lane import count_isolated_applications
+from api.app.routers.isolated_lane import count_isolated_applications, isolated_safeguard_count
 from api.app.routers.job_health import job_health_reason
 from api.app.routers.kpis import notification_failure_count, scan_failure_rate_percent
 from api.app.routers.notifications import notification_slo_breach_count
@@ -76,6 +76,8 @@ def dashboard_summary(
     rollout_gap_items = rollout_gap_count(db)
     github_integration_issues = github_integration_issue_count(db, settings)
     failure_signal_items = failure_signal_count(db)
+    isolated_safeguard_items = isolated_safeguard_count(db)
+    quarterly_review_items = quarterly_review_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -103,4 +105,6 @@ def dashboard_summary(
         rollout_gap_items=rollout_gap_items,
         github_integration_issues=github_integration_issues,
         failure_signal_items=failure_signal_items,
+        isolated_safeguard_items=isolated_safeguard_items,
+        quarterly_review_items=quarterly_review_items,
     )
