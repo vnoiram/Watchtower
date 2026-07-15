@@ -1,7 +1,10 @@
 from datetime import timedelta
+from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import create_engine
+import pytest
+from fastapi import HTTPException
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from api.app.database import Base
@@ -11,18 +14,29 @@ from api.app.models import (
     Component,
     Finding,
     FindingStatus,
+    RemediationAction,
     Repository,
     RepositoryProvider,
+    Sbom,
+    SbomComponent,
     Scan,
     ScanStatus,
     Severity,
     SourceClassification,
+    Technology,
     TriggerType,
     Vulnerability,
     now_utc,
 )
 from api.app.routers.applications import list_applications
+from api.app.routers.components import list_component_applications, list_components
 from api.app.routers.findings import list_findings
+from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
+from api.app.routers.remediation_actions import list_remediation_actions
+from api.app.routers.sboms import list_sboms
+from api.app.routers.technologies import list_technologies
+from api.app.routers.vulnerabilities import list_vulnerabilities
+from worker.runner import upsert_detected_applications
 
 
 def session_factory() -> sessionmaker[Session]:
@@ -67,6 +81,7 @@ def create_finding(
     severity: Severity,
     status: FindingStatus = FindingStatus.open,
     risk_score: float = 0.0,
+    fixed_version: str | None = "1.0.1",
 ) -> Finding:
     component = Component(purl=f"pkg:pypi/{severity.value}-{status.value}@1.0.0", ecosystem="pypi", name=f"{severity.value}-pkg", version="1.0.0")
     vulnerability = Vulnerability(source="osv", external_id=f"{severity.value}-{status.value}", severity=severity)
@@ -79,6 +94,7 @@ def create_finding(
         status=status,
         severity=severity,
         risk_score=risk_score,
+        fixed_version=fixed_version,
     )
     db.add(finding)
     db.flush()
@@ -165,3 +181,183 @@ def test_list_findings_filters_by_status_and_high_severity() -> None:
         page = list_findings(db=db, _=None, status=FindingStatus.open, severity=Severity.high)
 
         assert [item["id"] for item in page.items] == [str(high.id)]
+
+
+def test_upsert_detected_applications_does_not_duplicate_technology(tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
+
+        upsert_detected_applications(db, repo, tmp_path)
+        upsert_detected_applications(db, repo, tmp_path)
+
+        technologies = list(db.scalars(select(Technology)))
+        assert len(technologies) == 1
+        assert technologies[0].name == "python"
+
+
+def test_list_technologies_returns_application_context() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        db.add(
+            Technology(
+                application_id=app.id,
+                category="language-or-platform",
+                name="python",
+                detection_source="pyproject.toml",
+            )
+        )
+        db.flush()
+
+        page = list_technologies(db=db, _=None)
+
+        assert page.items[0]["name"] == "python"
+        assert page.items[0]["application_name"] == "demo"
+        assert page.items[0]["repository_name"] == "demo"
+
+
+def test_list_sboms_filters_active_and_counts_components() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        db.add(scan)
+        db.flush()
+        active = Sbom(
+            application_id=app.id,
+            scan_id=scan.id,
+            sbom_digest="digest-active",
+            storage_key="active.json",
+            active=True,
+        )
+        inactive = Sbom(
+            application_id=app.id,
+            scan_id=scan.id,
+            sbom_digest="digest-inactive",
+            storage_key="inactive.json",
+            active=False,
+        )
+        component_a = Component(purl="pkg:pypi/a@1", ecosystem="pypi", name="a", version="1")
+        component_b = Component(purl="pkg:pypi/b@1", ecosystem="pypi", name="b", version="1")
+        db.add_all([active, inactive, component_a, component_b])
+        db.flush()
+        db.add_all(
+            [
+                SbomComponent(sbom_id=active.id, component_id=component_a.id),
+                SbomComponent(sbom_id=active.id, component_id=component_b.id),
+                SbomComponent(sbom_id=inactive.id, component_id=component_a.id),
+            ]
+        )
+        db.flush()
+
+        page = list_sboms(active=True, db=db, _=None)
+
+        assert len(page.items) == 1
+        assert page.items[0]["id"] == str(active.id)
+        assert page.items[0]["component_count"] == 2
+
+
+def test_list_components_searches_and_returns_active_application_usage() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
+        db.add(scan)
+        db.flush()
+        component = Component(
+            purl="pkg:pypi/fastapi@0.111.0",
+            ecosystem="pypi",
+            name="fastapi",
+            version="0.111.0",
+        )
+        sbom = Sbom(
+            application_id=app.id,
+            scan_id=scan.id,
+            sbom_digest="digest",
+            storage_key="sbom.json",
+            active=True,
+        )
+        db.add_all([component, sbom])
+        db.flush()
+        db.add(SbomComponent(sbom_id=sbom.id, component_id=component.id))
+        db.flush()
+
+        page = list_components(name="fast", ecosystem="pypi", db=db, _=None)
+        usage = list_component_applications(component.id, db=db, _=None)
+
+        assert page.items[0]["purl"] == "pkg:pypi/fastapi@0.111.0"
+        assert page.items[0]["application_count"] == 1
+        assert page.items[0]["applications"][0]["application_name"] == "demo"
+        assert usage[0].application_id == app.id
+
+
+def test_list_vulnerabilities_filters_and_counts_open_impact() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        open_finding = create_finding(db, app, severity=Severity.critical, risk_score=9.8)
+        create_finding(db, app, severity=Severity.critical, status=FindingStatus.resolved, risk_score=9.1)
+        vulnerability = db.get(Vulnerability, open_finding.vulnerability_id)
+
+        page = list_vulnerabilities(external_id=vulnerability.external_id, severity=Severity.critical, db=db, _=None)
+
+        assert page.items[0]["external_id"] == vulnerability.external_id
+        assert page.items[0]["open_finding_count"] == 1
+        assert page.items[0]["affected_application_count"] == 1
+
+
+def test_list_remediation_actions_returns_context() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="queued",
+            provider="github",
+            metadata_json={},
+        )
+        db.add(action)
+        db.flush()
+
+        page = list_remediation_actions(status="queued", action_type="github_issue", db=db, _=None)
+
+        assert page.items[0]["id"] == str(action.id)
+        assert page.items[0]["finding_severity"] == "high"
+        assert page.items[0]["application_name"] == "demo"
+
+
+def test_enqueue_github_issue_endpoint_queues_and_suppresses_duplicate() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical)
+
+        first = enqueue_github_issue_endpoint(finding.id, db=db, _=None)
+        second = enqueue_github_issue_endpoint(finding.id, db=db, _=None)
+
+        assert first["id"] == second["id"]
+        assert first["status"] == "queued"
+        assert len(list(db.scalars(select(RemediationAction)))) == 1
+
+
+def test_enqueue_github_issue_endpoint_rejects_ineligible_finding() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.medium)
+
+        with pytest.raises(HTTPException) as exc:
+            enqueue_github_issue_endpoint(finding.id, db=db, _=None)
+
+        assert exc.value.status_code == 409
