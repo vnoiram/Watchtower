@@ -224,6 +224,58 @@ class RemediationActionOut(BaseModel):
     component_name: str | None = None
 
 
+class RemediationCandidateOut(BaseModel):
+    finding_id: UUID
+    finding_status: models.FindingStatus
+    severity: models.Severity
+    risk_score: float
+    fixed_version: str
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    component_id: UUID
+    component_name: str
+    component_version: str | None
+    vulnerability_id: UUID
+    vulnerability_external_id: str
+    vulnerability_title: str | None
+    created_at: datetime
+
+
+class GitHubIssueActionOut(RemediationActionOut):
+    error: str | None = None
+    close_error: str | None = None
+    github_issue_url: str | None = None
+
+
+class RemediationValidationOut(RemediationActionOut):
+    validation_status: str
+    validation_scan_id: UUID | None = None
+    validation_scan_status: models.ScanStatus | None = None
+    validation_error: str | None = None
+
+
+class IssueClosureOut(BaseModel):
+    finding_id: UUID
+    finding_status: models.FindingStatus
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    vulnerability_external_id: str
+    component_name: str
+    action_id: UUID | None = None
+    provider_id: str | None = None
+    url: str | None = None
+    close_state: str
+    close_error: str | None = None
+    github_issue_closed_at: str | None = None
+
+
 class VexCreate(BaseModel):
     finding_id: UUID
     status: models.VexStatus
@@ -323,6 +375,25 @@ class ApplicationMaintenanceOut(BaseModel):
     reasons: list[str] = Field(default_factory=list)
 
 
+class JobHealthOut(BaseModel):
+    id: UUID
+    job_type: models.JobType
+    status: models.JobStatus
+    repository_id: UUID | None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    application_id: UUID | None
+    application_name: str | None = None
+    attempts: int
+    max_attempts: int
+    run_after: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    last_error: str | None
+    created_at: datetime
+    health_reason: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -333,3 +404,4 @@ class DashboardSummary(BaseModel):
     expired_vex: int
     sbom_coverage_percent: float
     missing_active_sbom: int
+    unhealthy_jobs: int
