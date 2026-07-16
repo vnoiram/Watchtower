@@ -181,6 +181,7 @@ const remediationEvidenceChain = document.querySelector("#remediation-evidence-c
 const ownerHandoff = document.querySelector("#owner-handoff");
 const repositoryInventoryAssurance = document.querySelector("#repository-inventory-assurance");
 const dailyScanExecution = document.querySelector("#daily-scan-execution");
+const criticalHighTriage = document.querySelector("#critical-high-triage");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -337,6 +338,7 @@ function renderMetrics(summary) {
     ["owner_handoff_gap_items", "Owner handoff", "warn"],
     ["repository_inventory_assurance_gap_items", "Repo assurance", "warn"],
     ["daily_scan_execution_gap_items", "Daily scan exec", "warn"],
+    ["critical_high_triage_gap_items", "Critical/high triage", "danger"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -2406,6 +2408,18 @@ function renderDailyScanExecution(page) {
     : `<tr><td colspan="5">No daily scan execution gaps</td></tr>`;
 }
 
+function renderCriticalHighTriage(page) {
+  const rows = page.items || [];
+  criticalHighTriage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml((item.missing || []).join(", ") || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No critical/high triage gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2588,6 +2602,7 @@ async function refresh() {
   ownerHandoff.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   repositoryInventoryAssurance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   dailyScanExecution.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  criticalHighTriage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2772,6 +2787,7 @@ async function refresh() {
       ownerHandoffPage,
       repositoryInventoryAssurancePage,
       dailyScanExecutionPage,
+      criticalHighTriagePage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2955,6 +2971,7 @@ async function refresh() {
       loadJson("/governance/owner-handoff?limit=10"),
       loadJson("/rollout/repository-inventory-assurance?limit=10"),
       loadJson("/scans/daily-execution-evidence?evidence_present=false&limit=10"),
+      loadJson("/findings/critical-high-triage?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -3137,6 +3154,7 @@ async function refresh() {
     renderOwnerHandoff(ownerHandoffPage);
     renderRepositoryInventoryAssurance(repositoryInventoryAssurancePage);
     renderDailyScanExecution(dailyScanExecutionPage);
+    renderCriticalHighTriage(criticalHighTriagePage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -3319,6 +3337,7 @@ async function refresh() {
     ownerHandoff.innerHTML = `<tr><td colspan="5">Unable to load owner handoff readiness</td></tr>`;
     repositoryInventoryAssurance.innerHTML = `<tr><td colspan="5">Unable to load repository inventory assurance</td></tr>`;
     dailyScanExecution.innerHTML = `<tr><td colspan="5">Unable to load daily scan execution</td></tr>`;
+    criticalHighTriage.innerHTML = `<tr><td colspan="5">Unable to load critical/high triage</td></tr>`;
   }
 }
 

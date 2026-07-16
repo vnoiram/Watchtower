@@ -17,6 +17,7 @@ from api.app.services.remediation import (
     github_issue_action_exists,
     should_create_github_issue,
 )
+from api.app.routers.sla import is_sla_breached
 
 router = APIRouter(prefix="/findings", tags=["findings"])
 
@@ -200,6 +201,25 @@ def list_finding_traceability(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/critical-high-triage", response_model=schemas.CursorPage)
+def list_critical_high_triage(
+    limit: int = 50,
+    severity: models.Severity | None = None,
+    status: models.FindingStatus | None = None,
+    missing: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = critical_high_triage_items(db)
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if status:
+        items = [item for item in items if item["status"] == status.value]
+    if missing:
+        items = [item for item in items if missing in item["missing"]]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.post("/{finding_id}/github-issue", response_model=schemas.RemediationActionOut)
 def enqueue_github_issue(
     finding_id: UUID,
@@ -244,6 +264,10 @@ def finding_traceability_gap_count(db: Session) -> int:
     return len(finding_traceability_items(db))
 
 
+def critical_high_triage_gap_count(db: Session) -> int:
+    return sum(1 for item in critical_high_triage_items(db) if item["missing"] or item["sla_breached"])
+
+
 def finding_traceability_items(db: Session) -> list[dict]:
     notifications = _sent_notifications_by_finding(db)
     actions = _actions_by_finding(db)
@@ -270,6 +294,41 @@ def finding_traceability_items(db: Session) -> list[dict]:
             items.append(_traceability_item("missing_validation_scan", finding, application, repository, notification, issue_action, validation_scan, "Remediation action has no validation scan evidence"))
         if finding.status == models.FindingStatus.resolved and not _has_closure_evidence(finding_actions):
             items.append(_traceability_item("missing_closure_evidence", finding, application, repository, notification, issue_action, validation_scan, "Resolved finding has no issue closure evidence"))
+    return items
+
+
+def critical_high_triage_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    notifications = _sent_notifications_by_finding(db)
+    actions = _actions_by_finding(db)
+    vex_by_finding = _vex_by_finding(db)
+    stmt = (
+        select(models.Finding, models.Application, models.Repository)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(models.Finding.severity.in_([models.Severity.critical, models.Severity.high]))
+        .order_by(models.Finding.created_at.asc(), models.Finding.id.asc())
+    )
+    items = []
+    for finding, application, repository in db.execute(stmt):
+        finding_actions = actions.get(finding.id, [])
+        notification = notifications.get(finding.id)
+        action = next((candidate for candidate in finding_actions if _has_issue_or_pr([candidate])), None)
+        vex = vex_by_finding.get(finding.id)
+        missing = []
+        if not application.owner:
+            missing.append("owner")
+        if finding.status == models.FindingStatus.open:
+            if notification is None:
+                missing.append("notification")
+            if action is None:
+                missing.append("issue_or_pr")
+            if vex is None:
+                missing.append("vex_or_exception")
+        breached = finding.status == models.FindingStatus.open and is_sla_breached(finding, now)
+        if breached:
+            missing.append("sla")
+        items.append(_critical_high_triage_item(finding, application, repository, notification, action, vex, breached, missing))
     return items
 
 
@@ -579,6 +638,14 @@ def _sent_notifications_by_finding(db: Session) -> dict[UUID, models.Notificatio
     return notifications
 
 
+def _vex_by_finding(db: Session) -> dict[UUID, models.VexStatement]:
+    statements = {}
+    stmt = select(models.VexStatement).order_by(models.VexStatement.updated_at.desc(), models.VexStatement.id.desc())
+    for vex in db.scalars(stmt):
+        statements.setdefault(vex.finding_id, vex)
+    return statements
+
+
 def _has_issue_or_pr(actions: list[models.RemediationAction]) -> bool:
     for action in actions:
         metadata = action.metadata_json or {}
@@ -683,6 +750,36 @@ def _traceability_item(
         validation_scan_id=validation_scan.id if validation_scan else None,
         detail=detail,
         updated_at=finding.updated_at,
+    ).model_dump(mode="json")
+
+
+def _critical_high_triage_item(
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    notification: models.Notification | None,
+    action: models.RemediationAction | None,
+    vex: models.VexStatement | None,
+    sla_breached: bool,
+    missing: list[str],
+) -> dict:
+    return schemas.CriticalHighTriageOut(
+        finding_id=finding.id,
+        severity=finding.severity,
+        status=finding.status,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        owner=application.owner,
+        notification_id=notification.id if notification else None,
+        remediation_action_id=action.id if action else None,
+        vex_id=vex.id if vex else None,
+        sla_breached=sla_breached,
+        missing=missing,
+        detail="Critical/high triage evidence is complete" if not missing else f"Missing {', '.join(missing)}",
+        created_at=finding.created_at,
     ).model_dump(mode="json")
 
 
