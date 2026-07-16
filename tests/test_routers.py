@@ -97,6 +97,9 @@ from api.app.routers.operations import (
     backup_readiness,
     control_evidence,
     daily_operations,
+    list_completion_readiness,
+    list_e2e_evidence,
+    list_failure_drills,
     list_incident_readiness,
     list_observability,
     list_backup_evidence,
@@ -104,6 +107,7 @@ from api.app.routers.operations import (
     list_failure_signals,
     list_manual_actions,
     list_restore_evidence,
+    list_runbook_evidence,
     list_scheduler_drift,
     worker_hardening,
     monthly_review,
@@ -149,6 +153,7 @@ from api.app.routers.rollout import (
     list_application_readiness,
     list_initial_inventory,
     list_mvp_target_readiness,
+    list_repository_onboarding_proof,
     list_repository_inventory_gaps,
     list_repository_rollout,
     list_rollout_gaps,
@@ -5255,6 +5260,132 @@ def test_incident_readiness_reports_unhandled_and_handled_incidents() -> None:
         assert rate_limit.items[0]["has_response_audit"] is True
         assert any(item["status"] == "warn" for item in page.items)
         assert summary.incident_readiness_gap_items >= 1
+
+
+def test_completion_readiness_reports_project_completion_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "completion")
+        repo.visibility = "private"
+        repo.default_branch = "main"
+        repo.primary_language = "Python"
+        app = create_application(db, repo)
+        app.owner = "team"
+        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add(scan)
+        db.flush()
+        db.add_all(
+            [
+                Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="completion", storage_key="completion.json", active=True, sbom_kind="source"),
+                AuditLog(actor="ops", role="admin", action="restore.verify", resource_type="backup", metadata_json={"restore": True}),
+            ]
+        )
+        db.commit()
+        settings = Settings(minio_endpoint="http://minio", minio_access_key="access", minio_secret_key="secret", minio_bucket="watchtower")
+
+        page = list_completion_readiness(db=db, settings=settings, _=None)
+        filtered = list_completion_readiness(check="repository_inventory_54", status="warn", db=db, settings=settings, _=None)
+        summary = dashboard_summary(db=db, settings=settings, _=None)
+
+        by_check = {item["check"]: item for item in page.items}
+        assert by_check["active_owner"]["status"] == "ok"
+        assert by_check["active_source_sbom_90"]["status"] == "ok"
+        assert by_check["backup_restore_evidence"]["status"] == "ok"
+        assert filtered.items[0]["check"] == "repository_inventory_54"
+        assert summary.completion_readiness_gap_items >= 1
+
+
+def test_e2e_evidence_reports_stage_gaps_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "e2e")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical)
+        db.add(Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(hours=1)))
+        db.commit()
+
+        page = list_e2e_evidence(db=db, _=None)
+        filtered = list_e2e_evidence(stage="notification", status="gap", severity=Severity.critical, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert any(item["stage"] == "scan" and item["status"] == "ok" for item in page.items)
+        assert filtered.items[0]["finding_id"] == str(finding.id)
+        assert filtered.items[0]["stage"] == "notification"
+        assert summary.e2e_evidence_gap_items >= 1
+
+
+def test_failure_drills_reports_observed_and_missing_drills() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        db.add_all(
+            [
+                Job(job_type=JobType.repository_sync, status=JobStatus.failed, last_error="GitHub API rate limit 429"),
+                AuditLog(actor="ops", role="admin", action="failure.drill", resource_type="runbook", metadata_json={"drill": "duplicate webhook"}),
+            ]
+        )
+        db.commit()
+
+        page = list_failure_drills(db=db, _=None)
+        filtered = list_failure_drills(drill_type="github_rate_limit", status="ok", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        by_type = {item["drill_type"]: item for item in page.items}
+        assert by_type["github_rate_limit"]["status"] == "ok"
+        assert by_type["duplicate_webhook"]["status"] == "ok"
+        assert by_type["storage_failure"]["status"] == "gap"
+        assert filtered.items[0]["drill_type"] == "github_rate_limit"
+        assert summary.failure_drill_gap_items >= 1
+
+
+def test_repository_onboarding_proof_reports_ready_and_gap_repositories() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        ready_repo = create_repository(db, "ready-onboarding")
+        ready_repo.visibility = "private"
+        ready_repo.default_branch = "main"
+        ready_repo.primary_language = "Python"
+        ready_repo.topics = ["mvp"]
+        ready_app = create_application(db, ready_repo)
+        ready_scan = Scan(application_id=ready_app.id, status=ScanStatus.succeeded)
+        create_repository(db, "gap-onboarding")
+        db.add(ready_scan)
+        db.flush()
+        db.add(Sbom(application_id=ready_app.id, scan_id=ready_scan.id, sbom_digest="ready", storage_key="ready.json", active=True, sbom_kind="source"))
+        db.commit()
+
+        page = list_repository_onboarding_proof(db=db, _=None)
+        gaps = list_repository_onboarding_proof(ready=False, provider=RepositoryProvider.github, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        by_name = {item["repository_name"]: item for item in page.items}
+        assert by_name["ready-onboarding"]["ready"] is True
+        assert by_name["gap-onboarding"]["ready"] is False
+        assert "visibility" in by_name["gap-onboarding"]["missing_checks"]
+        assert len(gaps.items) == 1
+        assert summary.repository_onboarding_gap_items == 1
+
+
+def test_runbook_evidence_reports_cadence_gaps_and_filters() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        db.add_all(
+            [
+                Job(job_type=JobType.repository_sync, status=JobStatus.succeeded, created_at=now_utc()),
+                Job(job_type=JobType.scan, status=JobStatus.succeeded, created_at=now_utc()),
+                AuditLog(actor="ops", role="admin", action="medium review", resource_type="runbook", metadata_json={"cadence": "weekly"}, created_at=now_utc()),
+            ]
+        )
+        db.commit()
+
+        page = list_runbook_evidence(db=db, _=None)
+        filtered = list_runbook_evidence(cadence="weekly", status="ok", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        by_check = {item["check"]: item for item in page.items}
+        assert by_check["repository_sync"]["status"] == "ok"
+        assert by_check["scan"]["status"] == "ok"
+        assert any(item["check"] == "medium_review" for item in filtered.items)
+        assert summary.runbook_evidence_gap_items >= 1
 
 
 def test_storage_encryption_posture_reports_tls_metadata_and_backup_audit() -> None:

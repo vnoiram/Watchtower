@@ -2207,6 +2207,68 @@ class IncidentReadinessOut(BaseModel):
     created_at: datetime
 
 
+class CompletionReadinessOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    target: float | int | None = None
+    percent: float | None = None
+    detail: str
+
+
+class E2eEvidenceOut(BaseModel):
+    stage: str
+    status: str
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    evidence_source: str | None = None
+    evidence_id: str | None = None
+    detail: str
+    created_at: datetime
+
+
+class FailureDrillOut(BaseModel):
+    drill_type: str
+    status: str
+    evidence_source: str | None = None
+    evidence_id: str | None = None
+    detail: str
+    observed_at: datetime | None = None
+
+
+class RepositoryOnboardingProofOut(BaseModel):
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider: models.RepositoryProvider
+    ready: bool
+    visibility: str | None = None
+    default_branch: str | None = None
+    primary_language: str | None = None
+    topic_count: int
+    application_count: int
+    active_source_sbom_count: int
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    open_critical_high_count: int
+    missing_checks: list[str] = Field(default_factory=list)
+    detail: str
+
+
+class RunbookEvidenceOut(BaseModel):
+    cadence: str
+    check: str
+    status: str
+    count: int
+    detail: str
+    latest_evidence_at: datetime | None = None
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2284,3 +2346,8 @@ class DashboardSummary(BaseModel):
     auth_deployment_gap_items: int
     observability_gap_items: int
     incident_readiness_gap_items: int
+    completion_readiness_gap_items: int
+    e2e_evidence_gap_items: int
+    failure_drill_gap_items: int
+    repository_onboarding_gap_items: int
+    runbook_evidence_gap_items: int

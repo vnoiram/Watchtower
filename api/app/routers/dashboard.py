@@ -25,8 +25,12 @@ from api.app.routers.kpis import mvp_target_breach_count, notification_failure_c
 from api.app.routers.notifications import notification_slo_breach_count
 from api.app.routers.findings import medium_review_count, risk_score_gap_count
 from api.app.routers.operations import (
+    completion_readiness_gap_count,
+    e2e_evidence_gap_count,
+    failure_drill_gap_count,
     incident_readiness_gap_count,
     observability_gap_count,
+    runbook_evidence_gap_count,
     control_evidence_count,
     backup_evidence_count,
     failure_signal_count,
@@ -53,6 +57,7 @@ from api.app.routers.remediation import (
 )
 from api.app.routers.rollout import (
     application_readiness_count,
+    repository_onboarding_gap_count,
     repository_inventory_gap_count,
     rollout_gap_count,
     rollout_wave_gap_count,
@@ -178,6 +183,11 @@ def dashboard_summary(
     auth_deployment_gap_items = auth_deployment_gap_count(db, settings)
     observability_gap_items = observability_gap_count(db)
     incident_readiness_gap_items = incident_readiness_gap_count(db)
+    completion_readiness_gap_items = completion_readiness_gap_count(db, settings)
+    e2e_evidence_gap_items = e2e_evidence_gap_count(db)
+    failure_drill_gap_items = failure_drill_gap_count(db)
+    repository_onboarding_gap_items = repository_onboarding_gap_count(db)
+    runbook_evidence_gap_items = runbook_evidence_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -255,4 +265,9 @@ def dashboard_summary(
         auth_deployment_gap_items=auth_deployment_gap_items,
         observability_gap_items=observability_gap_items,
         incident_readiness_gap_items=incident_readiness_gap_items,
+        completion_readiness_gap_items=completion_readiness_gap_items,
+        e2e_evidence_gap_items=e2e_evidence_gap_items,
+        failure_drill_gap_items=failure_drill_gap_items,
+        repository_onboarding_gap_items=repository_onboarding_gap_items,
+        runbook_evidence_gap_items=runbook_evidence_gap_items,
     )

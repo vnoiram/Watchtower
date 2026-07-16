@@ -149,6 +149,11 @@ const githubSyncLag = document.querySelector("#github-sync-lag");
 const credentialFailures = document.querySelector("#credential-failures");
 const observability = document.querySelector("#observability");
 const incidentReadiness = document.querySelector("#incident-readiness");
+const completionReadiness = document.querySelector("#completion-readiness");
+const e2eEvidence = document.querySelector("#e2e-evidence");
+const failureDrills = document.querySelector("#failure-drills");
+const repositoryOnboarding = document.querySelector("#repository-onboarding");
+const runbookEvidence = document.querySelector("#runbook-evidence");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -273,6 +278,11 @@ function renderMetrics(summary) {
     ["auth_deployment_gap_items", "Auth deployment", "warn"],
     ["observability_gap_items", "Observability", "warn"],
     ["incident_readiness_gap_items", "Incident readiness", "warn"],
+    ["completion_readiness_gap_items", "Completion", "warn"],
+    ["e2e_evidence_gap_items", "E2E evidence", "warn"],
+    ["failure_drill_gap_items", "Failure drills", "warn"],
+    ["repository_onboarding_gap_items", "Onboarding", "warn"],
+    ["runbook_evidence_gap_items", "Runbooks", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -1982,6 +1992,42 @@ function renderIncidentReadiness(page) {
     : `<tr><td colspan="5">No incident readiness gaps</td></tr>`;
 }
 
+function renderE2eEvidence(page) {
+  const rows = page.items || [];
+  e2eEvidence.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.stage)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No E2E evidence gaps</td></tr>`;
+}
+
+function renderFailureDrills(page) {
+  const rows = page.items || [];
+  failureDrills.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.drill_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.evidence_source || "-")}</td><td>${escapeHtml(item.evidence_id || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No failure drill gaps</td></tr>`;
+}
+
+function renderRepositoryOnboarding(page) {
+  const rows = page.items || [];
+  repositoryOnboarding.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.ready ? "ready" : "gap")}</td><td>${escapeHtml(item.application_count)}</td><td>${escapeHtml(item.active_source_sbom_count)}</td><td>${escapeHtml((item.missing_checks || []).join(", ") || "complete")}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No repository onboarding gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2132,6 +2178,11 @@ async function refresh() {
   credentialFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   observability.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   incidentReadiness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  completionReadiness.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  e2eEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  failureDrills.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  repositoryOnboarding.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  runbookEvidence.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2284,6 +2335,11 @@ async function refresh() {
       credentialFailurePage,
       observabilityPage,
       incidentReadinessPage,
+      completionReadinessPage,
+      e2eEvidencePage,
+      failureDrillPage,
+      repositoryOnboardingPage,
+      runbookEvidencePage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2435,6 +2491,11 @@ async function refresh() {
       loadJson("/operations/credential-failures?limit=10"),
       loadJson("/operations/observability"),
       loadJson("/operations/incident-readiness?limit=10"),
+      loadJson("/operations/completion-readiness"),
+      loadJson("/operations/e2e-evidence?status=gap&limit=10"),
+      loadJson("/operations/failure-drills?limit=10"),
+      loadJson("/rollout/onboarding-proof?ready=false&limit=10"),
+      loadJson("/operations/runbook-evidence"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -2585,6 +2646,11 @@ async function refresh() {
     renderCredentialFailures(credentialFailurePage);
     renderPosture(observability, observabilityPage.items || [], "No observability gaps");
     renderIncidentReadiness(incidentReadinessPage);
+    renderPosture(completionReadiness, completionReadinessPage.items || [], "No completion readiness gaps");
+    renderE2eEvidence(e2eEvidencePage);
+    renderFailureDrills(failureDrillPage);
+    renderRepositoryOnboarding(repositoryOnboardingPage);
+    renderPosture(runbookEvidence, runbookEvidencePage.items || [], "No runbook evidence gaps");
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -2735,6 +2801,11 @@ async function refresh() {
     credentialFailures.innerHTML = `<tr><td colspan="5">Unable to load credential failures</td></tr>`;
     observability.innerHTML = `<tr><td colspan="4">Unable to load observability</td></tr>`;
     incidentReadiness.innerHTML = `<tr><td colspan="5">Unable to load incident readiness</td></tr>`;
+    completionReadiness.innerHTML = `<tr><td colspan="4">Unable to load completion readiness</td></tr>`;
+    e2eEvidence.innerHTML = `<tr><td colspan="5">Unable to load E2E evidence</td></tr>`;
+    failureDrills.innerHTML = `<tr><td colspan="5">Unable to load failure drills</td></tr>`;
+    repositoryOnboarding.innerHTML = `<tr><td colspan="5">Unable to load repository onboarding</td></tr>`;
+    runbookEvidence.innerHTML = `<tr><td colspan="4">Unable to load runbook evidence</td></tr>`;
   }
 }
 

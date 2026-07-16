@@ -178,6 +178,22 @@ def list_repository_inventory_gaps(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/onboarding-proof", response_model=schemas.CursorPage)
+def list_repository_onboarding_proof(
+    limit: int = 50,
+    ready: bool | None = None,
+    provider: models.RepositoryProvider | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = repository_onboarding_proof_items(db)
+    if ready is not None:
+        items = [item for item in items if item["ready"] is ready]
+    if provider:
+        items = [item for item in items if item["provider"] == provider.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def rollout_gap_count(db: Session) -> int:
     return len(rollout_gap_items(db))
 
@@ -192,6 +208,10 @@ def rollout_wave_gap_count(db: Session) -> int:
 
 def repository_inventory_gap_count(db: Session) -> int:
     return sum(item["count"] for item in repository_inventory_gap_items(db))
+
+
+def repository_onboarding_gap_count(db: Session) -> int:
+    return sum(1 for item in repository_onboarding_proof_items(db) if not item["ready"])
 
 
 def rollout_baseline_items(db: Session) -> list[schemas.RolloutBaselineOut]:
@@ -251,6 +271,57 @@ def repository_inventory_gap_items(db: Session) -> list[dict]:
             items.append(_inventory_gap("missing_default_branch", context, "Repository default branch is missing"))
         if not repository.primary_language:
             items.append(_inventory_gap("missing_primary_language", context, "Repository primary language is missing"))
+    return items
+
+
+def repository_onboarding_proof_items(db: Session) -> list[dict]:
+    items = []
+    repositories = _repositories_for_rollout(db)
+    for repository in repositories:
+        applications = list(db.scalars(select(models.Application).where(models.Application.repository_id == repository.id)))
+        application_ids = [application.id for application in applications]
+        active_sbom_app_ids = _active_sbom_application_ids(db, application_ids)
+        scans = _repository_scans(db, repository.id)
+        latest_scan = scans[0] if scans else None
+        open_count = _open_critical_high_count(db, application_ids)
+        missing = []
+        if not repository.visibility:
+            missing.append("visibility")
+        if not repository.default_branch:
+            missing.append("default_branch")
+        if not repository.primary_language:
+            missing.append("primary_language")
+        if not repository.topics:
+            missing.append("topics")
+        if not applications:
+            missing.append("applications")
+        if applications and len(active_sbom_app_ids) < len(applications):
+            missing.append("active_source_sbom")
+        if latest_scan is None:
+            missing.append("latest_scan")
+        if open_count:
+            missing.append("critical_high_triage")
+        ready = not missing
+        items.append(
+            schemas.RepositoryOnboardingProofOut(
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                provider=repository.provider,
+                ready=ready,
+                visibility=repository.visibility,
+                default_branch=repository.default_branch,
+                primary_language=repository.primary_language,
+                topic_count=len(repository.topics or []),
+                application_count=len(applications),
+                active_source_sbom_count=len(active_sbom_app_ids),
+                latest_scan_status=latest_scan.status if latest_scan else None,
+                latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+                open_critical_high_count=open_count,
+                missing_checks=missing,
+                detail="Repository onboarding proof is complete" if ready else f"Missing {', '.join(missing)}",
+            ).model_dump(mode="json")
+        )
     return items
 
 
