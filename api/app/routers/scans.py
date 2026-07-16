@@ -120,8 +120,31 @@ def list_scan_format_compliance(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/freshness-buckets", response_model=schemas.CursorPage)
+def list_scan_freshness_buckets(
+    limit: int = 50,
+    bucket: str | None = None,
+    lifecycle: models.Lifecycle | None = None,
+    repository_id: UUID | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = scan_freshness_bucket_items(db)
+    if bucket:
+        items = [item for item in items if item["bucket"] == bucket]
+    if lifecycle:
+        items = [item for item in items if item["lifecycle"] == lifecycle.value]
+    if repository_id:
+        items = [item for item in items if item["repository_id"] == str(repository_id)]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def daily_scan_slo_breach_count(db: Session) -> int:
     return sum(1 for item in daily_scan_slo_items(db) if item["breached"])
+
+
+def scan_freshness_gap_count(db: Session) -> int:
+    return sum(1 for item in scan_freshness_bucket_items(db) if item["gap"])
 
 
 def raw_scan_artifact_gap_count(db: Session) -> int:
@@ -307,6 +330,42 @@ def daily_scan_slo_items(db: Session) -> list[dict]:
     return items
 
 
+def scan_freshness_bucket_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    rows = list(
+        db.execute(
+            select(models.Application, models.Repository)
+            .join(models.Repository, models.Application.repository_id == models.Repository.id)
+            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        )
+    )
+    latest_scans = _latest_scans_by_application(db, [application.id for application, _ in rows])
+    items = []
+    for application, repository in rows:
+        latest_scan = latest_scans.get(application.id)
+        bucket, age_days = _freshness_bucket(latest_scan, now)
+        gap = application.lifecycle != models.Lifecycle.archived and bucket in {"never", "gt_30d"}
+        detail = "Application has no scan record" if latest_scan is None else f"Latest scan is in freshness bucket {bucket}"
+        items.append(
+            schemas.ScanFreshnessBucketOut(
+                bucket=bucket,
+                gap=gap,
+                application_id=application.id,
+                application_name=application.name,
+                lifecycle=application.lifecycle,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                latest_scan_id=latest_scan.id if latest_scan else None,
+                latest_scan_status=latest_scan.status if latest_scan else None,
+                latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+                age_days=age_days,
+                detail=detail,
+            ).model_dump(mode="json")
+        )
+    return items
+
+
 def scan_evidence_quality_items(db: Session) -> list[dict]:
     sbom_scan_ids = set(db.scalars(select(models.Sbom.scan_id)))
     finding_scan_ids = {
@@ -375,6 +434,20 @@ def _latest_scheduled_scans_by_application(db: Session, application_ids: list) -
     for scan in scans:
         by_application.setdefault(scan.application_id, scan)
     return by_application
+
+
+def _freshness_bucket(scan: models.Scan | None, now: datetime) -> tuple[str, int | None]:
+    if scan is None:
+        return "never", None
+    comparable_now = _matching_datetime(now, scan.created_at)
+    age_days = max((comparable_now - scan.created_at).days, 0)
+    if age_days < 1:
+        return "lt_24h", age_days
+    if age_days <= 7:
+        return "1_7d", age_days
+    if age_days <= 30:
+        return "8_30d", age_days
+    return "gt_30d", age_days
 
 
 def _matching_datetime(reference: datetime, value: datetime) -> datetime:

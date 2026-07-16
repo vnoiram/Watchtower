@@ -8,6 +8,7 @@ from api.app import models, schemas
 from api.app.config import Settings, get_settings
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
+from api.app.routers.audit import audit_action_gap_count
 from api.app.routers.auto_merge import automation_guardrail_count
 from api.app.routers.artifacts import artifact_provenance_gap_count, container_coverage_count
 from api.app.routers.application_detection import application_input_coverage_count, container_input_coverage_count
@@ -20,7 +21,7 @@ from api.app.routers.isolated_lane import (
     isolated_scan_health_count,
 )
 from api.app.routers.job_health import job_health_reason
-from api.app.routers.jobs import job_concurrency_risk_count
+from api.app.routers.jobs import job_concurrency_risk_count, job_retry_gap_count
 from api.app.routers.kpis import mvp_target_breach_count, notification_failure_count, scan_failure_rate_percent
 from api.app.routers.notifications import notification_slo_breach_count
 from api.app.routers.findings import medium_review_count, risk_score_gap_count
@@ -31,6 +32,7 @@ from api.app.routers.operations import (
     idempotency_gap_count,
     incident_readiness_gap_count,
     observability_gap_count,
+    review_calendar_due_count,
     runbook_evidence_gap_count,
     worker_cleanup_gap_count,
     control_evidence_count,
@@ -53,6 +55,7 @@ from api.app.routers.remediation import (
     issue_slo_breach_count,
     pr_ci_failure_count,
     pr_staleness_count,
+    provider_sync_gap_count,
     remediation_coverage_count,
     remediation_priority_count,
     stale_remediation_count,
@@ -66,7 +69,7 @@ from api.app.routers.rollout import (
 )
 from api.app.routers.repository_sync import import_failure_count
 from api.app.routers.repositories import repository_classification_gap_count
-from api.app.routers.scans import daily_scan_slo_breach_count, raw_scan_artifact_gap_count, scan_format_gap_count
+from api.app.routers.scans import daily_scan_slo_breach_count, raw_scan_artifact_gap_count, scan_format_gap_count, scan_freshness_gap_count
 from api.app.routers.scanners import scanner_database_freshness_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import (
@@ -199,6 +202,11 @@ def dashboard_summary(
     worker_cleanup_gap_items = worker_cleanup_gap_count(db)
     idempotency_gap_items = idempotency_gap_count(db)
     vulnerability_provenance_gap_items = vulnerability_provenance_gap_count(db)
+    job_retry_gap_items = job_retry_gap_count(db)
+    scan_freshness_gap_items = scan_freshness_gap_count(db)
+    provider_sync_gap_items = provider_sync_gap_count(db)
+    audit_action_gap_items = audit_action_gap_count(db)
+    review_calendar_due_items = review_calendar_due_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -286,4 +294,9 @@ def dashboard_summary(
         worker_cleanup_gap_items=worker_cleanup_gap_items,
         idempotency_gap_items=idempotency_gap_items,
         vulnerability_provenance_gap_items=vulnerability_provenance_gap_items,
+        job_retry_gap_items=job_retry_gap_items,
+        scan_freshness_gap_items=scan_freshness_gap_items,
+        provider_sync_gap_items=provider_sync_gap_items,
+        audit_action_gap_items=audit_action_gap_items,
+        review_calendar_due_items=review_calendar_due_items,
     )

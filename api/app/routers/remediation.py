@@ -418,6 +418,25 @@ def list_pr_ci_failures(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/provider-sync", response_model=schemas.CursorPage)
+def list_provider_sync_evidence(
+    limit: int = 50,
+    gap_type: str | None = None,
+    provider: str | None = None,
+    action_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = provider_sync_evidence_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if provider:
+        items = [item for item in items if item["provider"] == provider]
+    if action_type:
+        items = [item for item in items if item["action_type"] == action_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/issue-slo", response_model=schemas.CursorPage)
 def list_issue_creation_slo(
     limit: int = 50,
@@ -514,6 +533,10 @@ def pr_ci_failure_count(db: Session) -> int:
     return len(pr_ci_failure_items(db))
 
 
+def provider_sync_gap_count(db: Session) -> int:
+    return len(provider_sync_evidence_items(db))
+
+
 def issue_slo_breach_count(db: Session) -> int:
     return sum(1 for item in issue_creation_slo_items(db) if item["breached"])
 
@@ -579,6 +602,31 @@ def dependency_update_items(db: Session) -> list[dict]:
                 detail=str(metadata.get("update_kind") or metadata.get("dependency") or action.fixed_version or action.action_type),
             ).model_dump(mode="json")
         )
+    return items
+
+
+def provider_sync_evidence_items(db: Session) -> list[dict]:
+    items = []
+    stmt = _remediation_action_context_stmt().order_by(
+        models.RemediationAction.updated_at.desc(),
+        models.RemediationAction.id.asc(),
+    )
+    for action, finding, application, vulnerability, component in db.execute(stmt):
+        if action.action_type != ACTION_TYPE_GITHUB_ISSUE and not _has_pr_signal(action):
+            continue
+        repository = db.get(models.Repository, application.repository_id)
+        metadata = action.metadata_json or {}
+        url = _pr_url(action)
+        if not action.provider_id:
+            items.append(_provider_sync_item("missing_provider_id", action, finding, application, repository, "Remediation action has no external provider id"))
+        if not url:
+            items.append(_provider_sync_item("missing_url", action, finding, application, repository, "Remediation action has no external URL"))
+        if not any(key in metadata for key in ["provider_status", "github_state", "state", "last_synced_at", "synced_at"]):
+            items.append(_provider_sync_item("missing_status_sync", action, finding, application, repository, "Remediation action has no provider status sync metadata"))
+        if action.status in {"closed", "resolved", "merged"} and not any(key in metadata for key in ["github_issue_closed_at", "closed_at", "merged_at"]):
+            items.append(_provider_sync_item("missing_close_evidence", action, finding, application, repository, "Closed or merged action has no close evidence timestamp"))
+        if _has_pr_signal(action) and "ci_passed" not in metadata and "workflow_conclusion" not in metadata:
+            items.append(_provider_sync_item("missing_ci_metadata", action, finding, application, repository, "PR action has no CI metadata"))
     return items
 
 
@@ -1415,6 +1463,34 @@ def _has_dependency_update_signal(action: models.RemediationAction) -> bool:
         or metadata.get("update_kind")
         or "ci_passed" in metadata
     )
+
+
+def _provider_sync_item(
+    gap_type: str,
+    action: models.RemediationAction,
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    detail: str,
+) -> dict:
+    return schemas.ProviderSyncEvidenceOut(
+        gap_type=gap_type,
+        action_id=action.id,
+        action_type=action.action_type,
+        action_status=action.status,
+        provider=action.provider,
+        provider_id=action.provider_id,
+        url=_pr_url(action),
+        finding_id=finding.id,
+        severity=finding.severity,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        detail=detail,
+        updated_at=action.updated_at,
+    ).model_dump(mode="json")
 
 
 def _pr_staleness_item(

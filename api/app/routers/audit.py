@@ -59,6 +59,26 @@ def list_audit_evidence_gaps(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/action-coverage", response_model=schemas.CursorPage)
+def list_audit_action_coverage(
+    limit: int = 50,
+    resource_type: str | None = None,
+    gap_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = audit_action_coverage_items(db)
+    if resource_type:
+        items = [item for item in items if item["resource_type"] == resource_type]
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def audit_action_gap_count(db: Session) -> int:
+    return len(audit_action_coverage_items(db))
+
+
 def audit_review_items(db: Session) -> list[dict]:
     items = []
     stmt = select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())
@@ -79,6 +99,32 @@ def audit_review_items(db: Session) -> list[dict]:
                 created_at=audit_log.created_at,
             ).model_dump(mode="json")
         )
+    return items
+
+
+def audit_action_coverage_items(db: Session) -> list[dict]:
+    audit_logs = _audit_logs_by_resource(db)
+    items = []
+    for repository in db.scalars(select(models.Repository).order_by(models.Repository.created_at.desc(), models.Repository.id.asc())):
+        items.extend(_audit_action_gap_for_record(audit_logs, "repository", str(repository.id), "repository.create", "missing_create_audit", repository.created_at))
+    for application in db.scalars(select(models.Application).order_by(models.Application.created_at.desc(), models.Application.id.asc())):
+        items.extend(_audit_action_gap_for_record(audit_logs, "application", str(application.id), "application.create", "missing_create_audit", application.created_at))
+    for scan in db.scalars(select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.asc())):
+        items.extend(_audit_action_gap_for_record(audit_logs, "scan", str(scan.id), "scan.create", "missing_create_audit", scan.created_at))
+    for job in db.scalars(select(models.Job).order_by(models.Job.created_at.desc(), models.Job.id.asc())):
+        items.extend(_audit_action_gap_for_record(audit_logs, "job", str(job.id), "job.create", "missing_create_audit", job.created_at))
+    for finding in db.scalars(
+        select(models.Finding)
+        .where(models.Finding.status.in_([models.FindingStatus.accepted_risk, models.FindingStatus.false_positive, models.FindingStatus.resolved]))
+        .order_by(models.Finding.updated_at.desc(), models.Finding.id.asc())
+    ):
+        items.extend(_audit_action_gap_for_record(audit_logs, "finding", str(finding.id), "finding.review", "missing_review_audit", finding.updated_at))
+    for action in db.scalars(select(models.RemediationAction).order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc())):
+        items.extend(_audit_action_gap_for_record(audit_logs, "remediation_action", str(action.id), "remediation.action", "missing_update_audit", action.created_at))
+    for vex in db.scalars(select(models.VexStatement).order_by(models.VexStatement.created_at.desc(), models.VexStatement.id.asc())):
+        items.extend(_audit_action_gap_for_record(audit_logs, "vex", str(vex.id), "vex.create", "missing_review_audit", vex.created_at))
+    for notification in db.scalars(select(models.Notification).order_by(models.Notification.created_at.desc(), models.Notification.id.asc())):
+        items.extend(_audit_action_gap_for_record(audit_logs, "notification", str(notification.id), "notification.delivery", "missing_delivery_audit", notification.created_at))
     return items
 
 
@@ -159,6 +205,33 @@ def _audit_gap_for_record(
             )
         ]
     return []
+
+
+def _audit_action_gap_for_record(
+    audit_logs: dict[tuple[str, str], list[models.AuditLog]],
+    resource_type: str,
+    resource_id: str,
+    expected_action: str,
+    gap_type: str,
+    created_at,
+) -> list[dict]:
+    logs = audit_logs.get((resource_type, resource_id), [])
+    matching = next((log for log in logs if log.action == expected_action), None)
+    if matching:
+        return []
+    primary = logs[0] if logs else None
+    return [
+        schemas.AuditActionCoverageOut(
+            gap_type=gap_type,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            expected_action=expected_action,
+            audit_log_id=primary.id if primary else None,
+            actor=primary.actor if primary else None,
+            detail="Expected audit action is missing",
+            created_at=primary.created_at if primary else created_at,
+        ).model_dump(mode="json")
+    ]
 
 
 def _audit_gap(
