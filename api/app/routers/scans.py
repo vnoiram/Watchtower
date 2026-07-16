@@ -101,6 +101,22 @@ def list_daily_scan_slo(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/daily-execution-evidence", response_model=schemas.CursorPage)
+def list_daily_scan_execution_evidence(
+    limit: int = 50,
+    issue_type: str | None = None,
+    evidence_present: bool | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = daily_scan_execution_evidence_items(db)
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    if evidence_present is not None:
+        items = [item for item in items if item["evidence_present"] is evidence_present]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/format-compliance", response_model=schemas.CursorPage)
 def list_scan_format_compliance(
     limit: int = 50,
@@ -160,6 +176,10 @@ def list_scan_result_consistency(
 
 def daily_scan_slo_breach_count(db: Session) -> int:
     return sum(1 for item in daily_scan_slo_items(db) if item["breached"])
+
+
+def daily_scan_execution_gap_count(db: Session) -> int:
+    return sum(1 for item in daily_scan_execution_evidence_items(db) if not item["evidence_present"])
 
 
 def scan_freshness_gap_count(db: Session) -> int:
@@ -409,6 +429,45 @@ def daily_scan_slo_items(db: Session) -> list[dict]:
     return items
 
 
+def daily_scan_execution_evidence_items(db: Session) -> list[dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    rows = list(
+        db.execute(
+            select(models.Application, models.Repository)
+            .join(models.Repository, models.Application.repository_id == models.Repository.id)
+            .where(models.Application.lifecycle != models.Lifecycle.archived)
+            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        )
+    )
+    application_ids = [application.id for application, _ in rows]
+    latest_scans = _latest_scans_by_application(db, application_ids)
+    recent_jobs = _recent_scan_jobs_by_application(db, cutoff)
+    items = []
+    for application, repository in rows:
+        latest_scan = latest_scans.get(application.id)
+        recent_job = recent_jobs.get(application.id)
+        recent_scan = latest_scan is not None and latest_scan.created_at >= _matching_datetime(cutoff, latest_scan.created_at)
+        successful_recent_scan = recent_scan and latest_scan.status == models.ScanStatus.succeeded
+        evidence_present = successful_recent_scan and recent_job is not None
+        if latest_scan is None:
+            issue_type = "missing_scan"
+            detail = "Application has no scan evidence"
+        elif not recent_scan:
+            issue_type = "stale_scan"
+            detail = "Latest scan is older than 24 hours"
+        elif latest_scan.status != models.ScanStatus.succeeded:
+            issue_type = "scan_not_succeeded"
+            detail = "Latest scan in the last 24 hours did not succeed"
+        elif recent_job is None:
+            issue_type = "missing_scan_job"
+            detail = "Recent scan has no scan job evidence"
+        else:
+            issue_type = "complete"
+            detail = "Daily scan execution evidence is complete"
+        items.append(_daily_execution_item(issue_type, application, repository, latest_scan, recent_job, evidence_present, detail))
+    return items
+
+
 def scan_freshness_bucket_items(db: Session) -> list[dict]:
     now = datetime.now(timezone.utc)
     rows = list(
@@ -515,6 +574,24 @@ def _latest_scheduled_scans_by_application(db: Session, application_ids: list) -
     return by_application
 
 
+def _recent_scan_jobs_by_application(db: Session, cutoff: datetime) -> dict:
+    jobs = db.execute(
+        select(models.Job)
+        .where(models.Job.job_type == models.JobType.scan)
+        .order_by(models.Job.application_id.asc(), models.Job.created_at.desc(), models.Job.id.desc())
+    ).scalars()
+    by_application = {}
+    for job in jobs:
+        if job.application_id is None:
+            continue
+        recent = job.created_at >= _matching_datetime(cutoff, job.created_at) or (
+            job.completed_at is not None and job.completed_at >= _matching_datetime(cutoff, job.completed_at)
+        )
+        if recent:
+            by_application.setdefault(job.application_id, job)
+    return by_application
+
+
 def _freshness_bucket(scan: models.Scan | None, now: datetime) -> tuple[str, int | None]:
     if scan is None:
         return "never", None
@@ -556,6 +633,32 @@ def _scan_quality_item(
         repository_name=repository.name,
         detail=detail,
         created_at=scan.created_at,
+    ).model_dump(mode="json")
+
+
+def _daily_execution_item(
+    issue_type: str,
+    application: models.Application,
+    repository: models.Repository,
+    latest_scan: models.Scan | None,
+    recent_job: models.Job | None,
+    evidence_present: bool,
+    detail: str,
+) -> dict:
+    return schemas.DailyScanExecutionEvidenceOut(
+        issue_type=issue_type,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        latest_scan_id=latest_scan.id if latest_scan else None,
+        latest_scan_status=latest_scan.status if latest_scan else None,
+        latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+        recent_scan_job_id=recent_job.id if recent_job else None,
+        recent_scan_job_status=recent_job.status if recent_job else None,
+        evidence_present=evidence_present,
+        detail=detail,
     ).model_dump(mode="json")
 
 

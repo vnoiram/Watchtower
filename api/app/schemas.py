@@ -2662,6 +2662,22 @@ class RepositoryInventoryAssuranceOut(BaseModel):
     detail: str
 
 
+class DailyScanExecutionEvidenceOut(BaseModel):
+    issue_type: str
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    recent_scan_job_id: UUID | None = None
+    recent_scan_job_status: models.JobStatus | None = None
+    evidence_present: bool
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2770,3 +2786,4 @@ class DashboardSummary(BaseModel):
     remediation_evidence_gap_items: int
     owner_handoff_gap_items: int
     repository_inventory_assurance_gap_items: int
+    daily_scan_execution_gap_items: int

@@ -84,6 +84,7 @@ from api.app.routers.repository_sync import import_failure_count
 from api.app.routers.repositories import repository_classification_gap_count
 from api.app.routers.scans import (
     daily_scan_slo_breach_count,
+    daily_scan_execution_gap_count,
     raw_scan_artifact_gap_count,
     scan_format_gap_count,
     scan_freshness_gap_count,
@@ -242,6 +243,7 @@ def dashboard_summary(
     remediation_evidence_gap_items = remediation_evidence_gap_count(db)
     owner_handoff_gap_items = owner_handoff_gap_count(db)
     repository_inventory_assurance_gap_items = repository_inventory_assurance_gap_count(db)
+    daily_scan_execution_gap_items = daily_scan_execution_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -350,4 +352,5 @@ def dashboard_summary(
         remediation_evidence_gap_items=remediation_evidence_gap_items,
         owner_handoff_gap_items=owner_handoff_gap_items,
         repository_inventory_assurance_gap_items=repository_inventory_assurance_gap_items,
+        daily_scan_execution_gap_items=daily_scan_execution_gap_items,
     )
