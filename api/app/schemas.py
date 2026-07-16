@@ -2587,6 +2587,15 @@ class OperationalActionQueueOut(BaseModel):
     created_at: datetime
 
 
+class EvidenceFreshnessOut(BaseModel):
+    check: str
+    cadence: str
+    status: str
+    count: int
+    last_evidence_at: datetime | None = None
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2690,3 +2699,4 @@ class DashboardSummary(BaseModel):
     scan_result_consistency_gap_items: int
     application_mapping_gap_items: int
     operational_action_items: int
+    evidence_freshness_gap_items: int
