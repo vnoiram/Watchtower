@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
@@ -141,6 +142,22 @@ def operational_workload(
     _: Principal = Depends(get_principal),
 ):
     return _workload_rows(db)
+
+
+@router.get("/action-queue", response_model=schemas.CursorPage)
+def list_operational_action_queue(
+    limit: int = 50,
+    action_type: str | None = None,
+    priority: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = operational_action_queue_items(db)
+    if action_type:
+        items = [item for item in items if item["action_type"] == action_type]
+    if priority:
+        items = [item for item in items if item["priority"] == priority]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
 @router.get("/backup-readiness", response_model=list[schemas.BackupReadinessOut])
@@ -668,6 +685,10 @@ def rollback_readiness_count(db: Session) -> int:
     return sum(item.count for item in rollback_readiness_items(db) if item.status != "ok")
 
 
+def operational_action_count(db: Session) -> int:
+    return len(operational_action_queue_items(db))
+
+
 def backup_evidence_count(db: Session, settings: Settings) -> int:
     return sum(max(item["count"], 1) for item in backup_evidence_items(db, settings) if item["status"] != "ok")
 
@@ -686,6 +707,81 @@ def queue_pressure_count(db: Session) -> int:
 
 def manual_action_count(db: Session, days: int = 30) -> int:
     return len(manual_action_items(db, days=days))
+
+
+def operational_action_queue_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(days=30)
+    items = []
+    latest_scan_by_app: dict = {}
+    for scan in db.scalars(select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.asc())):
+        latest_scan_by_app.setdefault(scan.application_id, scan)
+    active_source_sbom_app_ids = set(
+        db.scalars(select(models.Sbom.application_id).where(models.Sbom.active.is_(True), models.Sbom.sbom_kind == "source"))
+    )
+    for application, repository in db.execute(
+        select(models.Application, models.Repository)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(models.Application.lifecycle != models.Lifecycle.archived)
+        .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+    ):
+        latest_scan = latest_scan_by_app.get(application.id)
+        if latest_scan is None or _before(latest_scan.created_at, stale_cutoff):
+            items.append(
+                _operational_action(
+                    "stale_scan",
+                    "high",
+                    "application",
+                    application.id,
+                    latest_scan.status.value if latest_scan else "missing",
+                    None,
+                    application,
+                    repository,
+                    "Application has no scan in the last 30 days",
+                    latest_scan.created_at if latest_scan else application.updated_at,
+                )
+            )
+        if not application.owner:
+            items.append(
+                _operational_action("missing_owner", "medium", "application", application.id, application.lifecycle.value, None, application, repository, "Active application has no owner", application.updated_at)
+            )
+        if application.id not in active_source_sbom_app_ids:
+            items.append(
+                _operational_action("missing_sbom", "high", "application", application.id, application.lifecycle.value, None, application, repository, "Active application has no active source SBOM", application.updated_at)
+            )
+    for job in db.scalars(select(models.Job).where(models.Job.status.in_([models.JobStatus.failed, models.JobStatus.timed_out])).order_by(models.Job.updated_at.desc(), models.Job.id.asc())):
+        application = db.get(models.Application, job.application_id) if job.application_id else None
+        repository = db.get(models.Repository, job.repository_id) if job.repository_id else (db.get(models.Repository, application.repository_id) if application else None)
+        items.append(
+            _operational_action("failed_job", "high", "job", job.id, job.status.value, None, application, repository, job.last_error or "Job failed or timed out", job.updated_at)
+        )
+    for notification in db.scalars(select(models.Notification).where(models.Notification.status == "failed").order_by(models.Notification.created_at.desc(), models.Notification.id.asc())):
+        finding = _finding_from_notification_metadata(db, notification.metadata_json)
+        application, repository = _finding_application_context(db, finding)
+        items.append(
+            _operational_action("failed_notification", "high", "notification", notification.id, notification.status, notification.severity, application, repository, "Notification delivery failed", notification.created_at)
+        )
+    open_action_statuses = {"queued", "pending", "pending_provider", "created", "running", "in_progress"}
+    action_finding_ids = set(
+        db.scalars(select(models.RemediationAction.finding_id).where(models.RemediationAction.status.in_(open_action_statuses)))
+    )
+    stmt = (
+        select(models.Finding, models.Application, models.Repository)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(
+            models.Finding.status == models.FindingStatus.open,
+            models.Finding.severity.in_([models.Severity.critical, models.Severity.high]),
+        )
+        .order_by(models.Finding.created_at.asc(), models.Finding.id.asc())
+    )
+    for finding, application, repository in db.execute(stmt):
+        if finding.id not in action_finding_ids:
+            items.append(
+                _operational_action("critical_high_without_action", "critical", "finding", finding.id, finding.status.value, finding.severity, application, repository, "Open critical/high finding has no open remediation action", finding.created_at)
+            )
+    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    return sorted(items, key=lambda item: (priority_order.get(item["priority"], 99), item["created_at"], item["action_type"]))
 
 
 def backup_evidence_items(db: Session, settings: Settings) -> list[dict]:
@@ -1731,6 +1827,53 @@ def _readiness(check: str, configured: bool, detail: str) -> schemas.OperationsR
 
 def _daily_check(check: str, status: str, count: int, detail: str) -> schemas.DailyOperationCheckOut:
     return schemas.DailyOperationCheckOut(check=check, status=status, count=count, detail=detail)
+
+
+def _operational_action(
+    action_type: str,
+    priority: str,
+    resource_type: str,
+    resource_id,
+    status: str | None,
+    severity: models.Severity | None,
+    application: models.Application | None,
+    repository: models.Repository | None,
+    detail: str,
+    created_at: datetime,
+) -> dict:
+    return schemas.OperationalActionQueueOut(
+        action_type=action_type,
+        priority=priority,
+        resource_type=resource_type,
+        resource_id=str(resource_id),
+        status=status,
+        severity=severity,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        repository_id=repository.id if repository else None,
+        repository_owner=repository.owner if repository else None,
+        repository_name=repository.name if repository else None,
+        detail=detail,
+        created_at=created_at,
+    ).model_dump(mode="json")
+
+
+def _finding_from_notification_metadata(db: Session, metadata: dict | None) -> models.Finding | None:
+    finding_id = (metadata or {}).get("finding_id")
+    if not finding_id:
+        return None
+    try:
+        return db.get(models.Finding, UUID(str(finding_id)))
+    except ValueError:
+        return None
+
+
+def _finding_application_context(db: Session, finding: models.Finding | None) -> tuple[models.Application | None, models.Repository | None]:
+    if not finding:
+        return None, None
+    application = db.get(models.Application, finding.application_id)
+    repository = db.get(models.Repository, application.repository_id) if application else None
+    return application, repository
 
 
 def _observability(check: str, status: str, count: int, detail: str) -> schemas.ObservabilityPostureOut:
