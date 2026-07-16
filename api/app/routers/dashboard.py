@@ -9,7 +9,7 @@ from api.app.config import Settings, get_settings
 from api.app.database import get_db
 from api.app.deps import Principal, get_principal
 from api.app.routers.auto_merge import automation_guardrail_count
-from api.app.routers.artifacts import container_coverage_count
+from api.app.routers.artifacts import artifact_provenance_gap_count, container_coverage_count
 from api.app.routers.application_detection import application_input_coverage_count, container_input_coverage_count
 from api.app.routers.components import dependency_relationship_gap_count
 from api.app.routers.governance import exposure_review_count, quarterly_review_count
@@ -28,9 +28,11 @@ from api.app.routers.operations import (
     completion_readiness_gap_count,
     e2e_evidence_gap_count,
     failure_drill_gap_count,
+    idempotency_gap_count,
     incident_readiness_gap_count,
     observability_gap_count,
     runbook_evidence_gap_count,
+    worker_cleanup_gap_count,
     control_evidence_count,
     backup_evidence_count,
     failure_signal_count,
@@ -64,7 +66,7 @@ from api.app.routers.rollout import (
 )
 from api.app.routers.repository_sync import import_failure_count
 from api.app.routers.repositories import repository_classification_gap_count
-from api.app.routers.scans import daily_scan_slo_breach_count, raw_scan_artifact_gap_count
+from api.app.routers.scans import daily_scan_slo_breach_count, raw_scan_artifact_gap_count, scan_format_gap_count
 from api.app.routers.scanners import scanner_database_freshness_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import (
@@ -78,7 +80,11 @@ from api.app.routers.security import (
 from api.app.routers.sla import count_sla_breached_findings
 from api.app.routers.sboms import sbom_normalization_quality_count
 from api.app.routers.storage import retention_review_count, storage_encryption_count, storage_pressure_count
-from api.app.routers.vulnerabilities import vulnerability_enrichment_gap_count, vulnerability_reevaluation_gap_count
+from api.app.routers.vulnerabilities import (
+    vulnerability_enrichment_gap_count,
+    vulnerability_provenance_gap_count,
+    vulnerability_reevaluation_gap_count,
+)
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -188,6 +194,11 @@ def dashboard_summary(
     failure_drill_gap_items = failure_drill_gap_count(db)
     repository_onboarding_gap_items = repository_onboarding_gap_count(db)
     runbook_evidence_gap_items = runbook_evidence_gap_count(db)
+    artifact_provenance_gap_items = artifact_provenance_gap_count(db)
+    scan_format_gap_items = scan_format_gap_count(db)
+    worker_cleanup_gap_items = worker_cleanup_gap_count(db)
+    idempotency_gap_items = idempotency_gap_count(db)
+    vulnerability_provenance_gap_items = vulnerability_provenance_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -270,4 +281,9 @@ def dashboard_summary(
         failure_drill_gap_items=failure_drill_gap_items,
         repository_onboarding_gap_items=repository_onboarding_gap_items,
         runbook_evidence_gap_items=runbook_evidence_gap_items,
+        artifact_provenance_gap_items=artifact_provenance_gap_items,
+        scan_format_gap_items=scan_format_gap_items,
+        worker_cleanup_gap_items=worker_cleanup_gap_items,
+        idempotency_gap_items=idempotency_gap_items,
+        vulnerability_provenance_gap_items=vulnerability_provenance_gap_items,
     )

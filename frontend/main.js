@@ -154,6 +154,11 @@ const e2eEvidence = document.querySelector("#e2e-evidence");
 const failureDrills = document.querySelector("#failure-drills");
 const repositoryOnboarding = document.querySelector("#repository-onboarding");
 const runbookEvidence = document.querySelector("#runbook-evidence");
+const artifactProvenance = document.querySelector("#artifact-provenance");
+const scanFormat = document.querySelector("#scan-format");
+const workerCleanup = document.querySelector("#worker-cleanup");
+const idempotencySafety = document.querySelector("#idempotency-safety");
+const vulnerabilityProvenance = document.querySelector("#vulnerability-provenance");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -283,6 +288,11 @@ function renderMetrics(summary) {
     ["failure_drill_gap_items", "Failure drills", "warn"],
     ["repository_onboarding_gap_items", "Onboarding", "warn"],
     ["runbook_evidence_gap_items", "Runbooks", "warn"],
+    ["artifact_provenance_gap_items", "Artifact provenance", "warn"],
+    ["scan_format_gap_items", "Scan formats", "warn"],
+    ["worker_cleanup_gap_items", "Worker cleanup", "warn"],
+    ["idempotency_gap_items", "Idempotency", "warn"],
+    ["vulnerability_provenance_gap_items", "Vuln provenance", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -2028,6 +2038,66 @@ function renderRepositoryOnboarding(page) {
     : `<tr><td colspan="5">No repository onboarding gaps</td></tr>`;
 }
 
+function renderArtifactProvenance(page) {
+  const rows = page.items || [];
+  artifactProvenance.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.artifact_type || "-")}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No artifact provenance gaps</td></tr>`;
+}
+
+function renderScanFormat(page) {
+  const rows = page.items || [];
+  scanFormat.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.tool || "-")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scan format gaps</td></tr>`;
+}
+
+function renderWorkerCleanup(page) {
+  const rows = page.items || [];
+  workerCleanup.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.job_type)}</td><td>${escapeHtml(item.job_status)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No worker cleanup gaps</td></tr>`;
+}
+
+function renderIdempotencySafety(page) {
+  const rows = page.items || [];
+  idempotencySafety.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.issue_type)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No idempotency gaps</td></tr>`;
+}
+
+function renderVulnerabilityProvenance(page) {
+  const rows = page.items || [];
+  vulnerabilityProvenance.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.external_id)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No vulnerability provenance gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2183,6 +2253,11 @@ async function refresh() {
   failureDrills.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   repositoryOnboarding.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   runbookEvidence.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  artifactProvenance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scanFormat.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  workerCleanup.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  idempotencySafety.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  vulnerabilityProvenance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2340,6 +2415,11 @@ async function refresh() {
       failureDrillPage,
       repositoryOnboardingPage,
       runbookEvidencePage,
+      artifactProvenancePage,
+      scanFormatPage,
+      workerCleanupPage,
+      idempotencySafetyPage,
+      vulnerabilityProvenancePage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2496,6 +2576,11 @@ async function refresh() {
       loadJson("/operations/failure-drills?limit=10"),
       loadJson("/rollout/onboarding-proof?ready=false&limit=10"),
       loadJson("/operations/runbook-evidence"),
+      loadJson("/artifacts/provenance?limit=10"),
+      loadJson("/scans/format-compliance?limit=10"),
+      loadJson("/operations/worker-cleanup?limit=10"),
+      loadJson("/operations/idempotency?limit=10"),
+      loadJson("/vulnerabilities/source-provenance?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -2651,6 +2736,11 @@ async function refresh() {
     renderFailureDrills(failureDrillPage);
     renderRepositoryOnboarding(repositoryOnboardingPage);
     renderPosture(runbookEvidence, runbookEvidencePage.items || [], "No runbook evidence gaps");
+    renderArtifactProvenance(artifactProvenancePage);
+    renderScanFormat(scanFormatPage);
+    renderWorkerCleanup(workerCleanupPage);
+    renderIdempotencySafety(idempotencySafetyPage);
+    renderVulnerabilityProvenance(vulnerabilityProvenancePage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -2806,6 +2896,11 @@ async function refresh() {
     failureDrills.innerHTML = `<tr><td colspan="5">Unable to load failure drills</td></tr>`;
     repositoryOnboarding.innerHTML = `<tr><td colspan="5">Unable to load repository onboarding</td></tr>`;
     runbookEvidence.innerHTML = `<tr><td colspan="4">Unable to load runbook evidence</td></tr>`;
+    artifactProvenance.innerHTML = `<tr><td colspan="5">Unable to load artifact provenance</td></tr>`;
+    scanFormat.innerHTML = `<tr><td colspan="5">Unable to load scan format compliance</td></tr>`;
+    workerCleanup.innerHTML = `<tr><td colspan="5">Unable to load worker cleanup</td></tr>`;
+    idempotencySafety.innerHTML = `<tr><td colspan="5">Unable to load idempotency safety</td></tr>`;
+    vulnerabilityProvenance.innerHTML = `<tr><td colspan="5">Unable to load vulnerability provenance</td></tr>`;
   }
 }
 

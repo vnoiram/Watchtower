@@ -561,6 +561,41 @@ def list_runbook_evidence(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/worker-cleanup", response_model=schemas.CursorPage)
+def list_worker_cleanup(
+    limit: int = 50,
+    gap_type: str | None = None,
+    job_type: models.JobType | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = worker_cleanup_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if job_type:
+        items = [item for item in items if item["job_type"] == job_type.value]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/idempotency", response_model=schemas.CursorPage)
+def list_idempotency_safety(
+    limit: int = 50,
+    issue_type: str | None = None,
+    source: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = idempotency_safety_items(db)
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    if source:
+        items = [item for item in items if item["source"] == source]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def failure_signal_count(db: Session) -> int:
     return len(failure_signal_items(db))
 
@@ -587,6 +622,14 @@ def failure_drill_gap_count(db: Session) -> int:
 
 def runbook_evidence_gap_count(db: Session) -> int:
     return sum(max(item.count, 1) for item in runbook_evidence_items(db) if item.status != "ok")
+
+
+def worker_cleanup_gap_count(db: Session) -> int:
+    return len(worker_cleanup_items(db))
+
+
+def idempotency_gap_count(db: Session) -> int:
+    return len(idempotency_safety_items(db))
 
 
 def monthly_review_count(db: Session) -> int:
@@ -1370,6 +1413,78 @@ def runbook_evidence_items(db: Session) -> list[schemas.RunbookEvidenceOut]:
     ]
 
 
+def worker_cleanup_items(db: Session) -> list[dict]:
+    repositories = {repo.id: repo for repo in db.scalars(select(models.Repository))}
+    applications = {app.id: app for app in db.scalars(select(models.Application))}
+    audit_text = _worker_audit_text(db)
+    items = []
+    for job in db.scalars(select(models.Job).order_by(models.Job.created_at.desc(), models.Job.id.asc())):
+        text = _operation_text(job.job_type.value, job.payload, job.last_error, audit_text.get(str(job.id), ""))
+        checks = [
+            ("missing_workspace", {"workspace", "workdir", "temp_dir", "temporary directory"}),
+            ("missing_cleanup", {"cleanup", "cleaned", "removed workspace", "temp_cleanup"}),
+            ("missing_runner_isolation", {"container", "runner", "isolated", "sandbox"}),
+            ("missing_credential_ttl", {"ttl", "expires_at", "short lived", "installation token"}),
+        ]
+        for gap_type, tokens in checks:
+            if _contains_any(text, tokens):
+                continue
+            application = applications.get(job.application_id)
+            repository = repositories.get(job.repository_id) or (repositories.get(application.repository_id) if application else None)
+            items.append(_worker_cleanup_item(gap_type, job, repository, application))
+    return items
+
+
+def idempotency_safety_items(db: Session) -> list[dict]:
+    repositories = {repo.id: repo for repo in db.scalars(select(models.Repository))}
+    applications = {app.id: app for app in db.scalars(select(models.Application))}
+    items = []
+    active_jobs = list(
+        db.scalars(
+            select(models.Job)
+            .where(models.Job.status.in_([models.JobStatus.queued, models.JobStatus.running]))
+            .order_by(models.Job.created_at.desc(), models.Job.id.asc())
+        )
+    )
+    seen_jobs: dict[tuple, models.Job] = {}
+    for job in active_jobs:
+        key = (job.job_type, job.repository_id, job.application_id, _payload_identity(job.payload))
+        if key in seen_jobs:
+            application = applications.get(job.application_id)
+            repository = repositories.get(job.repository_id) or (repositories.get(application.repository_id) if application else None)
+            items.append(_idempotency_item("duplicate_active_job", "job", job.id, job.status.value, repository, application, "Multiple queued/running jobs target the same work", job.created_at))
+        else:
+            seen_jobs[key] = job
+    webhook_seen: dict[tuple[str | None, str | None], models.Job] = {}
+    for job in db.scalars(select(models.Job).order_by(models.Job.created_at.desc(), models.Job.id.asc())):
+        metadata = job.payload or {}
+        delivery = metadata.get("delivery_id") or metadata.get("github_delivery") or metadata.get("delivery")
+        event = metadata.get("event") or metadata.get("github_event")
+        if not delivery and not event:
+            continue
+        key = (str(event) if event else None, str(delivery) if delivery else None)
+        if key in webhook_seen:
+            repository = repositories.get(job.repository_id)
+            items.append(_idempotency_item("duplicate_webhook", "job", job.id, job.status.value, repository, None, "Webhook delivery appears more than once", job.created_at))
+        else:
+            webhook_seen[key] = job
+    for action in db.scalars(select(models.RemediationAction).order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc())):
+        metadata = action.metadata_json or {}
+        if action.status == "skipped_duplicate" or metadata.get("duplicate_of"):
+            application, repository = _action_context(db, action)
+            items.append(_idempotency_item("duplicate_remediation", "remediation_action", action.id, action.status, repository, application, "Remediation action was suppressed as duplicate", action.created_at))
+    scan_seen: dict[tuple, models.Scan] = {}
+    for scan in db.scalars(select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.asc())):
+        key = (scan.application_id, scan.commit_sha, scan.trigger_type, scan.scan_type, scan.tool)
+        if scan.commit_sha and key in scan_seen:
+            application = applications.get(scan.application_id)
+            repository = repositories.get(application.repository_id) if application else None
+            items.append(_idempotency_item("duplicate_scan", "scan", scan.id, scan.status.value, repository, application, "Multiple scans share application, commit, trigger, type, and tool", scan.created_at))
+        else:
+            scan_seen[key] = scan
+    return items
+
+
 def manual_workload_count(db: Session) -> int:
     return sum(row.count for row in _workload_rows(db))
 
@@ -1619,6 +1734,86 @@ def _runbook(
         detail=detail,
         latest_evidence_at=cutoff if count else None,
     )
+
+
+def _worker_audit_text(db: Session) -> dict[str, str]:
+    rows: dict[str, list[str]] = {}
+    for audit_log in db.scalars(select(models.AuditLog)):
+        if audit_log.resource_type != "job" or not audit_log.resource_id:
+            continue
+        rows.setdefault(audit_log.resource_id, []).append(_operation_text(audit_log.action, audit_log.metadata_json))
+    return {key: " ".join(values) for key, values in rows.items()}
+
+
+def _worker_cleanup_item(
+    gap_type: str,
+    job: models.Job,
+    repository: models.Repository | None,
+    application: models.Application | None,
+) -> dict:
+    details = {
+        "missing_workspace": "Job has no workspace/temp directory evidence",
+        "missing_cleanup": "Job has no cleanup completion evidence",
+        "missing_runner_isolation": "Job has no runner/container isolation evidence",
+        "missing_credential_ttl": "Job has no short-lived credential TTL evidence",
+    }
+    return schemas.WorkerCleanupOut(
+        gap_type=gap_type,
+        status="gap",
+        job_id=job.id,
+        job_type=job.job_type,
+        job_status=job.status,
+        repository_id=repository.id if repository else None,
+        repository_name=repository.name if repository else None,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        detail=details[gap_type],
+        created_at=job.created_at,
+    ).model_dump(mode="json")
+
+
+def _payload_identity(payload: dict | None) -> str:
+    metadata = payload or {}
+    for key in ["idempotency_key", "delivery_id", "github_delivery", "commit_sha", "branch", "scan_id", "finding_id"]:
+        if metadata.get(key):
+            return f"{key}:{metadata[key]}"
+    return ""
+
+
+def _action_context(
+    db: Session,
+    action: models.RemediationAction,
+) -> tuple[models.Application | None, models.Repository | None]:
+    finding = db.get(models.Finding, action.finding_id)
+    if not finding:
+        return None, None
+    application = db.get(models.Application, finding.application_id)
+    repository = db.get(models.Repository, application.repository_id) if application else None
+    return application, repository
+
+
+def _idempotency_item(
+    issue_type: str,
+    source: str,
+    source_id,
+    status: str,
+    repository: models.Repository | None,
+    application: models.Application | None,
+    detail: str,
+    created_at: datetime,
+) -> dict:
+    return schemas.IdempotencySafetyOut(
+        issue_type=issue_type,
+        source=source,
+        source_id=str(source_id),
+        status=status,
+        repository_id=repository.id if repository else None,
+        repository_name=repository.name if repository else None,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        detail=detail,
+        created_at=created_at,
+    ).model_dump(mode="json")
 
 
 def _workload(item: str, count: int, nonzero_status: str, detail: str) -> schemas.OperationalWorkloadOut:

@@ -120,8 +120,83 @@ def list_container_coverage(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/provenance", response_model=schemas.CursorPage)
+def list_artifact_provenance(
+    limit: int = 50,
+    gap_type: str | None = None,
+    source: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = artifact_provenance_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if source:
+        items = [item for item in items if item["source"] == source]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def container_coverage_count(db: Session) -> int:
     return len(container_coverage_items(db))
+
+
+def artifact_provenance_gap_count(db: Session) -> int:
+    return sum(1 for item in artifact_provenance_items(db) if item["gap_type"] != "complete")
+
+
+def artifact_provenance_items(db: Session) -> list[dict]:
+    items = []
+    stmt = (
+        select(models.Scan, models.Application, models.Repository)
+        .join(models.Application, models.Scan.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Scan.created_at.desc(), models.Scan.id.asc())
+    )
+    for scan, application, repository in db.execute(stmt):
+        for artifact_type, artifact in _artifact_payloads(scan.result_summary):
+            storage_key = artifact.get("storage_key")
+            digest = artifact.get("digest") or artifact.get("sha256")
+            gap, detail = _artifact_gap(artifact_type, storage_key, digest)
+            items.append(
+                _provenance_item(
+                    gap,
+                    "scan_artifact",
+                    scan.id,
+                    artifact_type,
+                    storage_key,
+                    digest,
+                    scan,
+                    application,
+                    repository,
+                    detail,
+                    scan.created_at,
+                )
+            )
+    sbom_stmt = (
+        select(models.Sbom, models.Application, models.Repository, models.Scan)
+        .join(models.Application, models.Sbom.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .join(models.Scan, models.Sbom.scan_id == models.Scan.id)
+        .order_by(models.Sbom.generated_at.desc(), models.Sbom.id.asc())
+    )
+    for sbom, application, repository, scan in db.execute(sbom_stmt):
+        gap, detail = _artifact_gap(sbom.sbom_kind, sbom.storage_key, sbom.sbom_digest)
+        items.append(
+            _provenance_item(
+                gap,
+                "sbom",
+                sbom.id,
+                sbom.sbom_kind,
+                sbom.storage_key,
+                sbom.sbom_digest,
+                scan,
+                application,
+                repository,
+                detail,
+                sbom.generated_at,
+            )
+        )
+    return items
 
 
 def container_coverage_items(db: Session) -> list[dict]:
@@ -194,6 +269,66 @@ def container_coverage_items(db: Session) -> list[dict]:
                 )
             )
     return items
+
+
+def _artifact_payloads(result_summary: dict | None) -> list[tuple[str | None, dict]]:
+    artifacts = (result_summary or {}).get("artifacts") or {}
+    if isinstance(artifacts, dict):
+        return [(str(key) if key else None, value) for key, value in artifacts.items() if isinstance(value, dict)]
+    if isinstance(artifacts, list):
+        return [
+            (str(item.get("type") or item.get("artifact_type")) if item.get("type") or item.get("artifact_type") else None, item)
+            for item in artifacts
+            if isinstance(item, dict)
+        ]
+    return []
+
+
+def _artifact_gap(artifact_type: str | None, storage_key: str | None, digest: str | None) -> tuple[str, str]:
+    if not artifact_type:
+        return "missing_artifact_type", "Artifact metadata has no type"
+    if not storage_key:
+        return "missing_storage_key", "Artifact has no storage key"
+    if _unexpected_storage_path(storage_key):
+        return "unexpected_storage_path", "Artifact storage key is not a safe relative object key"
+    if not digest:
+        return "missing_digest", "Artifact has no digest evidence"
+    return "complete", "Artifact provenance has type, storage, and digest evidence"
+
+
+def _unexpected_storage_path(storage_key: str) -> bool:
+    return storage_key.startswith("/") or ".." in storage_key.split("/")
+
+
+def _provenance_item(
+    gap_type: str,
+    source: str,
+    source_id,
+    artifact_type: str | None,
+    storage_key: str | None,
+    digest: str | None,
+    scan: models.Scan | None,
+    application: models.Application,
+    repository: models.Repository,
+    detail: str,
+    created_at,
+) -> dict:
+    return schemas.ArtifactProvenanceOut(
+        gap_type=gap_type,
+        source=source,
+        source_id=str(source_id),
+        artifact_type=artifact_type,
+        storage_key=storage_key,
+        digest=digest,
+        scan_id=scan.id if scan else None,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        detail=detail,
+        created_at=created_at,
+    ).model_dump(mode="json")
 
 
 def _sboms_by_scan(db: Session) -> dict[UUID, models.Sbom]:
