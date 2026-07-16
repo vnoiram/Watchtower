@@ -174,6 +174,7 @@ const metadataCompleteness = document.querySelector("#metadata-completeness");
 const orphanEvidence = document.querySelector("#orphan-evidence");
 const scanResultConsistency = document.querySelector("#scan-result-consistency");
 const applicationMappingQuality = document.querySelector("#application-mapping-quality");
+const operationalActionQueue = document.querySelector("#operational-action-queue");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -323,6 +324,7 @@ function renderMetrics(summary) {
     ["orphan_evidence_gap_items", "Orphans", "warn"],
     ["scan_result_consistency_gap_items", "Scan results", "warn"],
     ["application_mapping_gap_items", "App mapping", "warn"],
+    ["operational_action_items", "Action queue", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -2308,6 +2310,18 @@ function renderApplicationMappingQuality(page) {
     : `<tr><td colspan="5">No application mapping gaps</td></tr>`;
 }
 
+function renderOperationalActionQueue(page) {
+  const rows = page.items || [];
+  operationalActionQueue.innerHTML = rows.length
+    ? rows
+        .map((item) => {
+          const target = item.application_name || (item.repository_name ? `${item.repository_owner}/${item.repository_name}` : "-");
+          return `<tr><td>${escapeHtml(item.priority)}</td><td>${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.resource_type)}</td><td>${escapeHtml(target)}</td><td>${escapeHtml(item.detail)}</td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="5">No operational action items</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2483,6 +2497,7 @@ async function refresh() {
   orphanEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   scanResultConsistency.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   applicationMappingQuality.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  operationalActionQueue.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2660,6 +2675,7 @@ async function refresh() {
       orphanEvidencePage,
       scanResultConsistencyPage,
       applicationMappingQualityPage,
+      operationalActionQueuePage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2836,6 +2852,7 @@ async function refresh() {
       loadJson("/quality/orphan-evidence?limit=10"),
       loadJson("/scans/result-consistency?limit=10"),
       loadJson("/rollout/application-mapping-quality?limit=10"),
+      loadJson("/operations/action-queue?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -3011,6 +3028,7 @@ async function refresh() {
     renderOrphanEvidence(orphanEvidencePage);
     renderScanResultConsistency(scanResultConsistencyPage);
     renderApplicationMappingQuality(applicationMappingQualityPage);
+    renderOperationalActionQueue(operationalActionQueuePage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -3186,6 +3204,7 @@ async function refresh() {
     orphanEvidence.innerHTML = `<tr><td colspan="5">Unable to load orphan evidence</td></tr>`;
     scanResultConsistency.innerHTML = `<tr><td colspan="5">Unable to load scan result consistency</td></tr>`;
     applicationMappingQuality.innerHTML = `<tr><td colspan="5">Unable to load application mapping quality</td></tr>`;
+    operationalActionQueue.innerHTML = `<tr><td colspan="5">Unable to load operational action queue</td></tr>`;
   }
 }
 

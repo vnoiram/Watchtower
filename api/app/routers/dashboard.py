@@ -41,6 +41,7 @@ from api.app.routers.operations import (
     manual_action_count,
     manual_workload_count,
     monthly_review_count,
+    operational_action_count,
     phase_readiness_count,
     queue_pressure_count,
     rollback_readiness_count,
@@ -231,6 +232,7 @@ def dashboard_summary(
     orphan_evidence_gap_items = orphan_evidence_gap_count(db)
     scan_result_consistency_gap_items = scan_result_consistency_gap_count(db)
     application_mapping_gap_items = application_mapping_gap_count(db)
+    operational_action_items = operational_action_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -333,4 +335,5 @@ def dashboard_summary(
         orphan_evidence_gap_items=orphan_evidence_gap_items,
         scan_result_consistency_gap_items=scan_result_consistency_gap_items,
         application_mapping_gap_items=application_mapping_gap_items,
+        operational_action_items=operational_action_items,
     )

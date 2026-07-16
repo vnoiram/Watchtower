@@ -121,6 +121,7 @@ from api.app.routers.operations import (
     worker_hardening,
     monthly_review,
     operational_workload,
+    list_operational_action_queue,
     operations_readiness,
     phase_readiness,
     queue_pressure,
@@ -4503,6 +4504,45 @@ def test_list_application_mapping_quality_reports_mapping_gaps() -> None:
         assert ("active_repo_without_active_application", empty_repo.name) in gaps
         assert filtered.items[0]["repository_name"] == archived_repo.name
         assert summary.application_mapping_gap_items >= 4
+
+
+def test_list_operational_action_queue_reports_cross_cutting_actions() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "operational-action")
+        missing_owner = create_application(db, repo, "action-missing-owner")
+        missing_owner.owner = None
+        stale = create_application(db, repo, "action-stale")
+        stale.owner = "team"
+        missing_sbom = create_application(db, repo, "action-missing-sbom")
+        missing_sbom.owner = "team"
+        covered = create_application(db, repo, "action-covered")
+        covered.owner = "team"
+        db.add_all(
+            [
+                Scan(application_id=stale.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=45)),
+                Scan(application_id=missing_sbom.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Job(job_type=JobType.scan, status=JobStatus.failed, repository_id=repo.id, application_id=covered.id, last_error="scanner failed"),
+            ]
+        )
+        db.flush()
+        covered_scan = Scan(application_id=covered.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add(covered_scan)
+        db.flush()
+        db.add(Sbom(application_id=covered.id, scan_id=covered_scan.id, sbom_kind="source", sbom_digest="action-covered", storage_key="action-covered.json", active=True))
+        finding = create_finding(db, covered, severity=Severity.critical, status=FindingStatus.open)
+        db.add(Notification(channel="slack", severity=Severity.high, subject="failed", body="failed", status="failed", metadata_json={"finding_id": str(finding.id)}))
+        db.flush()
+
+        page = list_operational_action_queue(db=db, _=None)
+        filtered = list_operational_action_queue(action_type="critical_high_without_action", priority="critical", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        actions = {item["action_type"] for item in page.items}
+
+        assert {"stale_scan", "missing_owner", "missing_sbom", "failed_job", "failed_notification", "critical_high_without_action"} <= actions
+        assert filtered.items[0]["resource_id"] == str(finding.id)
+        assert filtered.items[0]["application_name"] == covered.name
+        assert summary.operational_action_items >= 6
 
 
 def test_list_initial_inventory_reports_completion_and_filters() -> None:

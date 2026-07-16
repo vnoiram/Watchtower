@@ -2571,6 +2571,22 @@ class ApplicationMappingQualityOut(BaseModel):
     detail: str
 
 
+class OperationalActionQueueOut(BaseModel):
+    action_type: str
+    priority: str
+    resource_type: str
+    resource_id: str
+    status: str | None = None
+    severity: models.Severity | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    detail: str
+    created_at: datetime
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2673,3 +2689,4 @@ class DashboardSummary(BaseModel):
     orphan_evidence_gap_items: int
     scan_result_consistency_gap_items: int
     application_mapping_gap_items: int
+    operational_action_items: int
