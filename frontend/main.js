@@ -179,6 +179,7 @@ const evidenceFreshness = document.querySelector("#evidence-freshness");
 const mvpReadinessDrilldown = document.querySelector("#mvp-readiness-drilldown");
 const remediationEvidenceChain = document.querySelector("#remediation-evidence-chain");
 const ownerHandoff = document.querySelector("#owner-handoff");
+const repositoryInventoryAssurance = document.querySelector("#repository-inventory-assurance");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -333,6 +334,7 @@ function renderMetrics(summary) {
     ["mvp_readiness_gap_items", "MVP readiness", "warn"],
     ["remediation_evidence_gap_items", "Remediation evidence", "warn"],
     ["owner_handoff_gap_items", "Owner handoff", "warn"],
+    ["repository_inventory_assurance_gap_items", "Repo assurance", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -2378,6 +2380,18 @@ function renderOwnerHandoff(page) {
     : `<tr><td colspan="5">No owner handoff gaps</td></tr>`;
 }
 
+function renderRepositoryInventoryAssurance(page) {
+  const rows = page.items || [];
+  repositoryInventoryAssurance.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.repository_name ? `${item.repository_owner}/${item.repository_name}` : "-")}</td><td>${escapeHtml(item.provider || "-")}</td><td>${escapeHtml(formatDateTime(item.last_synced_at))}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No repository inventory assurance gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2558,6 +2572,7 @@ async function refresh() {
   mvpReadinessDrilldown.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   remediationEvidenceChain.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   ownerHandoff.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  repositoryInventoryAssurance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2740,6 +2755,7 @@ async function refresh() {
       mvpReadinessDrilldownPage,
       remediationEvidenceChainPage,
       ownerHandoffPage,
+      repositoryInventoryAssurancePage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2921,6 +2937,7 @@ async function refresh() {
       loadJson("/rollout/mvp-readiness-drilldown?limit=10"),
       loadJson("/remediation/evidence-chain?limit=10"),
       loadJson("/governance/owner-handoff?limit=10"),
+      loadJson("/rollout/repository-inventory-assurance?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -3101,6 +3118,7 @@ async function refresh() {
     renderMvpReadinessDrilldown(mvpReadinessDrilldownPage);
     renderRemediationEvidenceChain(remediationEvidenceChainPage);
     renderOwnerHandoff(ownerHandoffPage);
+    renderRepositoryInventoryAssurance(repositoryInventoryAssurancePage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -3281,6 +3299,7 @@ async function refresh() {
     mvpReadinessDrilldown.innerHTML = `<tr><td colspan="5">Unable to load MVP readiness drilldown</td></tr>`;
     remediationEvidenceChain.innerHTML = `<tr><td colspan="5">Unable to load remediation evidence chain</td></tr>`;
     ownerHandoff.innerHTML = `<tr><td colspan="5">Unable to load owner handoff readiness</td></tr>`;
+    repositoryInventoryAssurance.innerHTML = `<tr><td colspan="5">Unable to load repository inventory assurance</td></tr>`;
   }
 }
 

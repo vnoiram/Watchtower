@@ -194,6 +194,22 @@ def list_repository_inventory_gaps(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/repository-inventory-assurance", response_model=schemas.CursorPage)
+def list_repository_inventory_assurance(
+    limit: int = 50,
+    gap_type: str | None = None,
+    provider: models.RepositoryProvider | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = repository_inventory_assurance_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if provider:
+        items = [item for item in items if item["provider"] == provider.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/onboarding-proof", response_model=schemas.CursorPage)
 def list_repository_onboarding_proof(
     limit: int = 50,
@@ -262,6 +278,10 @@ def rollout_wave_gap_count(db: Session) -> int:
 
 def repository_inventory_gap_count(db: Session) -> int:
     return sum(item["count"] for item in repository_inventory_gap_items(db))
+
+
+def repository_inventory_assurance_gap_count(db: Session) -> int:
+    return sum(max(item["count"], 1) for item in repository_inventory_assurance_items(db))
 
 
 def repository_onboarding_gap_count(db: Session) -> int:
@@ -337,6 +357,44 @@ def repository_inventory_gap_items(db: Session) -> list[dict]:
             items.append(_inventory_gap("missing_default_branch", context, "Repository default branch is missing"))
         if not repository.primary_language:
             items.append(_inventory_gap("missing_primary_language", context, "Repository primary language is missing"))
+    return items
+
+
+def repository_inventory_assurance_items(db: Session) -> list[dict]:
+    repositories = _repositories_for_rollout(db)
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    items = []
+    if len(repositories) < 54:
+        items.append(
+            schemas.RepositoryInventoryAssuranceOut(
+                gap_type="repository_count_below_target",
+                target=54,
+                count=54 - len(repositories),
+                detail="Registered repository count is below the target of 54",
+            ).model_dump(mode="json")
+        )
+    for repository in repositories:
+        context = {
+            "repository_id": repository.id,
+            "repository_owner": repository.owner,
+            "repository_name": repository.name,
+            "provider": repository.provider,
+            "visibility": repository.visibility,
+            "default_branch": repository.default_branch,
+            "primary_language": repository.primary_language,
+            "last_synced_at": repository.last_synced_at,
+            "count": 1,
+        }
+        if not repository.provider_repository_id:
+            items.append(_inventory_assurance_item("missing_provider_id", context, "Repository is missing provider_repository_id"))
+        if not repository.visibility:
+            items.append(_inventory_assurance_item("missing_visibility", context, "Repository visibility is missing"))
+        if not repository.default_branch:
+            items.append(_inventory_assurance_item("missing_default_branch", context, "Repository default branch is missing"))
+        if not repository.primary_language:
+            items.append(_inventory_assurance_item("missing_primary_language", context, "Repository primary language is missing"))
+        if repository.last_synced_at is None or _before(repository.last_synced_at, stale_cutoff):
+            items.append(_inventory_assurance_item("stale_sync", context, "Repository sync evidence is older than 30 days"))
     return items
 
 
@@ -954,6 +1012,22 @@ def _inventory_gap(gap_type: str, context: dict, detail: str) -> dict:
         visibility=context["visibility"],
         source_classification=context["source_classification"],
         count=1,
+        detail=detail,
+    ).model_dump(mode="json")
+
+
+def _inventory_assurance_item(gap_type: str, context: dict, detail: str) -> dict:
+    return schemas.RepositoryInventoryAssuranceOut(
+        gap_type=gap_type,
+        repository_id=context["repository_id"],
+        repository_owner=context["repository_owner"],
+        repository_name=context["repository_name"],
+        provider=context["provider"],
+        visibility=context["visibility"],
+        default_branch=context["default_branch"],
+        primary_language=context["primary_language"],
+        last_synced_at=context["last_synced_at"],
+        count=context["count"],
         detail=detail,
     ).model_dump(mode="json")
 

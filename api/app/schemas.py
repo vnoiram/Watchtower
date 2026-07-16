@@ -2647,6 +2647,21 @@ class OwnerHandoffReadinessOut(BaseModel):
     detail: str
 
 
+class RepositoryInventoryAssuranceOut(BaseModel):
+    gap_type: str
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    provider: models.RepositoryProvider | None = None
+    visibility: str | None = None
+    default_branch: str | None = None
+    primary_language: str | None = None
+    last_synced_at: datetime | None = None
+    target: int | None = None
+    count: int
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2754,3 +2769,4 @@ class DashboardSummary(BaseModel):
     mvp_readiness_gap_items: int
     remediation_evidence_gap_items: int
     owner_handoff_gap_items: int
+    repository_inventory_assurance_gap_items: int
