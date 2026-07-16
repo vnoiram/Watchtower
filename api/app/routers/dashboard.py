@@ -28,6 +28,7 @@ from api.app.routers.findings import finding_traceability_gap_count, medium_revi
 from api.app.routers.operations import (
     completion_readiness_gap_count,
     e2e_evidence_gap_count,
+    evidence_freshness_gap_count,
     failure_drill_gap_count,
     idempotency_gap_count,
     incident_readiness_gap_count,
@@ -233,6 +234,7 @@ def dashboard_summary(
     scan_result_consistency_gap_items = scan_result_consistency_gap_count(db)
     application_mapping_gap_items = application_mapping_gap_count(db)
     operational_action_items = operational_action_count(db)
+    evidence_freshness_gap_items = evidence_freshness_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -336,4 +338,5 @@ def dashboard_summary(
         scan_result_consistency_gap_items=scan_result_consistency_gap_items,
         application_mapping_gap_items=application_mapping_gap_items,
         operational_action_items=operational_action_items,
+        evidence_freshness_gap_items=evidence_freshness_gap_items,
     )

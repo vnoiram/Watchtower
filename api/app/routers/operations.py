@@ -160,6 +160,25 @@ def list_operational_action_queue(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/evidence-freshness", response_model=schemas.CursorPage)
+def list_evidence_freshness(
+    limit: int = 50,
+    check: str | None = None,
+    cadence: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = evidence_freshness_items(db)
+    if check:
+        items = [item for item in items if item["check"] == check]
+    if cadence:
+        items = [item for item in items if item["cadence"] == cadence]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/backup-readiness", response_model=list[schemas.BackupReadinessOut])
 def backup_readiness(
     db: Session = Depends(get_db),
@@ -689,6 +708,10 @@ def operational_action_count(db: Session) -> int:
     return len(operational_action_queue_items(db))
 
 
+def evidence_freshness_gap_count(db: Session) -> int:
+    return len(evidence_freshness_items(db))
+
+
 def backup_evidence_count(db: Session, settings: Settings) -> int:
     return sum(max(item["count"], 1) for item in backup_evidence_items(db, settings) if item["status"] != "ok")
 
@@ -782,6 +805,23 @@ def operational_action_queue_items(db: Session) -> list[dict]:
             )
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     return sorted(items, key=lambda item: (priority_order.get(item["priority"], 99), item["created_at"], item["action_type"]))
+
+
+def evidence_freshness_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    day = now - timedelta(hours=24)
+    week = now - timedelta(days=7)
+    month = now - timedelta(days=30)
+    rows = [
+        _freshness_from_jobs(db, "repository_sync", "daily", models.JobType.repository_sync, day, "Repository sync job evidence in the last 24 hours"),
+        _freshness_from_jobs(db, "scan", "daily", models.JobType.scan, day, "Scan job evidence in the last 24 hours"),
+        _freshness_from_audit(db, "backup", "monthly", {"backup"}, month, "Backup audit evidence in the last 30 days"),
+        _freshness_from_audit(db, "restore", "monthly", {"restore"}, month, "Restore audit evidence in the last 30 days"),
+        _freshness_from_audit(db, "vex_review", "monthly", {"vex"}, month, "VEX review evidence in the last 30 days"),
+        _freshness_from_audit(db, "medium_review", "weekly", {"medium review", "medium_findings"}, week, "Medium finding review evidence in the last 7 days"),
+        _freshness_from_audit(db, "scanner_version", "weekly", {"scanner version", "tool version"}, week, "Scanner version review evidence in the last 7 days"),
+    ]
+    return [row for row in rows if row["status"] != "ok"]
 
 
 def backup_evidence_items(db: Session, settings: Settings) -> list[dict]:
@@ -1855,6 +1895,52 @@ def _operational_action(
         repository_name=repository.name if repository else None,
         detail=detail,
         created_at=created_at,
+    ).model_dump(mode="json")
+
+
+def _freshness_from_jobs(
+    db: Session,
+    check: str,
+    cadence: str,
+    job_type: models.JobType,
+    cutoff: datetime,
+    detail: str,
+) -> dict:
+    jobs = list(db.scalars(select(models.Job).where(models.Job.job_type == job_type)))
+    recent = [job for job in jobs if _after_cutoff(job.created_at, cutoff) or (job.completed_at and _after_cutoff(job.completed_at, cutoff))]
+    last_evidence_at = max((job.completed_at or job.created_at for job in jobs), default=None)
+    return _freshness_item(check, cadence, "ok" if recent else "stale", len(recent), last_evidence_at, detail)
+
+
+def _freshness_from_audit(
+    db: Session,
+    check: str,
+    cadence: str,
+    tokens: set[str],
+    cutoff: datetime,
+    detail: str,
+) -> dict:
+    logs = [log for log in db.scalars(select(models.AuditLog)) if _contains_any(_operation_text(log.action, log.metadata_json), tokens)]
+    recent = [log for log in logs if _after_cutoff(log.created_at, cutoff)]
+    last_evidence_at = max((log.created_at for log in logs), default=None)
+    return _freshness_item(check, cadence, "ok" if recent else "stale", len(recent), last_evidence_at, detail)
+
+
+def _freshness_item(
+    check: str,
+    cadence: str,
+    status: str,
+    count: int,
+    last_evidence_at: datetime | None,
+    detail: str,
+) -> dict:
+    return schemas.EvidenceFreshnessOut(
+        check=check,
+        cadence=cadence,
+        status=status,
+        count=count,
+        last_evidence_at=last_evidence_at,
+        detail=detail,
     ).model_dump(mode="json")
 
 

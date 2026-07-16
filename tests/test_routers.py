@@ -120,6 +120,7 @@ from api.app.routers.operations import (
     list_worker_cleanup,
     worker_hardening,
     monthly_review,
+    list_evidence_freshness,
     operational_workload,
     list_operational_action_queue,
     operations_readiness,
@@ -4543,6 +4544,34 @@ def test_list_operational_action_queue_reports_cross_cutting_actions() -> None:
         assert filtered.items[0]["resource_id"] == str(finding.id)
         assert filtered.items[0]["application_name"] == covered.name
         assert summary.operational_action_items >= 6
+
+
+def test_list_evidence_freshness_reports_stale_operational_evidence() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "evidence-freshness")
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Job(job_type=JobType.repository_sync, status=JobStatus.succeeded, repository_id=repo.id, completed_at=now_utc()),
+                Job(job_type=JobType.scan, status=JobStatus.succeeded, repository_id=repo.id, application_id=app.id, completed_at=now_utc()),
+                AuditLog(actor="operator", role="operator", action="backup.verify", resource_type="backup", resource_id="backup-1", metadata_json={}),
+                AuditLog(actor="operator", role="operator", action="vex.review", resource_type="vex", resource_id="vex-old", metadata_json={}, created_at=now_utc() - timedelta(days=45)),
+            ]
+        )
+        db.flush()
+
+        page = list_evidence_freshness(db=db, _=None)
+        weekly = list_evidence_freshness(cadence="weekly", status="stale", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        checks = {item["check"] for item in page.items}
+
+        assert "repository_sync" not in checks
+        assert "scan" not in checks
+        assert "backup" not in checks
+        assert {"restore", "vex_review", "medium_review", "scanner_version"} <= checks
+        assert {item["check"] for item in weekly.items} == {"medium_review", "scanner_version"}
+        assert summary.evidence_freshness_gap_items >= 4
 
 
 def test_list_initial_inventory_reports_completion_and_filters() -> None:
