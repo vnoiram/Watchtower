@@ -142,6 +142,7 @@ from api.app.routers.remediation import (
     list_issue_creation_slo,
     list_remediation_backlog,
     list_remediation_coverage,
+    list_remediation_evidence_chain,
     list_dependency_updates,
     list_github_issue_actions,
     list_issue_closures,
@@ -4607,6 +4608,42 @@ def test_list_mvp_readiness_drilldown_reports_repository_gaps() -> None:
         assert {"repository_classification", "owners", "active_source_sbom", "fresh_scan", "critical_high_triage"} <= set(by_name[gap_repo.name]["failing_checks"])
         assert filtered.items[0]["repository_name"] == gap_repo.name
         assert summary.mvp_readiness_gap_items >= 1
+
+
+def test_list_remediation_evidence_chain_reports_missing_stages() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "remediation-chain")
+        app = create_application(db, repo)
+        complete = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
+        missing = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
+        validation_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add(validation_scan)
+        db.flush()
+        db.add_all(
+            [
+                Notification(channel="slack", severity=Severity.high, subject="sent", body="sent", status="sent", sent_at=now_utc(), metadata_json={"finding_id": str(complete.id)}),
+                RemediationAction(
+                    finding_id=complete.id,
+                    action_type="github_issue",
+                    status="closed",
+                    provider="github",
+                    url="https://github.com/local/demo/issues/1",
+                    metadata_json={"validation_status": "succeeded", "validation_scan_id": str(validation_scan.id), "github_issue_closed_at": now_utc().isoformat()},
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_remediation_evidence_chain(db=db, _=None)
+        filtered = list_remediation_evidence_chain(severity=Severity.critical, status=FindingStatus.open, missing_stage="issue_or_pr", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        by_id = {item["finding_id"]: item for item in page.items}
+
+        assert by_id[str(complete.id)]["missing_stages"] == []
+        assert {"notification", "issue_or_pr", "validation"} <= set(by_id[str(missing.id)]["missing_stages"])
+        assert filtered.items[0]["finding_id"] == str(missing.id)
+        assert summary.remediation_evidence_gap_items >= 1
 
 
 def test_list_initial_inventory_reports_completion_and_filters() -> None:

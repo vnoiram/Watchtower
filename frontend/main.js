@@ -177,6 +177,7 @@ const applicationMappingQuality = document.querySelector("#application-mapping-q
 const operationalActionQueue = document.querySelector("#operational-action-queue");
 const evidenceFreshness = document.querySelector("#evidence-freshness");
 const mvpReadinessDrilldown = document.querySelector("#mvp-readiness-drilldown");
+const remediationEvidenceChain = document.querySelector("#remediation-evidence-chain");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -329,6 +330,7 @@ function renderMetrics(summary) {
     ["operational_action_items", "Action queue", "warn"],
     ["evidence_freshness_gap_items", "Evidence freshness", "warn"],
     ["mvp_readiness_gap_items", "MVP readiness", "warn"],
+    ["remediation_evidence_gap_items", "Remediation evidence", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -2350,6 +2352,18 @@ function renderMvpReadinessDrilldown(page) {
     : `<tr><td colspan="5">No MVP readiness records</td></tr>`;
 }
 
+function renderRemediationEvidenceChain(page) {
+  const rows = page.items || [];
+  remediationEvidenceChain.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml((item.missing_stages || []).join(", ") || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No remediation evidence gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2528,6 +2542,7 @@ async function refresh() {
   operationalActionQueue.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   evidenceFreshness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   mvpReadinessDrilldown.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  remediationEvidenceChain.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2708,6 +2723,7 @@ async function refresh() {
       operationalActionQueuePage,
       evidenceFreshnessPage,
       mvpReadinessDrilldownPage,
+      remediationEvidenceChainPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2887,6 +2903,7 @@ async function refresh() {
       loadJson("/operations/action-queue?limit=10"),
       loadJson("/operations/evidence-freshness?limit=10"),
       loadJson("/rollout/mvp-readiness-drilldown?limit=10"),
+      loadJson("/remediation/evidence-chain?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -3065,6 +3082,7 @@ async function refresh() {
     renderOperationalActionQueue(operationalActionQueuePage);
     renderEvidenceFreshness(evidenceFreshnessPage);
     renderMvpReadinessDrilldown(mvpReadinessDrilldownPage);
+    renderRemediationEvidenceChain(remediationEvidenceChainPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -3243,6 +3261,7 @@ async function refresh() {
     operationalActionQueue.innerHTML = `<tr><td colspan="5">Unable to load operational action queue</td></tr>`;
     evidenceFreshness.innerHTML = `<tr><td colspan="5">Unable to load evidence freshness</td></tr>`;
     mvpReadinessDrilldown.innerHTML = `<tr><td colspan="5">Unable to load MVP readiness drilldown</td></tr>`;
+    remediationEvidenceChain.innerHTML = `<tr><td colspan="5">Unable to load remediation evidence chain</td></tr>`;
   }
 }
 

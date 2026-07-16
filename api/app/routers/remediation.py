@@ -469,6 +469,25 @@ def list_auto_resolution_evidence(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/evidence-chain", response_model=schemas.CursorPage)
+def list_remediation_evidence_chain(
+    limit: int = 50,
+    severity: models.Severity | None = None,
+    status: models.FindingStatus | None = None,
+    missing_stage: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = remediation_evidence_chain_items(db)
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if status:
+        items = [item for item in items if item["status"] == status.value]
+    if missing_stage:
+        items = [item for item in items if missing_stage in item["missing_stages"]]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/resolution-verification", response_model=schemas.CursorPage)
 def list_resolution_verification(
     limit: int = 50,
@@ -543,6 +562,10 @@ def issue_slo_breach_count(db: Session) -> int:
 
 def auto_resolution_gap_count(db: Session) -> int:
     return sum(1 for item in auto_resolution_evidence_items(db) if not item["complete"])
+
+
+def remediation_evidence_gap_count(db: Session) -> int:
+    return sum(1 for item in remediation_evidence_chain_items(db) if item["missing_stages"])
 
 
 def pr_staleness_count(db: Session) -> int:
@@ -1043,6 +1066,59 @@ def auto_resolution_evidence_items(db: Session) -> list[dict]:
                 close_state=close_state,
                 complete=complete,
                 detail="Auto-resolution evidence is complete" if complete else "Resolved finding is missing action, validation, or closure evidence",
+            ).model_dump(mode="json")
+        )
+    return items
+
+
+def remediation_evidence_chain_items(db: Session) -> list[dict]:
+    notifications = _sent_notification_evidence_by_finding(db)
+    issue_or_pr_actions = _first_issue_or_pr_action_by_finding(db)
+    actions_by_finding = _actions_by_finding(db)
+    stmt = (
+        select(models.Finding, models.Application, models.Repository)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(models.Finding.severity.in_([models.Severity.critical, models.Severity.high]))
+        .order_by(models.Finding.created_at.asc(), models.Finding.id.asc())
+    )
+    items = []
+    for finding, application, repository in db.execute(stmt):
+        notification = notifications.get(finding.id)
+        issue_or_pr = issue_or_pr_actions.get(finding.id)
+        actions = actions_by_finding.get(finding.id, [])
+        validation_action = next((action for action in actions if _scan_from_metadata(db, action.metadata_json or {}) or (action.metadata_json or {}).get("validation_status")), None)
+        validation_scan = _scan_from_metadata(db, validation_action.metadata_json or {}) if validation_action else None
+        validation_status = str((validation_action.metadata_json or {}).get("validation_status")) if validation_action and (validation_action.metadata_json or {}).get("validation_status") else None
+        closure_action = next((action for action in actions if action.status == "closed" or (action.metadata_json or {}).get("github_issue_closed_at")), None)
+        missing = []
+        if notification is None:
+            missing.append("notification")
+        if issue_or_pr is None:
+            missing.append("issue_or_pr")
+        if validation_action is None:
+            missing.append("validation")
+        if finding.status == models.FindingStatus.resolved and closure_action is None:
+            missing.append("closure")
+        closure_status = "closed" if closure_action else ("not_required" if finding.status != models.FindingStatus.resolved else "missing")
+        items.append(
+            schemas.RemediationEvidenceChainOut(
+                finding_id=finding.id,
+                severity=finding.severity,
+                status=finding.status,
+                application_id=application.id,
+                application_name=application.name,
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                notification_id=notification.id if notification else None,
+                issue_or_pr_action_id=issue_or_pr.id if issue_or_pr else None,
+                validation_status=validation_status,
+                validation_scan_id=validation_scan.id if validation_scan else None,
+                validation_scan_status=validation_scan.status if validation_scan else None,
+                closure_status=closure_status,
+                missing_stages=missing,
+                detail="Remediation evidence chain is complete" if not missing else f"Missing {', '.join(missing)}",
             ).model_dump(mode="json")
         )
     return items
