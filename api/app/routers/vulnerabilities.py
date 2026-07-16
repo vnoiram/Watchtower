@@ -150,12 +150,63 @@ def list_vulnerability_enrichment_coverage(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/source-provenance", response_model=schemas.CursorPage)
+def list_vulnerability_source_provenance(
+    limit: int = 50,
+    gap_type: str | None = None,
+    source: str | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = vulnerability_source_provenance_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if source:
+        items = [item for item in items if item["source"] == source]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def vulnerability_reevaluation_gap_count(db: Session) -> int:
     return len(vulnerability_reevaluation_coverage_items(db))
 
 
 def vulnerability_enrichment_gap_count(db: Session) -> int:
     return len(vulnerability_enrichment_coverage_items(db))
+
+
+def vulnerability_provenance_gap_count(db: Session) -> int:
+    return len(vulnerability_source_provenance_items(db))
+
+
+def vulnerability_source_provenance_items(db: Session) -> list[dict]:
+    affected_counts = {
+        vulnerability_id: count
+        for vulnerability_id, count in db.execute(
+            select(models.Finding.vulnerability_id, func.count(models.Finding.id)).group_by(
+                models.Finding.vulnerability_id
+            )
+        )
+    }
+    latest_scan_by_vulnerability = _latest_scan_by_vulnerability(db)
+    items = []
+    for vulnerability in db.scalars(select(models.Vulnerability).order_by(models.Vulnerability.severity.asc(), models.Vulnerability.external_id.asc())):
+        evidence = _vulnerability_evidence_text(vulnerability)
+        common = (vulnerability, int(affected_counts.get(vulnerability.id, 0)), _has_token(evidence, {"raw", "storage", "artifact", "object"}))
+        if not vulnerability.references:
+            items.append(_source_provenance_item("missing_reference", *common, "Vulnerability has no reference URLs"))
+        if not vulnerability.published_at:
+            items.append(_source_provenance_item("missing_published_at", *common, "Vulnerability has no published timestamp"))
+        if not vulnerability.modified_at:
+            items.append(_source_provenance_item("missing_modified_at", *common, "Vulnerability has no modified timestamp"))
+        if not common[2]:
+            items.append(_source_provenance_item("missing_raw_data_location", *common, "Vulnerability has no raw source storage evidence"))
+        latest_scan = latest_scan_by_vulnerability.get(vulnerability.id)
+        if vulnerability.modified_at and latest_scan and vulnerability.modified_at > _matching_datetime(latest_scan.created_at, vulnerability.modified_at):
+            items.append(_source_provenance_item("stale_reevaluation", *common, "Vulnerability was modified after latest related scan"))
+    return items
 
 
 def vulnerability_enrichment_coverage_items(db: Session) -> list[dict]:
@@ -187,6 +238,40 @@ def vulnerability_enrichment_coverage_items(db: Session) -> list[dict]:
         if not vulnerability.references:
             items.append(_enrichment_item("missing_references", *common, "Vulnerability has no reference URLs"))
     return items
+
+
+def _source_provenance_item(
+    gap_type: str,
+    vulnerability: models.Vulnerability,
+    affected_count: int,
+    has_raw_data_location: bool,
+    detail: str,
+) -> dict:
+    return schemas.VulnerabilitySourceProvenanceOut(
+        gap_type=gap_type,
+        vulnerability_id=vulnerability.id,
+        source=vulnerability.source,
+        external_id=vulnerability.external_id,
+        severity=vulnerability.severity,
+        reference_count=len(vulnerability.references or []),
+        affected_finding_count=affected_count,
+        has_raw_data_location=has_raw_data_location,
+        published_at=vulnerability.published_at,
+        modified_at=vulnerability.modified_at,
+        detail=detail,
+    ).model_dump(mode="json")
+
+
+def _latest_scan_by_vulnerability(db: Session) -> dict[UUID, models.Scan]:
+    stmt = (
+        select(models.Finding, models.Scan)
+        .join(models.Scan, models.Finding.last_seen_scan_id == models.Scan.id)
+        .order_by(models.Scan.created_at.desc(), models.Scan.id.desc())
+    )
+    latest = {}
+    for finding, scan in db.execute(stmt):
+        latest.setdefault(finding.vulnerability_id, scan)
+    return latest
 
 
 def vulnerability_reevaluation_coverage_items(db: Session) -> list[dict]:

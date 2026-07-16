@@ -2269,6 +2269,79 @@ class RunbookEvidenceOut(BaseModel):
     latest_evidence_at: datetime | None = None
 
 
+class ArtifactProvenanceOut(BaseModel):
+    gap_type: str
+    source: str
+    source_id: str
+    artifact_type: str | None = None
+    storage_key: str | None = None
+    digest: str | None = None
+    scan_id: UUID | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    detail: str
+    created_at: datetime
+
+
+class ScanFormatComplianceOut(BaseModel):
+    gap_type: str
+    scan_id: UUID
+    status: models.ScanStatus
+    tool: str | None = None
+    artifact_type: str | None = None
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    detail: str
+    created_at: datetime
+
+
+class WorkerCleanupOut(BaseModel):
+    gap_type: str
+    status: str
+    job_id: UUID
+    job_type: models.JobType
+    job_status: models.JobStatus
+    repository_id: UUID | None = None
+    repository_name: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    detail: str
+    created_at: datetime
+
+
+class IdempotencySafetyOut(BaseModel):
+    issue_type: str
+    source: str
+    source_id: str
+    status: str
+    repository_id: UUID | None = None
+    repository_name: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    detail: str
+    created_at: datetime
+
+
+class VulnerabilitySourceProvenanceOut(BaseModel):
+    gap_type: str
+    vulnerability_id: UUID
+    source: str
+    external_id: str
+    severity: models.Severity
+    reference_count: int
+    affected_finding_count: int
+    has_raw_data_location: bool
+    published_at: datetime | None = None
+    modified_at: datetime | None = None
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2351,3 +2424,8 @@ class DashboardSummary(BaseModel):
     failure_drill_gap_items: int
     repository_onboarding_gap_items: int
     runbook_evidence_gap_items: int
+    artifact_provenance_gap_items: int
+    scan_format_gap_items: int
+    worker_cleanup_gap_items: int
+    idempotency_gap_items: int
+    vulnerability_provenance_gap_items: int

@@ -46,7 +46,12 @@ from api.app.routers.application_detection import (
 from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
 from api.app.routers.audit import list_audit_evidence_gaps, list_audit_review
-from api.app.routers.artifacts import list_artifact_sbom_coverage, list_artifacts, list_container_coverage
+from api.app.routers.artifacts import (
+    list_artifact_provenance,
+    list_artifact_sbom_coverage,
+    list_artifacts,
+    list_container_coverage,
+)
 from api.app.routers.auto_merge import (
     automation_guardrails,
     list_auto_merge_dry_runs,
@@ -100,6 +105,7 @@ from api.app.routers.operations import (
     list_completion_readiness,
     list_e2e_evidence,
     list_failure_drills,
+    list_idempotency_safety,
     list_incident_readiness,
     list_observability,
     list_backup_evidence,
@@ -109,6 +115,7 @@ from api.app.routers.operations import (
     list_restore_evidence,
     list_runbook_evidence,
     list_scheduler_drift,
+    list_worker_cleanup,
     worker_hardening,
     monthly_review,
     operational_workload,
@@ -162,7 +169,12 @@ from api.app.routers.rollout import (
     rollout_baseline,
 )
 from api.app.routers.scan_health import list_scan_health
-from api.app.routers.scans import list_daily_scan_slo, list_raw_scan_artifacts, list_scan_evidence_quality
+from api.app.routers.scans import (
+    list_daily_scan_slo,
+    list_raw_scan_artifacts,
+    list_scan_evidence_quality,
+    list_scan_format_compliance,
+)
 from api.app.routers.scanner_inventory import list_scanner_inventory
 from api.app.routers.scanners import list_scanner_database_freshness, list_scanner_failures
 from api.app.routers.scanner_versions import list_scanner_versions
@@ -186,6 +198,7 @@ from api.app.routers.storage import list_storage_cleanup_candidates, retention_r
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_invalidation_candidates, list_vex_statements
 from api.app.routers.vulnerabilities import (
+    list_vulnerability_source_provenance,
     list_vulnerability_enrichment_coverage,
     list_vulnerabilities,
     list_vulnerability_impact,
@@ -5386,6 +5399,177 @@ def test_runbook_evidence_reports_cadence_gaps_and_filters() -> None:
         assert by_check["scan"]["status"] == "ok"
         assert any(item["check"] == "medium_review" for item in filtered.items)
         assert summary.runbook_evidence_gap_items >= 1
+
+
+def test_artifact_provenance_reports_storage_digest_and_path_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "artifact-provenance")
+        app = create_application(db, repo)
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={
+                "artifacts": {
+                    "source_sbom": {"storage_key": "source.cdx.json", "digest": "sha-source"},
+                    "osv": {"storage_key": "/tmp/osv.json", "digest": "sha-osv"},
+                    "trivy": {"storage_key": "trivy.json"},
+                }
+            },
+        )
+        db.add(scan)
+        db.flush()
+        db.add(Sbom(application_id=app.id, scan_id=scan.id, sbom_kind="", sbom_digest="", storage_key="", active=True))
+        db.commit()
+
+        page = list_artifact_provenance(db=db, _=None)
+        filtered = list_artifact_provenance(gap_type="unexpected_storage_path", source="scan_artifact", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        gaps = {(item["source"], item["gap_type"]) for item in page.items}
+        assert ("scan_artifact", "complete") in gaps
+        assert ("scan_artifact", "unexpected_storage_path") in gaps
+        assert ("scan_artifact", "missing_digest") in gaps
+        assert ("sbom", "missing_artifact_type") in gaps
+        assert filtered.items[0]["artifact_type"] == "osv"
+        assert summary.artifact_provenance_gap_items >= 3
+
+
+def test_scan_format_compliance_reports_format_shape_and_version_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "scan-format")
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    tool="trivy",
+                    result_summary={"artifacts": {"trivy": {"storage_key": "trivy.txt"}}},
+                ),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.partially_succeeded,
+                    tool="semgrep",
+                    tool_version="1.0",
+                    result_summary={"scanner_failures": "bad-shape"},
+                ),
+                Scan(application_id=app.id, status=ScanStatus.succeeded, tool="syft", tool_version="1.0", result_summary={}),
+            ]
+        )
+        db.commit()
+
+        page = list_scan_format_compliance(db=db, _=None)
+        filtered = list_scan_format_compliance(gap_type="unknown_artifact_format", tool="trivy", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        gap_types = {item["gap_type"] for item in page.items}
+        assert {"missing_tool_version", "unknown_artifact_format", "scanner_failure_shape", "missing_result_summary"} <= gap_types
+        assert filtered.items[0]["tool"] == "trivy"
+        assert summary.scan_format_gap_items >= 4
+
+
+def test_worker_cleanup_reports_job_cleanup_evidence_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "worker-cleanup")
+        app = create_application(db, repo)
+        clean_job = Job(
+            job_type=JobType.scan,
+            status=JobStatus.succeeded,
+            application_id=app.id,
+            payload={
+                "workspace": "/tmp/work",
+                "cleanup": True,
+                "container": "worker",
+                "credential_ttl": 3600,
+            },
+        )
+        gap_job = Job(job_type=JobType.scan, status=JobStatus.succeeded, application_id=app.id, payload={})
+        db.add_all([clean_job, gap_job])
+        db.commit()
+
+        page = list_worker_cleanup(db=db, _=None)
+        filtered = list_worker_cleanup(gap_type="missing_cleanup", job_type=JobType.scan, status="gap", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert {item["gap_type"] for item in page.items} >= {
+            "missing_workspace",
+            "missing_cleanup",
+            "missing_runner_isolation",
+            "missing_credential_ttl",
+        }
+        assert filtered.items[0]["job_type"] == JobType.scan.value
+        assert summary.worker_cleanup_gap_items == len(page.items)
+
+
+def test_idempotency_safety_reports_duplicate_jobs_webhooks_remediation_and_scans() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "idempotency")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        db.add_all(
+            [
+                Job(job_type=JobType.scan, status=JobStatus.queued, application_id=app.id, payload={"commit_sha": "abc"}),
+                Job(job_type=JobType.scan, status=JobStatus.running, application_id=app.id, payload={"commit_sha": "abc"}),
+                Job(job_type=JobType.repository_sync, status=JobStatus.succeeded, repository_id=repo.id, payload={"event": "push", "delivery_id": "d1"}),
+                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, payload={"event": "push", "delivery_id": "d1"}),
+                RemediationAction(finding_id=finding.id, action_type="github_issue", status="skipped_duplicate", metadata_json={"duplicate_of": "issue-1"}),
+                Scan(application_id=app.id, status=ScanStatus.succeeded, trigger_type=TriggerType.push, commit_sha="abc", tool="osv"),
+                Scan(application_id=app.id, status=ScanStatus.succeeded, trigger_type=TriggerType.push, commit_sha="abc", tool="osv"),
+            ]
+        )
+        db.commit()
+
+        page = list_idempotency_safety(db=db, _=None)
+        filtered = list_idempotency_safety(issue_type="duplicate_webhook", source="job", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert {"duplicate_active_job", "duplicate_webhook", "duplicate_remediation", "duplicate_scan"} <= {
+            item["issue_type"] for item in page.items
+        }
+        assert filtered.items[0]["issue_type"] == "duplicate_webhook"
+        assert summary.idempotency_gap_items == len(page.items)
+
+
+def test_vulnerability_source_provenance_reports_source_metadata_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "vuln-provenance")
+        app = create_application(db, repo)
+        component = Component(purl="pkg:pypi/demo@1", ecosystem="pypi", name="demo", version="1")
+        stale_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=2))
+        vuln = Vulnerability(
+            source="osv",
+            external_id="OSV-2026-1",
+            severity=Severity.high,
+            references=[],
+            modified_at=now_utc(),
+        )
+        db.add_all([component, stale_scan, vuln])
+        db.flush()
+        finding = Finding(
+            application_id=app.id,
+            component_id=component.id,
+            vulnerability_id=vuln.id,
+            severity=Severity.high,
+            status=FindingStatus.open,
+            last_seen_scan_id=stale_scan.id,
+        )
+        db.add(finding)
+        db.commit()
+
+        page = list_vulnerability_source_provenance(db=db, _=None)
+        filtered = list_vulnerability_source_provenance(gap_type="stale_reevaluation", source="osv", severity=Severity.high, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        assert {"missing_reference", "missing_published_at", "missing_raw_data_location", "stale_reevaluation"} <= {
+            item["gap_type"] for item in page.items
+        }
+        assert filtered.items[0]["external_id"] == "OSV-2026-1"
+        assert summary.vulnerability_provenance_gap_items == len(page.items)
 
 
 def test_storage_encryption_posture_reports_tls_metadata_and_backup_audit() -> None:

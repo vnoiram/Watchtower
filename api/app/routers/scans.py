@@ -101,12 +101,65 @@ def list_daily_scan_slo(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/format-compliance", response_model=schemas.CursorPage)
+def list_scan_format_compliance(
+    limit: int = 50,
+    gap_type: str | None = None,
+    tool: str | None = None,
+    status: models.ScanStatus | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = scan_format_compliance_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if tool:
+        items = [item for item in items if item["tool"] == tool]
+    if status:
+        items = [item for item in items if item["status"] == status.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def daily_scan_slo_breach_count(db: Session) -> int:
     return sum(1 for item in daily_scan_slo_items(db) if item["breached"])
 
 
 def raw_scan_artifact_gap_count(db: Session) -> int:
     return sum(1 for item in raw_scan_artifact_items(db) if item["gap_type"] != "complete")
+
+
+def scan_format_gap_count(db: Session) -> int:
+    return len(scan_format_compliance_items(db))
+
+
+def scan_format_compliance_items(db: Session) -> list[dict]:
+    stmt = (
+        select(models.Scan, models.Application, models.Repository)
+        .join(models.Application, models.Scan.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Scan.created_at.desc(), models.Scan.id.asc())
+    )
+    items = []
+    for scan, application, repository in db.execute(stmt):
+        if not scan.result_summary:
+            items.append(_format_item("missing_result_summary", scan, application, repository, None, "Scan has no result summary"))
+        if scan.tool and not scan.tool_version:
+            items.append(_format_item("missing_tool_version", scan, application, repository, None, "Scan has tool but no tool version"))
+        if _scanner_failures_shape_invalid(scan.result_summary):
+            items.append(_format_item("scanner_failure_shape", scan, application, repository, None, "scanner_failures is not a list/dict shape"))
+        for artifact_type, artifact in _scan_artifact_payloads(scan.result_summary):
+            if not _artifact_format_ok(artifact_type, artifact):
+                items.append(
+                    _format_item(
+                        "unknown_artifact_format",
+                        scan,
+                        application,
+                        repository,
+                        artifact_type,
+                        "Artifact storage key does not match expected scanner output format",
+                    )
+                )
+    return items
 
 
 def raw_scan_artifact_items(db: Session) -> list[dict]:
@@ -149,6 +202,57 @@ def raw_scan_artifact_items(db: Session) -> list[dict]:
                 detail = "Raw scan artifact has no encryption metadata"
             items.append(_raw_artifact_item(gap, scan, application, repository, current_type, artifact, detail))
     return items
+
+
+def _format_item(
+    gap_type: str,
+    scan: models.Scan,
+    application: models.Application,
+    repository: models.Repository,
+    artifact_type: str | None,
+    detail: str,
+) -> dict:
+    return schemas.ScanFormatComplianceOut(
+        gap_type=gap_type,
+        scan_id=scan.id,
+        status=scan.status,
+        tool=scan.tool,
+        artifact_type=artifact_type,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        detail=detail,
+        created_at=scan.created_at,
+    ).model_dump(mode="json")
+
+
+def _scanner_failures_shape_invalid(result_summary: dict | None) -> bool:
+    if not result_summary or "scanner_failures" not in result_summary:
+        return False
+    failures = result_summary.get("scanner_failures")
+    if isinstance(failures, dict):
+        return False
+    if isinstance(failures, list):
+        return any(not isinstance(item, dict | str) for item in failures)
+    return True
+
+
+def _artifact_format_ok(artifact_type: str | None, artifact: dict) -> bool:
+    if not artifact_type:
+        return False
+    storage_key = str(artifact.get("storage_key") or artifact.get("path") or "").lower()
+    declared = str(artifact.get("format") or "").lower()
+    text = f"{artifact_type} {storage_key} {declared}".lower()
+    if any(token in artifact_type.lower() for token in ["source_sbom", "artifact_sbom", "container_sbom", "sbom"]):
+        return "cyclonedx" in text or "cdx" in text or storage_key.endswith(".json")
+    if any(token in artifact_type.lower() for token in ["semgrep", "gitleaks", "sarif"]):
+        return "sarif" in text or storage_key.endswith(".sarif")
+    if any(token in artifact_type.lower() for token in ["osv", "trivy", "grype"]):
+        return "json" in text or storage_key.endswith(".json")
+    return bool(storage_key)
+
 
 
 def daily_scan_slo_items(db: Session) -> list[dict]:
