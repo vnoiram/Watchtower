@@ -1463,26 +1463,27 @@ def completion_readiness_items(db: Session, settings: Settings) -> list[schemas.
     actions = list(db.scalars(select(models.RemediationAction)))
     vex_statements = list(db.scalars(select(models.VexStatement)))
     active_apps = [app for app in applications if app.lifecycle != models.Lifecycle.archived]
+    active_app_ids = {app.id for app in active_apps}
     active_sboms = list(
         db.scalars(select(models.Sbom).where(models.Sbom.active.is_(True), models.Sbom.sbom_kind == "source"))
     )
-    active_sbom_app_ids = {sbom.application_id for sbom in active_sboms}
+    active_sbom_app_ids = {sbom.application_id for sbom in active_sboms if sbom.application_id in active_app_ids}
     owner_count = sum(1 for app in active_apps if app.owner)
     classified_repos = sum(1 for repo in repositories if repo.visibility and repo.source_classification)
     daily_cutoff = datetime.now(timezone.utc) - timedelta(days=1)
-    recent_scan_apps = {scan.application_id for scan in scans if _after_cutoff(scan.created_at, daily_cutoff)}
+    recent_scan_apps = {
+        scan.application_id
+        for scan in scans
+        if scan.application_id in active_app_ids and _after_cutoff(scan.created_at, daily_cutoff)
+    }
     critical_high = [
         finding for finding in findings if finding.severity in {models.Severity.critical, models.Severity.high}
     ]
     open_critical_high = [finding for finding in critical_high if finding.status == models.FindingStatus.open]
     action_finding_ids = {action.finding_id for action in actions if action.action_type == "github_issue" or action.url or action.branch}
     rescan_after_action = sum(1 for action in actions if _has_scan_after(scans, _application_id_for_action(db, action), action.updated_at))
-    closure_evidence = sum(
-        1
-        for action in actions
-        if action.action_type == "github_issue"
-        and (action.status == "closed" or bool((action.metadata_json or {}).get("github_issue_closed_at")))
-    )
+    actions_missing_rescan = max(len(actions) - rescan_after_action, 0)
+    resolved_without_closure = _resolved_without_closure_count(db)
     restore_logs = _recent_restore_logs(db)
     monitoring = len(list_scan_health(db=db, _=None).items) + len(failure_signal_items(db))
     storage_configured = bool(settings.minio_endpoint and settings.minio_access_key and settings.minio_secret_key and settings.minio_bucket)
@@ -1494,8 +1495,8 @@ def completion_readiness_items(db: Session, settings: Settings) -> list[schemas.
         _completion("daily_rescan", len(recent_scan_apps) >= len(active_apps), max(len(active_apps) - len(recent_scan_apps), 0), 0, _percent(len(recent_scan_apps), len(active_apps)), "Active applications scanned in the last 24 hours"),
         _completion("critical_high_inventory", True, len(critical_high), None, None, "Critical/high findings centrally visible"),
         _completion("issue_or_pr_creation", not open_critical_high or all(finding.id in action_finding_ids for finding in open_critical_high), sum(1 for finding in open_critical_high if finding.id not in action_finding_ids), 0, None, "Open critical/high findings with issue or PR action evidence"),
-        _completion("post_fix_rescan", not actions or rescan_after_action > 0, max(len(actions) - rescan_after_action, 0), 0, None, "Remediation actions with later scan evidence"),
-        _completion("resolved_finding_closure", closure_evidence > 0 or not any(finding.status == models.FindingStatus.resolved for finding in findings), _resolved_without_closure_count(db), 0, None, "Resolved findings with issue closure evidence"),
+        _completion("post_fix_rescan", actions_missing_rescan == 0, actions_missing_rescan, 0, None, "Remediation actions with later scan evidence"),
+        _completion("resolved_finding_closure", resolved_without_closure == 0, resolved_without_closure, 0, None, "Resolved findings with issue closure evidence"),
         _completion("vex_review_dates", all(vex.review_date for vex in vex_statements), sum(1 for vex in vex_statements if not vex.review_date), 0, None, "VEX statements with review dates"),
         _completion("scan_failure_monitoring", monitoring > 0, monitoring, None, None, "Scan health or failure signal monitoring evidence"),
         _completion("backup_restore_evidence", storage_configured and bool(restore_logs), 0 if storage_configured and restore_logs else 1, 0, None, "Object storage configured and restore verification evidence exists"),
