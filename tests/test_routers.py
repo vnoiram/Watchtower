@@ -68,7 +68,7 @@ from api.app.routers.components import (
 )
 from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
-from api.app.routers.findings import list_finding_evidence_gaps, list_findings, list_finding_lifecycle_review
+from api.app.routers.findings import list_critical_high_triage, list_finding_evidence_gaps, list_findings, list_finding_lifecycle_review
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
 from api.app.routers.findings import list_finding_traceability, list_medium_review, list_resolution_candidates, list_risk_score_explanations
 from api.app.routers.governance import (
@@ -4754,6 +4754,37 @@ def test_list_daily_scan_execution_evidence_reports_missing_daily_execution() ->
         assert {item["application_name"] for item in missing.items} >= {"daily-stale", "daily-failed", "daily-missing-job"}
         assert filtered.items[0]["application_name"] == "daily-missing-job"
         assert summary.daily_scan_execution_gap_items >= 3
+
+
+def test_list_critical_high_triage_reports_missing_triage_evidence() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "critical-high-triage")
+        complete_app = create_application(db, repo, "triage-complete")
+        complete_app.owner = "team"
+        missing_app = create_application(db, repo, "triage-missing")
+        missing_app.owner = None
+        complete = create_finding(db, complete_app, severity=Severity.high, status=FindingStatus.open)
+        missing = create_finding(db, missing_app, severity=Severity.critical, status=FindingStatus.open)
+        missing.created_at = now_utc() - timedelta(days=10)
+        db.add_all(
+            [
+                Notification(channel="slack", severity=Severity.high, subject="sent", body="sent", status="sent", sent_at=now_utc(), metadata_json={"finding_id": str(complete.id)}),
+                RemediationAction(finding_id=complete.id, action_type="github_issue", status="created", provider="github", url="https://github.com/local/demo/issues/1", metadata_json={}),
+                VexStatement(finding_id=complete.id, status=VexStatus.under_investigation, justification="triage", approved_by="security", review_date=now_utc() + timedelta(days=7)),
+            ]
+        )
+        db.flush()
+
+        page = list_critical_high_triage(db=db, _=None)
+        filtered = list_critical_high_triage(severity=Severity.critical, status=FindingStatus.open, missing="issue_or_pr", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        by_id = {item["finding_id"]: item for item in page.items}
+
+        assert by_id[str(complete.id)]["missing"] == []
+        assert {"owner", "notification", "issue_or_pr", "vex_or_exception", "sla"} <= set(by_id[str(missing.id)]["missing"])
+        assert filtered.items[0]["finding_id"] == str(missing.id)
+        assert summary.critical_high_triage_gap_items >= 1
 
 
 def test_list_initial_inventory_reports_completion_and_filters() -> None:

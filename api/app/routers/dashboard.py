@@ -24,7 +24,7 @@ from api.app.routers.job_health import job_health_reason
 from api.app.routers.jobs import job_concurrency_risk_count, job_retry_gap_count
 from api.app.routers.kpis import mvp_target_breach_count, notification_failure_count, scan_failure_rate_percent
 from api.app.routers.notifications import notification_retry_gap_count, notification_slo_breach_count
-from api.app.routers.findings import finding_traceability_gap_count, medium_review_count, risk_score_gap_count
+from api.app.routers.findings import critical_high_triage_gap_count, finding_traceability_gap_count, medium_review_count, risk_score_gap_count
 from api.app.routers.operations import (
     completion_readiness_gap_count,
     e2e_evidence_gap_count,
@@ -244,6 +244,7 @@ def dashboard_summary(
     owner_handoff_gap_items = owner_handoff_gap_count(db)
     repository_inventory_assurance_gap_items = repository_inventory_assurance_gap_count(db)
     daily_scan_execution_gap_items = daily_scan_execution_gap_count(db)
+    critical_high_triage_gap_items = critical_high_triage_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -353,4 +354,5 @@ def dashboard_summary(
         owner_handoff_gap_items=owner_handoff_gap_items,
         repository_inventory_assurance_gap_items=repository_inventory_assurance_gap_items,
         daily_scan_execution_gap_items=daily_scan_execution_gap_items,
+        critical_high_triage_gap_items=critical_high_triage_gap_items,
     )

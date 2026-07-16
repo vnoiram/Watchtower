@@ -2678,6 +2678,25 @@ class DailyScanExecutionEvidenceOut(BaseModel):
     detail: str
 
 
+class CriticalHighTriageOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    owner: str | None = None
+    notification_id: UUID | None = None
+    remediation_action_id: UUID | None = None
+    vex_id: UUID | None = None
+    sla_breached: bool
+    missing: list[str]
+    detail: str
+    created_at: datetime
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2787,3 +2806,4 @@ class DashboardSummary(BaseModel):
     owner_handoff_gap_items: int
     repository_inventory_assurance_gap_items: int
     daily_scan_execution_gap_items: int
+    critical_high_triage_gap_items: int
