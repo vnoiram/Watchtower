@@ -146,6 +146,22 @@ def list_mvp_target_readiness(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/mvp-readiness-drilldown", response_model=schemas.CursorPage)
+def list_mvp_readiness_drilldown(
+    limit: int = 50,
+    ready: bool | None = None,
+    check: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = mvp_readiness_drilldown_items(db)
+    if ready is not None:
+        items = [item for item in items if item["ready"] is ready]
+    if check:
+        items = [item for item in items if check in item["failing_checks"]]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/initial-inventory", response_model=schemas.CursorPage)
 def list_initial_inventory(
     limit: int = 50,
@@ -250,6 +266,10 @@ def repository_inventory_gap_count(db: Session) -> int:
 
 def repository_onboarding_gap_count(db: Session) -> int:
     return sum(1 for item in repository_onboarding_proof_items(db) if not item["ready"])
+
+
+def mvp_readiness_gap_count(db: Session) -> int:
+    return sum(1 for item in mvp_readiness_drilldown_items(db) if not item["ready"])
 
 
 def workflow_trace_gap_count(db: Session) -> int:
@@ -617,6 +637,51 @@ def mvp_target_readiness_items(db: Session) -> list[dict]:
                 latest_scan_created_at=latest_scan.created_at if latest_scan else None,
                 open_critical_high_count=open_count,
                 detail="MVP target is ready" if not failing else f"MVP target has {', '.join(failing)}",
+            ).model_dump(mode="json")
+        )
+    return items
+
+
+def mvp_readiness_drilldown_items(db: Session) -> list[dict]:
+    items = []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    for repository in _mvp_target_repositories(db):
+        applications = list(db.scalars(select(models.Application).where(models.Application.repository_id == repository.id)))
+        application_ids = [app.id for app in applications]
+        owner_count = sum(1 for app in applications if app.owner)
+        active_sbom_app_ids = _active_sbom_application_ids(db, application_ids)
+        scans = _repository_scans(db, repository.id)
+        latest_scan = scans[0] if scans else None
+        open_count = _open_critical_high_count(db, application_ids)
+        failing = []
+        if not repository.visibility or repository.source_classification is None:
+            failing.append("repository_classification")
+        if not applications:
+            failing.append("applications")
+        if applications and owner_count < len(applications):
+            failing.append("owners")
+        if applications and len(active_sbom_app_ids) < len(applications):
+            failing.append("active_source_sbom")
+        if latest_scan is None or _before(latest_scan.created_at, cutoff):
+            failing.append("fresh_scan")
+        if open_count:
+            failing.append("critical_high_triage")
+        items.append(
+            schemas.MvpReadinessDrilldownOut(
+                repository_id=repository.id,
+                repository_owner=repository.owner,
+                repository_name=repository.name,
+                ready=not failing,
+                failing_checks=failing,
+                visibility=repository.visibility,
+                source_classification=repository.source_classification,
+                application_count=len(applications),
+                owner_completeness_percent=_percent(owner_count, len(applications)),
+                active_sbom_coverage_percent=_percent(len(active_sbom_app_ids), len(applications)),
+                latest_scan_status=latest_scan.status if latest_scan else None,
+                latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+                open_critical_high_count=open_count,
+                detail="MVP target readiness complete" if not failing else f"Missing {', '.join(failing)}",
             ).model_dump(mode="json")
         )
     return items
