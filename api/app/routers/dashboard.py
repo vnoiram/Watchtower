@@ -90,7 +90,7 @@ from api.app.routers.scans import (
     scan_freshness_gap_count,
     scan_result_consistency_gap_count,
 )
-from api.app.routers.scanners import scanner_database_freshness_count, scanner_execution_gap_count
+from api.app.routers.scanners import scanner_database_freshness_count, scanner_execution_gap_count, scanner_tool_coverage_gap_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import (
     auth_deployment_gap_count,
@@ -230,6 +230,7 @@ def dashboard_summary(
     finding_traceability_gap_items = finding_traceability_gap_count(db)
     notification_retry_gap_items = notification_retry_gap_count(db)
     scanner_execution_gap_items = scanner_execution_gap_count(db)
+    scanner_tool_coverage_gap_items = scanner_tool_coverage_gap_count(db)
     retention_execution_gap_items = retention_execution_gap_count(db)
     workflow_trace_gap_items = workflow_trace_gap_count(db)
     state_consistency_gap_items = state_consistency_gap_count(db)
@@ -340,6 +341,7 @@ def dashboard_summary(
         finding_traceability_gap_items=finding_traceability_gap_items,
         notification_retry_gap_items=notification_retry_gap_items,
         scanner_execution_gap_items=scanner_execution_gap_items,
+        scanner_tool_coverage_gap_items=scanner_tool_coverage_gap_items,
         retention_execution_gap_items=retention_execution_gap_items,
         workflow_trace_gap_items=workflow_trace_gap_items,
         state_consistency_gap_items=state_consistency_gap_items,

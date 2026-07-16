@@ -2491,6 +2491,20 @@ class ScannerExecutionMatrixOut(BaseModel):
     detail: str
 
 
+class ScannerToolCoverageOut(BaseModel):
+    gap_type: str
+    tool: str
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    detail: str
+
+
 class RetentionExecutionOut(BaseModel):
     gap_type: str
     reason: str
@@ -2792,6 +2806,7 @@ class DashboardSummary(BaseModel):
     finding_traceability_gap_items: int
     notification_retry_gap_items: int
     scanner_execution_gap_items: int
+    scanner_tool_coverage_gap_items: int
     retention_execution_gap_items: int
     workflow_trace_gap_items: int
     state_consistency_gap_items: int

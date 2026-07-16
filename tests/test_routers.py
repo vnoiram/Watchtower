@@ -190,7 +190,7 @@ from api.app.routers.scans import (
     list_scan_format_compliance,
 )
 from api.app.routers.scanner_inventory import list_scanner_inventory
-from api.app.routers.scanners import list_scanner_database_freshness, list_scanner_execution_matrix, list_scanner_failures
+from api.app.routers.scanners import list_scanner_database_freshness, list_scanner_execution_matrix, list_scanner_failures, list_scanner_tool_coverage
 from api.app.routers.scanner_versions import list_scanner_versions
 from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
 from api.app.routers.security import (
@@ -6665,6 +6665,40 @@ def test_list_scanner_execution_matrix_reports_missing_stale_failed_and_version_
         assert ("semgrep", "missing_required_scanner") in gaps
         assert grype_page.items[0]["application_id"] == str(app.id)
         assert summary.scanner_execution_gap_items == len(page.items)
+
+
+def test_list_scanner_tool_coverage_reports_mvp_tool_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "scanner-tool-coverage")
+        covered = create_application(db, repo, "scanner-covered")
+        gaps = create_application(db, repo, "scanner-gaps")
+        archived = create_application(db, repo, "scanner-archived")
+        archived.lifecycle = Lifecycle.archived
+        db.add_all(
+            [
+                Scan(application_id=covered.id, status=ScanStatus.succeeded, tool="osv", created_at=now_utc()),
+                Scan(application_id=covered.id, status=ScanStatus.succeeded, tool="trivy", created_at=now_utc()),
+                Scan(application_id=covered.id, status=ScanStatus.succeeded, tool="syft", created_at=now_utc()),
+                Scan(application_id=gaps.id, status=ScanStatus.partially_succeeded, tool="osv", created_at=now_utc()),
+                Scan(application_id=gaps.id, status=ScanStatus.failed, tool="trivy", created_at=now_utc()),
+                Scan(application_id=archived.id, status=ScanStatus.failed, tool="osv", created_at=now_utc()),
+            ]
+        )
+        db.flush()
+
+        page = list_scanner_tool_coverage(db=db, _=None)
+        trivy_page = list_scanner_tool_coverage(tool="trivy", gap_type="unhealthy_latest_scan", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        issues = {(item["application_name"], item["tool"], item["gap_type"]) for item in page.items}
+
+        assert ("scanner-gaps", "osv", "unhealthy_latest_scan") in issues
+        assert ("scanner-gaps", "trivy", "unhealthy_latest_scan") in issues
+        assert ("scanner-gaps", "syft", "missing_tool") in issues
+        assert all(item["application_name"] != "scanner-covered" for item in page.items)
+        assert all(item["application_name"] != "scanner-archived" for item in page.items)
+        assert trivy_page.items[0]["application_id"] == str(gaps.id)
+        assert summary.scanner_tool_coverage_gap_items == len(page.items)
 
 
 def test_list_retention_execution_reports_cleanup_audit_and_retained_candidates() -> None:

@@ -62,12 +62,35 @@ def list_scanner_execution_matrix(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/tool-coverage", response_model=schemas.CursorPage)
+def list_scanner_tool_coverage(
+    limit: int = 50,
+    gap_type: str | None = None,
+    tool: str | None = None,
+    application_id: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = scanner_tool_coverage_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if tool:
+        items = [item for item in items if item["tool"] == tool]
+    if application_id:
+        items = [item for item in items if item["application_id"] == application_id]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def scanner_database_freshness_count(db: Session) -> int:
     return len(scanner_database_freshness_items(db))
 
 
 def scanner_execution_gap_count(db: Session) -> int:
     return len(scanner_execution_matrix_items(db))
+
+
+def scanner_tool_coverage_gap_count(db: Session) -> int:
+    return len(scanner_tool_coverage_items(db))
 
 
 def scanner_execution_matrix_items(db: Session) -> list[dict]:
@@ -95,6 +118,29 @@ def scanner_execution_matrix_items(db: Session) -> list[dict]:
                 items.append(_execution_item("failed_latest_scanner", tool, application, repository, scan, "Latest scanner run did not complete successfully"))
             if not scan.tool_version:
                 items.append(_execution_item("missing_tool_version", tool, application, repository, scan, "Latest scanner run has no tool version"))
+    return items
+
+
+def scanner_tool_coverage_items(db: Session) -> list[dict]:
+    rows = list(
+        db.execute(
+            select(models.Application, models.Repository)
+            .join(models.Repository, models.Application.repository_id == models.Repository.id)
+            .where(models.Application.lifecycle != models.Lifecycle.archived)
+            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        )
+    )
+    scans_by_app = _scans_by_application(db)
+    items = []
+    for application, repository in rows:
+        scans = scans_by_app.get(application.id, [])
+        for tool in _mvp_scanner_tools():
+            scan = _latest_tool_scan(scans, tool)
+            if scan is None:
+                items.append(_tool_coverage_item("missing_tool", tool, application, repository, None, "Required MVP scanner has no scan evidence"))
+                continue
+            if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out, models.ScanStatus.cancelled, models.ScanStatus.partially_succeeded}:
+                items.append(_tool_coverage_item("unhealthy_latest_scan", tool, application, repository, scan, "Latest required scanner run did not fully succeed"))
     return items
 
 
@@ -164,6 +210,10 @@ def _required_tools(application: models.Application) -> list[str]:
     return tools
 
 
+def _mvp_scanner_tools() -> list[str]:
+    return ["osv", "trivy", "syft"]
+
+
 def _latest_tool_scan(scans: list[models.Scan], tool: str) -> models.Scan | None:
     return next((scan for scan in scans if _tool_matches(scan, tool)), None)
 
@@ -195,6 +245,29 @@ def _execution_item(
         latest_scan_status=scan.status if scan else None,
         latest_scan_created_at=scan.created_at if scan else None,
         tool_version=scan.tool_version if scan else None,
+        detail=detail,
+    ).model_dump(mode="json")
+
+
+def _tool_coverage_item(
+    gap_type: str,
+    tool: str,
+    application: models.Application,
+    repository: models.Repository,
+    scan: models.Scan | None,
+    detail: str,
+) -> dict:
+    return schemas.ScannerToolCoverageOut(
+        gap_type=gap_type,
+        tool=tool,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        latest_scan_id=scan.id if scan else None,
+        latest_scan_status=scan.status if scan else None,
+        latest_scan_created_at=scan.created_at if scan else None,
         detail=detail,
     ).model_dump(mode="json")
 
