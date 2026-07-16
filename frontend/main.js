@@ -182,6 +182,7 @@ const ownerHandoff = document.querySelector("#owner-handoff");
 const repositoryInventoryAssurance = document.querySelector("#repository-inventory-assurance");
 const dailyScanExecution = document.querySelector("#daily-scan-execution");
 const criticalHighTriage = document.querySelector("#critical-high-triage");
+const scannerToolCoverage = document.querySelector("#scanner-tool-coverage");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -339,6 +340,7 @@ function renderMetrics(summary) {
     ["repository_inventory_assurance_gap_items", "Repo assurance", "warn"],
     ["daily_scan_execution_gap_items", "Daily scan exec", "warn"],
     ["critical_high_triage_gap_items", "Critical/high triage", "danger"],
+    ["scanner_tool_coverage_gap_items", "Scanner tools", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -2420,6 +2422,18 @@ function renderCriticalHighTriage(page) {
     : `<tr><td colspan="5">No critical/high triage gaps</td></tr>`;
 }
 
+function renderScannerToolCoverage(page) {
+  const rows = page.items || [];
+  scannerToolCoverage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.tool)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.latest_scan_status || item.gap_type)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scanner tool coverage gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2603,6 +2617,7 @@ async function refresh() {
   repositoryInventoryAssurance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   dailyScanExecution.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   criticalHighTriage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scannerToolCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2788,6 +2803,7 @@ async function refresh() {
       repositoryInventoryAssurancePage,
       dailyScanExecutionPage,
       criticalHighTriagePage,
+      scannerToolCoveragePage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2972,6 +2988,7 @@ async function refresh() {
       loadJson("/rollout/repository-inventory-assurance?limit=10"),
       loadJson("/scans/daily-execution-evidence?evidence_present=false&limit=10"),
       loadJson("/findings/critical-high-triage?limit=10"),
+      loadJson("/scanners/tool-coverage?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -3155,6 +3172,7 @@ async function refresh() {
     renderRepositoryInventoryAssurance(repositoryInventoryAssurancePage);
     renderDailyScanExecution(dailyScanExecutionPage);
     renderCriticalHighTriage(criticalHighTriagePage);
+    renderScannerToolCoverage(scannerToolCoveragePage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -3338,6 +3356,7 @@ async function refresh() {
     repositoryInventoryAssurance.innerHTML = `<tr><td colspan="5">Unable to load repository inventory assurance</td></tr>`;
     dailyScanExecution.innerHTML = `<tr><td colspan="5">Unable to load daily scan execution</td></tr>`;
     criticalHighTriage.innerHTML = `<tr><td colspan="5">Unable to load critical/high triage</td></tr>`;
+    scannerToolCoverage.innerHTML = `<tr><td colspan="5">Unable to load scanner tool coverage</td></tr>`;
   }
 }
 
