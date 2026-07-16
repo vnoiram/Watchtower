@@ -45,7 +45,7 @@ from api.app.routers.application_detection import (
 )
 from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
-from api.app.routers.audit import list_audit_evidence_gaps, list_audit_review
+from api.app.routers.audit import list_audit_action_coverage, list_audit_evidence_gaps, list_audit_review
 from api.app.routers.artifacts import (
     list_artifact_provenance,
     list_artifact_sbom_coverage,
@@ -82,7 +82,7 @@ from api.app.routers.governance import (
 from api.app.routers.integrations import github_integration_health, list_github_permissions, list_webhook_intake
 from api.app.routers.isolated_lane import list_isolated_lane, list_isolated_safeguards, list_isolated_scan_health
 from api.app.routers.job_health import list_job_health
-from api.app.routers.jobs import list_job_backlog, list_job_concurrency_risks, list_retry_candidates
+from api.app.routers.jobs import list_job_backlog, list_job_concurrency_risks, list_job_retry_posture, list_retry_candidates
 from api.app.routers.kpis import (
     efficiency_kpis,
     kpi_summary,
@@ -108,6 +108,7 @@ from api.app.routers.operations import (
     list_idempotency_safety,
     list_incident_readiness,
     list_observability,
+    list_review_calendar,
     list_backup_evidence,
     list_credential_failures,
     list_failure_signals,
@@ -142,6 +143,7 @@ from api.app.routers.remediation import (
     list_github_issue_actions,
     list_issue_closures,
     list_pr_ci_failures,
+    list_provider_sync_evidence,
     list_pr_staleness,
     list_remediation_priority_queue,
     list_remediation_prs,
@@ -173,6 +175,7 @@ from api.app.routers.scans import (
     list_daily_scan_slo,
     list_raw_scan_artifacts,
     list_scan_evidence_quality,
+    list_scan_freshness_buckets,
     list_scan_format_compliance,
 )
 from api.app.routers.scanner_inventory import list_scanner_inventory
@@ -5942,3 +5945,177 @@ def test_list_remediation_priority_queue_orders_sla_exposed_fixable_findings() -
         assert breached_page.items[0]["finding_id"] == str(critical.id)
         assert str(high.id) in {item["finding_id"] for item in page.items}
         assert summary.remediation_priority_items == len(page.items)
+
+
+def test_list_job_retry_posture_reports_retry_and_lock_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "job-retry-posture")
+        app = create_application(db, repo)
+        exhausted = Job(
+            job_type=JobType.scan,
+            status=JobStatus.failed,
+            repository_id=repo.id,
+            application_id=app.id,
+            attempts=3,
+            max_attempts=3,
+            last_error="failed",
+        )
+        retryable = Job(
+            job_type=JobType.notification,
+            status=JobStatus.timed_out,
+            attempts=1,
+            max_attempts=3,
+        )
+        overdue = Job(
+            job_type=JobType.scan,
+            status=JobStatus.queued,
+            repository_id=repo.id,
+            run_after=now_utc() - timedelta(hours=2),
+        )
+        stale_lock = Job(
+            job_type=JobType.repository_sync,
+            status=JobStatus.running,
+            repository_id=repo.id,
+            locked_at=now_utc() - timedelta(hours=2),
+        )
+        db.add_all([exhausted, retryable, overdue, stale_lock])
+        db.flush()
+
+        page = list_job_retry_posture(db=db, _=None)
+        scan_page = list_job_retry_posture(job_type=JobType.scan, gap_type="retry_exhausted", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {item["gap_type"] for item in page.items}
+
+        assert gaps == {"retry_exhausted", "retryable_failure", "overdue_retry", "stale_running_lock"}
+        assert scan_page.items[0]["job_id"] == str(exhausted.id)
+        assert summary.job_retry_gap_items == len(page.items)
+
+
+def test_list_scan_freshness_buckets_reports_stale_and_never_scanned_apps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "scan-freshness")
+        stale = create_application(db, repo, "stale")
+        fresh = create_application(db, repo, "fresh")
+        create_application(db, repo, "never")
+        archived = create_application(db, repo, "archived")
+        archived.lifecycle = Lifecycle.archived
+        db.add_all(
+            [
+                Scan(application_id=stale.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=31)),
+                Scan(application_id=fresh.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(hours=1)),
+            ]
+        )
+        db.flush()
+
+        page = list_scan_freshness_buckets(db=db, _=None)
+        stale_page = list_scan_freshness_buckets(bucket="gt_30d", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        by_name = {item["application_name"]: item for item in page.items}
+
+        assert by_name["stale"]["bucket"] == "gt_30d"
+        assert by_name["stale"]["gap"] is True
+        assert by_name["fresh"]["bucket"] == "lt_24h"
+        assert by_name["never"]["bucket"] == "never"
+        assert by_name["never"]["gap"] is True
+        assert by_name["archived"]["gap"] is False
+        assert stale_page.items[0]["application_id"] == str(stale.id)
+        assert summary.scan_freshness_gap_items == 2
+
+
+def test_list_provider_sync_evidence_reports_missing_external_sync_fields() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "provider-sync")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        issue_action = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="closed",
+            provider="github",
+            metadata_json={},
+        )
+        pr_action = RemediationAction(
+            finding_id=finding.id,
+            action_type="ai_fix",
+            status="open",
+            provider="github",
+            provider_id="12",
+            url="https://github.test/pull/12",
+            branch="fix/provider-sync",
+            metadata_json={"provider_status": "open"},
+        )
+        db.add_all([issue_action, pr_action])
+        db.flush()
+
+        page = list_provider_sync_evidence(db=db, _=None)
+        ci_page = list_provider_sync_evidence(gap_type="missing_ci_metadata", provider="github", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        issue_gaps = {item["gap_type"] for item in page.items if item["action_id"] == str(issue_action.id)}
+
+        assert {"missing_provider_id", "missing_url", "missing_status_sync", "missing_close_evidence"} <= issue_gaps
+        assert ci_page.items[0]["action_id"] == str(pr_action.id)
+        assert summary.provider_sync_gap_items == len(page.items)
+
+
+def test_list_audit_action_coverage_reports_missing_expected_actions() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "audit-action")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.medium, status=FindingStatus.false_positive)
+        db.add(
+            AuditLog(
+                actor="system",
+                role="admin",
+                action="repository.create",
+                resource_type="repository",
+                resource_id=str(repo.id),
+                metadata_json={"source": "test"},
+            )
+        )
+        db.flush()
+
+        page = list_audit_action_coverage(db=db, _=None)
+        finding_page = list_audit_action_coverage(resource_type="finding", gap_type="missing_review_audit", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["resource_type"], item["resource_id"], item["gap_type"]) for item in page.items}
+
+        assert ("repository", str(repo.id), "missing_create_audit") not in gaps
+        assert ("application", str(app.id), "missing_create_audit") in gaps
+        assert finding_page.items[0]["resource_id"] == str(finding.id)
+        assert summary.audit_action_gap_items == len(page.items)
+
+
+def test_list_review_calendar_reports_overdue_due_soon_and_filters_review_type() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "review-calendar")
+        app = create_application(db, repo)
+        vex_finding = create_finding(db, app, severity=Severity.high)
+        medium = create_finding(db, app, severity=Severity.medium)
+        accepted = create_finding(db, app, severity=Severity.low, status=FindingStatus.accepted_risk)
+        accepted.updated_at = now_utc() - timedelta(days=31)
+        db.add(
+            VexStatement(
+                finding_id=vex_finding.id,
+                status=VexStatus.not_affected,
+                justification="not reachable",
+                approved_by="security",
+                review_date=now_utc() - timedelta(days=1),
+            )
+        )
+        db.flush()
+
+        page = list_review_calendar(db=db, _=None)
+        medium_page = list_review_calendar(review_type="medium_finding_review", status="due_soon", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        statuses = {(item["review_type"], item["status"]) for item in page.items}
+
+        assert ("vex_review", "overdue") in statuses
+        assert ("risk_acceptance_review", "overdue") in statuses
+        assert ("medium_finding_review", "due_soon") in statuses
+        assert medium_page.items[0]["source_id"] == str(medium.id)
+        assert summary.review_calendar_due_items == len([item for item in page.items if item["status"] in {"overdue", "due_soon"}])

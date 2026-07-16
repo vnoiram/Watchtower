@@ -128,8 +128,64 @@ def list_job_concurrency_risks(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/retry-posture", response_model=schemas.CursorPage)
+def list_job_retry_posture(
+    limit: int = 50,
+    gap_type: str | None = None,
+    job_type: models.JobType | None = None,
+    status: models.JobStatus | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = job_retry_posture_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if job_type:
+        items = [item for item in items if item["job_type"] == job_type.value]
+    if status:
+        items = [item for item in items if item["status"] == status.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+def job_retry_gap_count(db: Session) -> int:
+    return len(job_retry_posture_items(db))
+
+
 def job_concurrency_risk_count(db: Session) -> int:
     return len(job_concurrency_risk_items(db))
+
+
+def job_retry_posture_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    repositories = {repo.id: repo for repo in db.scalars(select(models.Repository))}
+    applications = {app.id: app for app in db.scalars(select(models.Application))}
+    stmt = (
+        select(models.Job)
+        .where(
+            models.Job.status.in_(
+                [
+                    models.JobStatus.queued,
+                    models.JobStatus.running,
+                    models.JobStatus.failed,
+                    models.JobStatus.timed_out,
+                    models.JobStatus.cancelled,
+                ]
+            )
+        )
+        .order_by(models.Job.created_at.asc(), models.Job.id.asc())
+    )
+    items = []
+    for job in db.scalars(stmt):
+        if job.status in {models.JobStatus.failed, models.JobStatus.timed_out, models.JobStatus.cancelled}:
+            if job.attempts >= job.max_attempts:
+                items.append(_job_retry_item("retry_exhausted", job, now, repositories, applications, "Job has no retry attempts remaining"))
+            else:
+                items.append(_job_retry_item("retryable_failure", job, now, repositories, applications, "Job failed but still has retry attempts remaining"))
+        if job.status == models.JobStatus.queued and _before(job.run_after, now) and _age_hours(job.run_after, now) >= 1:
+            items.append(_job_retry_item("overdue_retry", job, now, repositories, applications, "Queued retry is past run_after"))
+        if job.status == models.JobStatus.running and job.locked_at and _before(job.locked_at, now - timedelta(hours=1)):
+            items.append(_job_retry_item("stale_running_lock", job, now, repositories, applications, "Running job lock is older than 1 hour"))
+    return items
 
 
 def job_backlog_items(db: Session) -> list[dict]:
@@ -279,6 +335,36 @@ def _job_concurrency_item(
         attempts=job.attempts,
         max_attempts=job.max_attempts,
         detail=f"{detail}; age_hours={_age_hours(job.created_at, now)}",
+        created_at=job.created_at,
+    ).model_dump(mode="json")
+
+
+def _job_retry_item(
+    gap_type: str,
+    job: models.Job,
+    now: datetime,
+    repositories: dict,
+    applications: dict,
+    detail: str,
+) -> dict:
+    repository = repositories.get(job.repository_id) if job.repository_id else None
+    application = applications.get(job.application_id) if job.application_id else None
+    return schemas.JobRetryPostureOut(
+        gap_type=gap_type,
+        job_id=job.id,
+        job_type=job.job_type,
+        status=job.status,
+        repository_id=job.repository_id,
+        repository_owner=repository.owner if repository else None,
+        repository_name=repository.name if repository else None,
+        application_id=job.application_id,
+        application_name=application.name if application else None,
+        attempts=job.attempts,
+        max_attempts=job.max_attempts,
+        run_after=job.run_after,
+        locked_at=job.locked_at,
+        age_hours=_age_hours(job.created_at, now),
+        detail=detail,
         created_at=job.created_at,
     ).model_dump(mode="json")
 

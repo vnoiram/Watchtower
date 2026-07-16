@@ -561,6 +561,22 @@ def list_runbook_evidence(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/review-calendar", response_model=schemas.CursorPage)
+def list_review_calendar(
+    limit: int = 50,
+    status: str | None = None,
+    review_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = review_calendar_items(db)
+    if status:
+        items = [item for item in items if item["status"] == status]
+    if review_type:
+        items = [item for item in items if item["review_type"] == review_type]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/worker-cleanup", response_model=schemas.CursorPage)
 def list_worker_cleanup(
     limit: int = 50,
@@ -622,6 +638,10 @@ def failure_drill_gap_count(db: Session) -> int:
 
 def runbook_evidence_gap_count(db: Session) -> int:
     return sum(max(item.count, 1) for item in runbook_evidence_items(db) if item.status != "ok")
+
+
+def review_calendar_due_count(db: Session) -> int:
+    return sum(1 for item in review_calendar_items(db) if item["status"] in {"overdue", "due_soon"})
 
 
 def worker_cleanup_gap_count(db: Session) -> int:
@@ -1411,6 +1431,61 @@ def runbook_evidence_items(db: Session) -> list[schemas.RunbookEvidenceOut]:
         _runbook("monthly", "vex_risk_runtime_restore", _recent_audit_count(db, {"vex", "risk acceptance", "runtime eol", "restore"}, month), "Monthly VEX/risk/runtime/restore review evidence", month),
         _runbook("quarterly", "owner_exposure_permissions", _recent_audit_count(db, {"owner", "exposure", "github app", "permission", "isolated", "auto merge"}, month), "Quarterly owner/exposure/permission/scope evidence", month),
     ]
+
+
+def review_calendar_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    items = []
+    finding_context = _finding_context(db)
+    for vex in db.scalars(select(models.VexStatement).order_by(models.VexStatement.review_date.asc(), models.VexStatement.id.asc())):
+        finding, application, repository = finding_context.get(vex.finding_id, (None, None, None))
+        items.append(
+            _review_calendar_item(
+                "vex_review",
+                "vex",
+                str(vex.id),
+                vex.review_date,
+                now,
+                "VEX statement review date",
+                finding=finding,
+                application=application,
+                repository=repository,
+            )
+        )
+    for finding, application, repository in _review_findings(db):
+        if finding.severity == models.Severity.medium and finding.status == models.FindingStatus.open:
+            due_at = finding.updated_at + timedelta(days=7)
+            items.append(_review_calendar_item("medium_finding_review", "finding", str(finding.id), due_at, now, "Weekly medium finding review", finding=finding, application=application, repository=repository))
+        if finding.status == models.FindingStatus.false_positive:
+            due_at = finding.updated_at + timedelta(days=30)
+            items.append(_review_calendar_item("false_positive_review", "finding", str(finding.id), due_at, now, "Monthly false positive review", finding=finding, application=application, repository=repository))
+        if finding.status == models.FindingStatus.accepted_risk:
+            due_at = finding.updated_at + timedelta(days=30)
+            items.append(_review_calendar_item("risk_acceptance_review", "finding", str(finding.id), due_at, now, "Monthly risk acceptance review", finding=finding, application=application, repository=repository))
+    for runtime_item in runtime_eol_items(db):
+        due_at = now if runtime_item["issue_type"] == "old_major" else now + timedelta(days=30)
+        items.append(
+            _review_calendar_item(
+                "runtime_eol_review",
+                runtime_item["source"],
+                str(runtime_item["source_id"]),
+                due_at,
+                now,
+                runtime_item["detail"],
+                application_id=runtime_item["application_id"],
+                application_name=runtime_item["application_name"],
+                repository_id=runtime_item["repository_id"],
+                repository_owner=runtime_item["repository_owner"],
+                repository_name=runtime_item["repository_name"],
+            )
+        )
+    for log in db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())):
+        searchable = _operation_text(log.action, log.metadata_json)
+        if "backup" in searchable:
+            items.append(_review_calendar_item("backup_evidence_review", "audit_log", str(log.id), log.created_at + timedelta(days=30), now, "Monthly backup evidence review"))
+        if "restore" in searchable:
+            items.append(_review_calendar_item("restore_evidence_review", "audit_log", str(log.id), log.created_at + timedelta(days=30), now, "Monthly restore evidence review"))
+    return sorted(items, key=lambda item: (item["due_at"], item["review_type"], item["source_id"]))
 
 
 def worker_cleanup_items(db: Session) -> list[dict]:
@@ -2309,6 +2384,74 @@ def _latest_scan_by_application(scans: list[models.Scan]) -> dict:
     for scan in sorted(scans, key=lambda item: (_sort_datetime(item.created_at), item.id), reverse=True):
         latest.setdefault(scan.application_id, scan)
     return latest
+
+
+def _finding_context(db: Session) -> dict:
+    context = {}
+    stmt = (
+        select(models.Finding, models.Application, models.Repository)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+    )
+    for finding, application, repository in db.execute(stmt):
+        context[finding.id] = (finding, application, repository)
+    return context
+
+
+def _review_findings(db: Session):
+    return db.execute(
+        select(models.Finding, models.Application, models.Repository)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .where(
+            (models.Finding.severity == models.Severity.medium)
+            | (models.Finding.status.in_([models.FindingStatus.false_positive, models.FindingStatus.accepted_risk]))
+        )
+        .order_by(models.Finding.updated_at.asc(), models.Finding.id.asc())
+    )
+
+
+def _review_calendar_item(
+    review_type: str,
+    source: str,
+    source_id: str,
+    due_at: datetime,
+    now: datetime,
+    detail: str,
+    *,
+    finding: models.Finding | None = None,
+    application: models.Application | None = None,
+    repository: models.Repository | None = None,
+    application_id=None,
+    application_name: str | None = None,
+    repository_id=None,
+    repository_owner: str | None = None,
+    repository_name: str | None = None,
+) -> dict:
+    status = _review_status(due_at, now)
+    return schemas.ReviewCalendarOut(
+        review_type=review_type,
+        status=status,
+        source=source,
+        source_id=source_id,
+        due_at=due_at,
+        application_id=application.id if application else application_id,
+        application_name=application.name if application else application_name,
+        repository_id=repository.id if repository else repository_id,
+        repository_owner=repository.owner if repository else repository_owner,
+        repository_name=repository.name if repository else repository_name,
+        severity=finding.severity if finding else None,
+        detail=detail,
+    ).model_dump(mode="json")
+
+
+def _review_status(due_at: datetime, now: datetime) -> str:
+    comparable_now = now.replace(tzinfo=None) if due_at.tzinfo is None else now
+    if due_at < comparable_now:
+        return "overdue"
+    if due_at <= comparable_now + timedelta(days=30):
+        return "due_soon"
+    return "scheduled"
 
 
 def _sort_datetime(value: datetime) -> datetime:

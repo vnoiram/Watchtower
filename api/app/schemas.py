@@ -2342,6 +2342,86 @@ class VulnerabilitySourceProvenanceOut(BaseModel):
     detail: str
 
 
+class JobRetryPostureOut(BaseModel):
+    gap_type: str
+    job_id: UUID
+    job_type: models.JobType
+    status: models.JobStatus
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    attempts: int
+    max_attempts: int
+    run_after: datetime
+    locked_at: datetime | None = None
+    age_hours: int
+    detail: str
+    created_at: datetime
+
+
+class ScanFreshnessBucketOut(BaseModel):
+    bucket: str
+    gap: bool
+    application_id: UUID
+    application_name: str
+    lifecycle: models.Lifecycle
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    age_days: int | None = None
+    detail: str
+
+
+class ProviderSyncEvidenceOut(BaseModel):
+    gap_type: str
+    action_id: UUID
+    action_type: str
+    action_status: str
+    provider: str | None = None
+    provider_id: str | None = None
+    url: str | None = None
+    finding_id: UUID
+    severity: models.Severity
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    detail: str
+    updated_at: datetime
+
+
+class AuditActionCoverageOut(BaseModel):
+    gap_type: str
+    resource_type: str
+    resource_id: str
+    expected_action: str
+    audit_log_id: UUID | None = None
+    actor: str | None = None
+    detail: str
+    created_at: datetime
+
+
+class ReviewCalendarOut(BaseModel):
+    review_type: str
+    status: str
+    source: str
+    source_id: str
+    due_at: datetime
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    severity: models.Severity | None = None
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2429,3 +2509,8 @@ class DashboardSummary(BaseModel):
     worker_cleanup_gap_items: int
     idempotency_gap_items: int
     vulnerability_provenance_gap_items: int
+    job_retry_gap_items: int
+    scan_freshness_gap_items: int
+    provider_sync_gap_items: int
+    audit_action_gap_items: int
+    review_calendar_due_items: int

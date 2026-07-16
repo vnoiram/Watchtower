@@ -159,6 +159,11 @@ const scanFormat = document.querySelector("#scan-format");
 const workerCleanup = document.querySelector("#worker-cleanup");
 const idempotencySafety = document.querySelector("#idempotency-safety");
 const vulnerabilityProvenance = document.querySelector("#vulnerability-provenance");
+const jobRetryPosture = document.querySelector("#job-retry-posture");
+const scanFreshnessBuckets = document.querySelector("#scan-freshness-buckets");
+const providerSyncEvidence = document.querySelector("#provider-sync-evidence");
+const auditActionCoverage = document.querySelector("#audit-action-coverage");
+const reviewCalendar = document.querySelector("#review-calendar");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -293,6 +298,11 @@ function renderMetrics(summary) {
     ["worker_cleanup_gap_items", "Worker cleanup", "warn"],
     ["idempotency_gap_items", "Idempotency", "warn"],
     ["vulnerability_provenance_gap_items", "Vuln provenance", "warn"],
+    ["job_retry_gap_items", "Job retry", "warn"],
+    ["scan_freshness_gap_items", "Scan freshness", "warn"],
+    ["provider_sync_gap_items", "Provider sync", "warn"],
+    ["audit_action_gap_items", "Audit actions", "warn"],
+    ["review_calendar_due_items", "Review calendar", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -2098,6 +2108,66 @@ function renderVulnerabilityProvenance(page) {
     : `<tr><td colspan="5">No vulnerability provenance gaps</td></tr>`;
 }
 
+function renderJobRetryPosture(page) {
+  const rows = page.items || [];
+  jobRetryPosture.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.job_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No job retry gaps</td></tr>`;
+}
+
+function renderScanFreshnessBuckets(page) {
+  const rows = page.items || [];
+  scanFreshnessBuckets.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.bucket)}</td><td>${escapeHtml(item.gap ? "gap" : "ok")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.latest_scan_status || "missing")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scan freshness records</td></tr>`;
+}
+
+function renderProviderSyncEvidence(page) {
+  const rows = page.items || [];
+  providerSyncEvidence.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.provider || "-")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No provider sync gaps</td></tr>`;
+}
+
+function renderAuditActionCoverage(page) {
+  const rows = page.items || [];
+  auditActionCoverage.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.resource_type)}</td><td>${escapeHtml(item.expected_action)}</td><td>${escapeHtml(item.actor || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No audit action gaps</td></tr>`;
+}
+
+function renderReviewCalendar(page) {
+  const rows = page.items || [];
+  reviewCalendar.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.review_type)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No review calendar items</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2258,6 +2328,11 @@ async function refresh() {
   workerCleanup.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   idempotencySafety.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   vulnerabilityProvenance.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  jobRetryPosture.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scanFreshnessBuckets.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  providerSyncEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  auditActionCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  reviewCalendar.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2420,6 +2495,11 @@ async function refresh() {
       workerCleanupPage,
       idempotencySafetyPage,
       vulnerabilityProvenancePage,
+      jobRetryPosturePage,
+      scanFreshnessBucketPage,
+      providerSyncEvidencePage,
+      auditActionCoveragePage,
+      reviewCalendarPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2581,6 +2661,11 @@ async function refresh() {
       loadJson("/operations/worker-cleanup?limit=10"),
       loadJson("/operations/idempotency?limit=10"),
       loadJson("/vulnerabilities/source-provenance?limit=10"),
+      loadJson("/jobs/retry-posture?limit=10"),
+      loadJson("/scans/freshness-buckets?limit=10"),
+      loadJson("/remediation/provider-sync?limit=10"),
+      loadJson("/audit/action-coverage?limit=10"),
+      loadJson("/operations/review-calendar?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -2741,6 +2826,11 @@ async function refresh() {
     renderWorkerCleanup(workerCleanupPage);
     renderIdempotencySafety(idempotencySafetyPage);
     renderVulnerabilityProvenance(vulnerabilityProvenancePage);
+    renderJobRetryPosture(jobRetryPosturePage);
+    renderScanFreshnessBuckets(scanFreshnessBucketPage);
+    renderProviderSyncEvidence(providerSyncEvidencePage);
+    renderAuditActionCoverage(auditActionCoveragePage);
+    renderReviewCalendar(reviewCalendarPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -2901,6 +2991,11 @@ async function refresh() {
     workerCleanup.innerHTML = `<tr><td colspan="5">Unable to load worker cleanup</td></tr>`;
     idempotencySafety.innerHTML = `<tr><td colspan="5">Unable to load idempotency safety</td></tr>`;
     vulnerabilityProvenance.innerHTML = `<tr><td colspan="5">Unable to load vulnerability provenance</td></tr>`;
+    jobRetryPosture.innerHTML = `<tr><td colspan="5">Unable to load job retry posture</td></tr>`;
+    scanFreshnessBuckets.innerHTML = `<tr><td colspan="5">Unable to load scan freshness buckets</td></tr>`;
+    providerSyncEvidence.innerHTML = `<tr><td colspan="5">Unable to load provider sync evidence</td></tr>`;
+    auditActionCoverage.innerHTML = `<tr><td colspan="5">Unable to load audit action coverage</td></tr>`;
+    reviewCalendar.innerHTML = `<tr><td colspan="5">Unable to load review calendar</td></tr>`;
   }
 }
 
