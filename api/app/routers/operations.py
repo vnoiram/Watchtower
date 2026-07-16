@@ -546,6 +546,23 @@ def list_completion_readiness(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/exit-criteria", response_model=schemas.CursorPage)
+def list_operational_exit_criteria(
+    limit: int = 50,
+    check: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    items = operational_exit_criteria_items(db, settings)
+    if check:
+        items = [item for item in items if item["check"] == check]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/e2e-evidence", response_model=schemas.CursorPage)
 def list_e2e_evidence(
     limit: int = 50,
@@ -662,6 +679,10 @@ def incident_readiness_gap_count(db: Session) -> int:
 
 def completion_readiness_gap_count(db: Session, settings: Settings) -> int:
     return sum(max(item.count, 1) for item in completion_readiness_items(db, settings) if item.status != "ok")
+
+
+def exit_criteria_gap_count(db: Session, settings: Settings) -> int:
+    return sum(max(item["count"], 1) for item in operational_exit_criteria_items(db, settings) if item["status"] != "ok")
 
 
 def e2e_evidence_gap_count(db: Session) -> int:
@@ -1479,6 +1500,13 @@ def completion_readiness_items(db: Session, settings: Settings) -> list[schemas.
         _completion("scan_failure_monitoring", monitoring > 0, monitoring, None, None, "Scan health or failure signal monitoring evidence"),
         _completion("backup_restore_evidence", storage_configured and bool(restore_logs), 0 if storage_configured and restore_logs else 1, 0, None, "Object storage configured and restore verification evidence exists"),
         _completion("isolated_runbook", _operation_evidence_count(db, {"isolated", "restricted", "separate runner"}) > 0, _operation_evidence_count(db, {"isolated", "restricted", "separate runner"}), None, None, "Isolated code operational rule evidence"),
+    ]
+
+
+def operational_exit_criteria_items(db: Session, settings: Settings) -> list[dict]:
+    return [
+        schemas.OperationalExitCriteriaOut(**item.model_dump()).model_dump(mode="json")
+        for item in completion_readiness_items(db, settings)
     ]
 
 
