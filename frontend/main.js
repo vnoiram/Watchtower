@@ -169,6 +169,11 @@ const notificationRetryPosture = document.querySelector("#notification-retry-pos
 const scannerExecutionMatrix = document.querySelector("#scanner-execution-matrix");
 const retentionExecution = document.querySelector("#retention-execution");
 const workflowTrace = document.querySelector("#workflow-trace");
+const stateConsistency = document.querySelector("#state-consistency");
+const metadataCompleteness = document.querySelector("#metadata-completeness");
+const orphanEvidence = document.querySelector("#orphan-evidence");
+const scanResultConsistency = document.querySelector("#scan-result-consistency");
+const applicationMappingQuality = document.querySelector("#application-mapping-quality");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -313,6 +318,11 @@ function renderMetrics(summary) {
     ["scanner_execution_gap_items", "Scanner matrix", "warn"],
     ["retention_execution_gap_items", "Retention exec", "warn"],
     ["workflow_trace_gap_items", "Workflow trace", "warn"],
+    ["state_consistency_gap_items", "State consistency", "warn"],
+    ["metadata_completeness_gap_items", "Metadata", "warn"],
+    ["orphan_evidence_gap_items", "Orphans", "warn"],
+    ["scan_result_consistency_gap_items", "Scan results", "warn"],
+    ["application_mapping_gap_items", "App mapping", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -2238,6 +2248,66 @@ function renderWorkflowTrace(page) {
     : `<tr><td colspan="5">No repository workflow gaps</td></tr>`;
 }
 
+function renderStateConsistency(page) {
+  const rows = page.items || [];
+  stateConsistency.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.resource_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.resource_id)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No state consistency gaps</td></tr>`;
+}
+
+function renderMetadataCompleteness(page) {
+  const rows = page.items || [];
+  metadataCompleteness.innerHTML = rows.length
+    ? rows
+        .map((item) => {
+          const context = item.application_name || (item.repository_name ? `${item.repository_owner}/${item.repository_name}` : "-");
+          return `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.resource_type)}</td><td>${escapeHtml(context)}</td><td>${escapeHtml(item.resource_id)}</td><td>${escapeHtml(item.detail)}</td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="5">No metadata completeness gaps</td></tr>`;
+}
+
+function renderOrphanEvidence(page) {
+  const rows = page.items || [];
+  orphanEvidence.innerHTML = rows.length
+    ? rows
+        .map((item) => {
+          const target = item.application_name || (item.repository_name ? `${item.repository_owner}/${item.repository_name}` : "-");
+          return `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.resource_type)}</td><td>${escapeHtml(item.resource_id)}</td><td>${escapeHtml(target)}</td><td>${escapeHtml(item.detail)}</td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="5">No orphan evidence gaps</td></tr>`;
+}
+
+function renderScanResultConsistency(page) {
+  const rows = page.items || [];
+  scanResultConsistency.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.tool || "-")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scan result consistency gaps</td></tr>`;
+}
+
+function renderApplicationMappingQuality(page) {
+  const rows = page.items || [];
+  applicationMappingQuality.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.application_name || "-")}</td><td>${escapeHtml(item.application_type || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No application mapping gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2408,6 +2478,11 @@ async function refresh() {
   scannerExecutionMatrix.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   retentionExecution.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   workflowTrace.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  stateConsistency.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  metadataCompleteness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  orphanEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scanResultConsistency.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  applicationMappingQuality.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2580,6 +2655,11 @@ async function refresh() {
       scannerExecutionMatrixPage,
       retentionExecutionPage,
       workflowTracePage,
+      stateConsistencyPage,
+      metadataCompletenessPage,
+      orphanEvidencePage,
+      scanResultConsistencyPage,
+      applicationMappingQualityPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2751,6 +2831,11 @@ async function refresh() {
       loadJson("/scanners/execution-matrix?limit=10"),
       loadJson("/storage/retention-execution?limit=10"),
       loadJson("/rollout/workflow-trace?limit=10"),
+      loadJson("/quality/state-consistency?limit=10"),
+      loadJson("/quality/metadata-completeness?limit=10"),
+      loadJson("/quality/orphan-evidence?limit=10"),
+      loadJson("/scans/result-consistency?limit=10"),
+      loadJson("/rollout/application-mapping-quality?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -2921,6 +3006,11 @@ async function refresh() {
     renderScannerExecutionMatrix(scannerExecutionMatrixPage);
     renderRetentionExecution(retentionExecutionPage);
     renderWorkflowTrace(workflowTracePage);
+    renderStateConsistency(stateConsistencyPage);
+    renderMetadataCompleteness(metadataCompletenessPage);
+    renderOrphanEvidence(orphanEvidencePage);
+    renderScanResultConsistency(scanResultConsistencyPage);
+    renderApplicationMappingQuality(applicationMappingQualityPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -3091,6 +3181,11 @@ async function refresh() {
     scannerExecutionMatrix.innerHTML = `<tr><td colspan="5">Unable to load scanner execution matrix</td></tr>`;
     retentionExecution.innerHTML = `<tr><td colspan="5">Unable to load retention execution</td></tr>`;
     workflowTrace.innerHTML = `<tr><td colspan="5">Unable to load repository workflow trace</td></tr>`;
+    stateConsistency.innerHTML = `<tr><td colspan="5">Unable to load state consistency</td></tr>`;
+    metadataCompleteness.innerHTML = `<tr><td colspan="5">Unable to load metadata completeness</td></tr>`;
+    orphanEvidence.innerHTML = `<tr><td colspan="5">Unable to load orphan evidence</td></tr>`;
+    scanResultConsistency.innerHTML = `<tr><td colspan="5">Unable to load scan result consistency</td></tr>`;
+    applicationMappingQuality.innerHTML = `<tr><td colspan="5">Unable to load application mapping quality</td></tr>`;
   }
 }
 

@@ -47,7 +47,13 @@ from api.app.routers.operations import (
     restore_evidence_count,
     worker_hardening_count,
 )
-from api.app.routers.quality import false_positive_review_count, reopen_risk_count
+from api.app.routers.quality import (
+    false_positive_review_count,
+    metadata_completeness_gap_count,
+    orphan_evidence_gap_count,
+    reopen_risk_count,
+    state_consistency_gap_count,
+)
 from api.app.routers.remediation import (
     fixable_gap_count,
     auto_resolution_gap_count,
@@ -66,11 +72,18 @@ from api.app.routers.rollout import (
     repository_inventory_gap_count,
     rollout_gap_count,
     rollout_wave_gap_count,
+    application_mapping_gap_count,
     workflow_trace_gap_count,
 )
 from api.app.routers.repository_sync import import_failure_count
 from api.app.routers.repositories import repository_classification_gap_count
-from api.app.routers.scans import daily_scan_slo_breach_count, raw_scan_artifact_gap_count, scan_format_gap_count, scan_freshness_gap_count
+from api.app.routers.scans import (
+    daily_scan_slo_breach_count,
+    raw_scan_artifact_gap_count,
+    scan_format_gap_count,
+    scan_freshness_gap_count,
+    scan_result_consistency_gap_count,
+)
 from api.app.routers.scanners import scanner_database_freshness_count, scanner_execution_gap_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import (
@@ -213,6 +226,11 @@ def dashboard_summary(
     scanner_execution_gap_items = scanner_execution_gap_count(db)
     retention_execution_gap_items = retention_execution_gap_count(db)
     workflow_trace_gap_items = workflow_trace_gap_count(db)
+    state_consistency_gap_items = state_consistency_gap_count(db)
+    metadata_completeness_gap_items = metadata_completeness_gap_count(db)
+    orphan_evidence_gap_items = orphan_evidence_gap_count(db)
+    scan_result_consistency_gap_items = scan_result_consistency_gap_count(db)
+    application_mapping_gap_items = application_mapping_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -310,4 +328,9 @@ def dashboard_summary(
         scanner_execution_gap_items=scanner_execution_gap_items,
         retention_execution_gap_items=retention_execution_gap_items,
         workflow_trace_gap_items=workflow_trace_gap_items,
+        state_consistency_gap_items=state_consistency_gap_items,
+        metadata_completeness_gap_items=metadata_completeness_gap_items,
+        orphan_evidence_gap_items=orphan_evidence_gap_items,
+        scan_result_consistency_gap_items=scan_result_consistency_gap_items,
+        application_mapping_gap_items=application_mapping_gap_items,
     )
