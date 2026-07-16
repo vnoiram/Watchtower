@@ -461,8 +461,48 @@ def list_credential_failures(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/observability", response_model=schemas.CursorPage)
+def list_observability(
+    limit: int = 50,
+    check: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = [item.model_dump(mode="json") for item in observability_items(db)]
+    if check:
+        items = [item for item in items if item["check"] == check]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/incident-readiness", response_model=schemas.CursorPage)
+def list_incident_readiness(
+    limit: int = 50,
+    incident_type: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = incident_readiness_items(db)
+    if incident_type:
+        items = [item for item in items if item["incident_type"] == incident_type]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def failure_signal_count(db: Session) -> int:
     return len(failure_signal_items(db))
+
+
+def observability_gap_count(db: Session) -> int:
+    return sum(max(item.count, 1) for item in observability_items(db) if item.status != "ok")
+
+
+def incident_readiness_gap_count(db: Session) -> int:
+    return sum(1 for item in incident_readiness_items(db) if item["status"] != "ok")
 
 
 def monthly_review_count(db: Session) -> int:
@@ -1059,6 +1099,58 @@ def credential_failure_items(db: Session) -> list[dict]:
     return sorted(items, key=lambda item: item["created_at"], reverse=True)
 
 
+def observability_items(db: Session) -> list[schemas.ObservabilityPostureOut]:
+    failed_jobs = list(db.scalars(select(models.Job).where(models.Job.status.in_([models.JobStatus.failed, models.JobStatus.timed_out]))))
+    failed_scans = list(
+        db.scalars(
+            select(models.Scan).where(
+                models.Scan.status.in_(
+                    [
+                        models.ScanStatus.failed,
+                        models.ScanStatus.partially_succeeded,
+                        models.ScanStatus.timed_out,
+                    ]
+                )
+            )
+        )
+    )
+    missing_error_text = sum(1 for job in failed_jobs if not job.last_error) + sum(
+        1 for scan in failed_scans if not scan.error_message and not (scan.result_summary or {}).get("scanner_failures")
+    )
+    structured = _operation_evidence_count(db, {"structured", "json_log", "json logs", "log_format"})
+    metrics = _operation_evidence_count(db, {"prometheus", "/metrics", "metrics_enabled", "metric"})
+    dashboards = _operation_evidence_count(db, {"grafana", "dashboard", "runbook_dashboard"})
+    correlation = _operation_evidence_count(db, {"correlation_id", "request_id", "trace_id"})
+    return [
+        _observability("structured_logs", "ok" if structured else "warn", structured, "Structured logging evidence"),
+        _observability("prometheus_metrics", "ok" if metrics else "warn", metrics, "Prometheus or metrics endpoint evidence"),
+        _observability("grafana_dashboard", "ok" if dashboards else "warn", dashboards, "Grafana/dashboard evidence"),
+        _observability(
+            "error_log_coverage",
+            "ok" if not missing_error_text else "warn",
+            missing_error_text,
+            "Failed jobs/scans without captured error detail",
+        ),
+        _observability("correlation_evidence", "ok" if correlation else "warn", correlation, "Correlation/request/trace id evidence"),
+    ]
+
+
+def incident_readiness_items(db: Session) -> list[dict]:
+    response_text = _incident_response_text(db)
+    items = []
+    items.extend(_incident_items_from_failure_signals(db, response_text))
+    items.extend(_incident_items_from_audit_logs(db, response_text))
+    seen = set()
+    unique = []
+    for item in sorted(items, key=lambda row: row["created_at"], reverse=True):
+        key = (item["incident_type"], item["source"], item["source_id"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
 def manual_workload_count(db: Session) -> int:
     return sum(row.count for row in _workload_rows(db))
 
@@ -1232,6 +1324,10 @@ def _daily_check(check: str, status: str, count: int, detail: str) -> schemas.Da
     return schemas.DailyOperationCheckOut(check=check, status=status, count=count, detail=detail)
 
 
+def _observability(check: str, status: str, count: int, detail: str) -> schemas.ObservabilityPostureOut:
+    return schemas.ObservabilityPostureOut(check=check, status=status, count=count, detail=detail)
+
+
 def _workload(item: str, count: int, nonzero_status: str, detail: str) -> schemas.OperationalWorkloadOut:
     return schemas.OperationalWorkloadOut(
         item=item,
@@ -1353,6 +1449,156 @@ def _rollback(check: str, nonzero_status: str, count: int, detail: str) -> schem
         count=count,
         detail=detail,
     )
+
+
+def _operation_evidence_count(db: Session, tokens: set[str]) -> int:
+    count = 0
+    for audit_log in db.scalars(select(models.AuditLog)):
+        if _contains_any(_operation_text(audit_log.action, audit_log.metadata_json), tokens):
+            count += 1
+    for job in db.scalars(select(models.Job)):
+        if _contains_any(_operation_text(job.job_type.value, job.payload, job.last_error), tokens):
+            count += 1
+    for scan in db.scalars(select(models.Scan)):
+        if _contains_any(_operation_text(scan.tool, scan.result_summary, scan.error_message), tokens):
+            count += 1
+    return count
+
+
+def _operation_text(*values) -> str:
+    parts = []
+    for value in values:
+        if isinstance(value, dict):
+            parts.extend(_operation_metadata_parts(value))
+        elif isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        elif value is not None:
+            parts.append(str(value))
+    return " ".join(parts).lower()
+
+
+def _operation_metadata_parts(value: dict) -> list[str]:
+    parts = []
+    for key, item in value.items():
+        parts.append(str(key))
+        if isinstance(item, dict):
+            parts.extend(_operation_metadata_parts(item))
+        elif isinstance(item, list):
+            parts.extend(str(entry) for entry in item)
+        elif item is not None:
+            parts.append(str(item))
+    return parts
+
+
+def _contains_any(text: str, tokens: set[str]) -> bool:
+    return any(token in text for token in tokens)
+
+
+def _incident_response_text(db: Session) -> str:
+    response_logs = []
+    for audit_log in db.scalars(select(models.AuditLog)):
+        text = _operation_text(audit_log.action, audit_log.metadata_json)
+        if _contains_any(text, {"incident", "response", "remediate", "retry", "resolved", "mitigation", "runbook"}):
+            response_logs.append(text)
+    return " ".join(response_logs)
+
+
+def _incident_items_from_failure_signals(db: Session, response_text: str) -> list[dict]:
+    items = []
+    for signal in failure_signal_items(db):
+        incident_type = _incident_type(signal["signal_type"], signal["detail"])
+        if not incident_type:
+            continue
+        items.append(
+            _incident_item(
+                incident_type,
+                signal["source"],
+                signal["source_id"],
+                signal.get("application_id"),
+                signal.get("application_name"),
+                signal.get("repository_id"),
+                signal.get("repository_owner"),
+                signal.get("repository_name"),
+                _has_incident_response(response_text, incident_type),
+                signal["detail"],
+                signal["created_at"],
+            )
+        )
+    return items
+
+
+def _incident_items_from_audit_logs(db: Session, response_text: str) -> list[dict]:
+    items = []
+    for audit_log in db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())):
+        detail = _operation_text(audit_log.action, audit_log.metadata_json)
+        incident_type = _incident_type(_classify_failure(detail, default=""), detail)
+        if not incident_type:
+            continue
+        items.append(
+            _incident_item(
+                incident_type,
+                "audit_log",
+                str(audit_log.id),
+                None,
+                None,
+                None,
+                None,
+                None,
+                _has_incident_response(response_text, incident_type),
+                "Operational incident signal in audit metadata",
+                audit_log.created_at,
+            )
+        )
+    return items
+
+
+def _incident_type(signal_type: str | None, detail: str | None) -> str | None:
+    text = f"{signal_type or ''} {detail or ''}".lower()
+    if "rate limit" in text or "429" in text:
+        return "github_rate_limit"
+    if "trivy db" in text or "scanner db" in text or "database update" in text or "db update" in text:
+        return "scanner_db_update_failure"
+    if "storage" in text or "minio" in text or "s3" in text or "object" in text:
+        return "storage_failure"
+    if "credential" in text or "token" in text or "auth" in text or "401" in text or "403" in text:
+        return "credential_failure"
+    if "worker" in text or "timeout" in text or "timed out" in text or "crash" in text or "failed" in text:
+        return "worker_failure"
+    return None
+
+
+def _has_incident_response(response_text: str, incident_type: str) -> bool:
+    normalized = incident_type.replace("_", " ")
+    return normalized in response_text or incident_type in response_text
+
+
+def _incident_item(
+    incident_type: str,
+    source: str,
+    source_id: str,
+    application_id,
+    application_name: str | None,
+    repository_id,
+    repository_owner: str | None,
+    repository_name: str | None,
+    has_response_audit: bool,
+    detail: str,
+    created_at: datetime,
+) -> dict:
+    return schemas.IncidentReadinessOut(
+        incident_type=incident_type,
+        status="ok" if has_response_audit else "warn",
+        source=source,
+        source_id=source_id,
+        application_id=application_id,
+        application_name=application_name,
+        repository_id=repository_id,
+        repository_owner=repository_owner,
+        repository_name=repository_name,
+        has_response_audit=has_response_audit,
+        detail=detail,
+        created_at=created_at,
+    ).model_dump(mode="json")
 
 
 def _scheduler_drift(

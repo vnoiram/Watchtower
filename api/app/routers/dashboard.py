@@ -25,6 +25,8 @@ from api.app.routers.kpis import mvp_target_breach_count, notification_failure_c
 from api.app.routers.notifications import notification_slo_breach_count
 from api.app.routers.findings import medium_review_count, risk_score_gap_count
 from api.app.routers.operations import (
+    incident_readiness_gap_count,
+    observability_gap_count,
     control_evidence_count,
     backup_evidence_count,
     failure_signal_count,
@@ -60,7 +62,14 @@ from api.app.routers.repositories import repository_classification_gap_count
 from api.app.routers.scans import daily_scan_slo_breach_count, raw_scan_artifact_gap_count
 from api.app.routers.scanners import scanner_database_freshness_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
-from api.app.routers.security import rbac_review_count, sast_coverage_count, secret_scan_coverage_count
+from api.app.routers.security import (
+    auth_deployment_gap_count,
+    credential_exposure_count,
+    rbac_review_count,
+    sast_coverage_count,
+    secret_management_gap_count,
+    secret_scan_coverage_count,
+)
 from api.app.routers.sla import count_sla_breached_findings
 from api.app.routers.sboms import sbom_normalization_quality_count
 from api.app.routers.storage import retention_review_count, storage_encryption_count, storage_pressure_count
@@ -164,6 +173,11 @@ def dashboard_summary(
     dependency_relationship_gap_items = dependency_relationship_gap_count(db)
     dependency_update_gap_items = dependency_update_gap_count(db)
     remediation_priority_items = remediation_priority_count(db)
+    secret_management_gap_items = secret_management_gap_count(db, settings)
+    credential_exposure_items = credential_exposure_count(db)
+    auth_deployment_gap_items = auth_deployment_gap_count(db, settings)
+    observability_gap_items = observability_gap_count(db)
+    incident_readiness_gap_items = incident_readiness_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -236,4 +250,9 @@ def dashboard_summary(
         dependency_relationship_gap_items=dependency_relationship_gap_items,
         dependency_update_gap_items=dependency_update_gap_items,
         remediation_priority_items=remediation_priority_items,
+        secret_management_gap_items=secret_management_gap_items,
+        credential_exposure_items=credential_exposure_items,
+        auth_deployment_gap_items=auth_deployment_gap_items,
+        observability_gap_items=observability_gap_items,
+        incident_readiness_gap_items=incident_readiness_gap_items,
     )
