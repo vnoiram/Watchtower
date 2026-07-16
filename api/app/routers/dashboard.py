@@ -13,7 +13,7 @@ from api.app.routers.auto_merge import automation_guardrail_count
 from api.app.routers.artifacts import artifact_provenance_gap_count, container_coverage_count
 from api.app.routers.application_detection import application_input_coverage_count, container_input_coverage_count
 from api.app.routers.components import dependency_relationship_gap_count
-from api.app.routers.governance import exposure_review_count, quarterly_review_count
+from api.app.routers.governance import exposure_review_count, owner_handoff_gap_count, quarterly_review_count
 from api.app.routers.integrations import github_integration_issue_count, github_permission_issue_count
 from api.app.routers.isolated_lane import (
     count_isolated_applications,
@@ -239,6 +239,7 @@ def dashboard_summary(
     evidence_freshness_gap_items = evidence_freshness_gap_count(db)
     mvp_readiness_gap_items = mvp_readiness_gap_count(db)
     remediation_evidence_gap_items = remediation_evidence_gap_count(db)
+    owner_handoff_gap_items = owner_handoff_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -345,4 +346,5 @@ def dashboard_summary(
         evidence_freshness_gap_items=evidence_freshness_gap_items,
         mvp_readiness_gap_items=mvp_readiness_gap_items,
         remediation_evidence_gap_items=remediation_evidence_gap_items,
+        owner_handoff_gap_items=owner_handoff_gap_items,
     )

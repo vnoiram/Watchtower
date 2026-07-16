@@ -2632,6 +2632,21 @@ class RemediationEvidenceChainOut(BaseModel):
     detail: str
 
 
+class OwnerHandoffReadinessOut(BaseModel):
+    issue_type: str
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    owner: str | None = None
+    lifecycle: models.Lifecycle
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    open_critical_high_count: int
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2738,3 +2753,4 @@ class DashboardSummary(BaseModel):
     evidence_freshness_gap_items: int
     mvp_readiness_gap_items: int
     remediation_evidence_gap_items: int
+    owner_handoff_gap_items: int

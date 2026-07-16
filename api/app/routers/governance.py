@@ -30,6 +30,22 @@ def list_ownership_review(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/owner-handoff", response_model=schemas.CursorPage)
+def list_owner_handoff_readiness(
+    limit: int = 50,
+    issue_type: str | None = None,
+    owner: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = owner_handoff_items(db)
+    if issue_type:
+        items = [item for item in items if item["issue_type"] == issue_type]
+    if owner:
+        items = [item for item in items if item["owner"] == owner]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.get("/exposure", response_model=schemas.CursorPage)
 def list_exposure_review(
     limit: int = 50,
@@ -92,6 +108,10 @@ def exposure_review_count(db: Session) -> int:
     return len(exposure_review_items(db))
 
 
+def owner_handoff_gap_count(db: Session) -> int:
+    return len(owner_handoff_items(db))
+
+
 def quarterly_review_count(db: Session) -> int:
     return sum(item.count for item in quarterly_review_items(db))
 
@@ -108,6 +128,35 @@ def ownership_review_items(db: Session, repository_id: UUID | None = None) -> li
     for application, repository in db.execute(stmt):
         for issue_type, detail in _ownership_issues(application):
             items.append(_ownership_item(issue_type, detail, application, repository))
+    return items
+
+
+def owner_handoff_items(db: Session) -> list[dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    rows = list(
+        db.execute(
+            select(models.Application, models.Repository)
+            .join(models.Repository, models.Application.repository_id == models.Repository.id)
+            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        )
+    )
+    latest_scans = _latest_scans_by_application(db, [application.id for application, _ in rows])
+    open_counts = _open_critical_high_counts(db)
+    handoff_evidence = _handoff_evidence_keys(db, cutoff)
+    items = []
+    for application, repository in rows:
+        latest_scan = latest_scans.get(application.id)
+        context = (application, repository, latest_scan, open_counts.get(application.id, 0))
+        if not application.owner:
+            items.append(_owner_handoff_item("missing_owner", *context, "Application has no owner for handoff"))
+        if latest_scan is None or _before(latest_scan.created_at, cutoff):
+            items.append(_owner_handoff_item("stale_scan", *context, "Application has no recent scan for owner handoff"))
+        if open_counts.get(application.id, 0):
+            items.append(_owner_handoff_item("open_critical_high", *context, "Application has open critical/high findings before handoff"))
+        if (str(application.id) not in handoff_evidence) and (str(repository.id) not in handoff_evidence):
+            items.append(_owner_handoff_item("missing_handoff_evidence", *context, "No recent owner handoff or runbook audit evidence"))
+        if application.lifecycle in {models.Lifecycle.deprecated, models.Lifecycle.archived}:
+            items.append(_owner_handoff_item("lifecycle_exit_work", *context, "Deprecated or archived application still needs owner handoff"))
     return items
 
 
@@ -509,6 +558,40 @@ def _ownership_item(
         support_status=application.support_status,
         detail=detail,
     ).model_dump(mode="json")
+
+
+def _owner_handoff_item(
+    issue_type: str,
+    application: models.Application,
+    repository: models.Repository,
+    latest_scan: models.Scan | None,
+    open_count: int,
+    detail: str,
+) -> dict:
+    return schemas.OwnerHandoffReadinessOut(
+        issue_type=issue_type,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        owner=application.owner,
+        lifecycle=application.lifecycle,
+        latest_scan_status=latest_scan.status if latest_scan else None,
+        latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+        open_critical_high_count=open_count,
+        detail=detail,
+    ).model_dump(mode="json")
+
+
+def _handoff_evidence_keys(db: Session, cutoff: datetime) -> set[str]:
+    keys = set()
+    tokens = {"owner", "handoff", "runbook"}
+    for audit_log in db.scalars(select(models.AuditLog).where(models.AuditLog.created_at >= cutoff)):
+        text = f"{audit_log.action} {audit_log.metadata_json or {}}".lower()
+        if any(token in text for token in tokens) and audit_log.resource_id:
+            keys.add(str(audit_log.resource_id))
+    return keys
 
 
 def _open_critical_high_counts(db: Session) -> dict:
