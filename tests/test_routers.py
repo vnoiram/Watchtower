@@ -74,6 +74,7 @@ from api.app.routers.findings import list_finding_traceability, list_medium_revi
 from api.app.routers.governance import (
     list_auto_merge_scope,
     list_exposure_review,
+    list_owner_handoff_readiness,
     list_ownership_review,
     list_risk_acceptance_review,
     list_runtime_eol,
@@ -4644,6 +4645,46 @@ def test_list_remediation_evidence_chain_reports_missing_stages() -> None:
         assert {"notification", "issue_or_pr", "validation"} <= set(by_id[str(missing.id)]["missing_stages"])
         assert filtered.items[0]["finding_id"] == str(missing.id)
         assert summary.remediation_evidence_gap_items >= 1
+
+
+def test_list_owner_handoff_readiness_reports_handoff_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "owner-handoff")
+        ready = create_application(db, repo, "handoff-ready")
+        ready.owner = "team-a"
+        ready_scan = Scan(application_id=ready.id, status=ScanStatus.succeeded, created_at=now_utc())
+        missing_owner = create_application(db, repo, "handoff-missing-owner")
+        missing_owner.owner = None
+        stale = create_application(db, repo, "handoff-stale")
+        stale.owner = "team-b"
+        deprecated = create_application(db, repo, "handoff-deprecated")
+        deprecated.owner = "team-b"
+        deprecated.lifecycle = Lifecycle.deprecated
+        db.add_all(
+            [
+                ready_scan,
+                Scan(application_id=missing_owner.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Scan(application_id=stale.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=45)),
+                Scan(application_id=deprecated.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                AuditLog(actor="operator", role="operator", action="owner.handoff", resource_type="application", resource_id=str(ready.id), metadata_json={}),
+            ]
+        )
+        create_finding(db, stale, severity=Severity.high, status=FindingStatus.open)
+        db.flush()
+
+        page = list_owner_handoff_readiness(db=db, _=None)
+        stale_page = list_owner_handoff_readiness(issue_type="stale_scan", owner="team-b", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        issues = {(item["application_name"], item["issue_type"]) for item in page.items}
+
+        assert ("handoff-ready", "missing_handoff_evidence") not in issues
+        assert ("handoff-missing-owner", "missing_owner") in issues
+        assert ("handoff-stale", "stale_scan") in issues
+        assert ("handoff-stale", "open_critical_high") in issues
+        assert ("handoff-deprecated", "lifecycle_exit_work") in issues
+        assert stale_page.items[0]["application_name"] == stale.name
+        assert summary.owner_handoff_gap_items >= 4
 
 
 def test_list_initial_inventory_reports_completion_and_filters() -> None:
