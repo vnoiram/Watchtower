@@ -29,6 +29,7 @@ from api.app.routers.operations import (
     completion_readiness_gap_count,
     e2e_evidence_gap_count,
     evidence_freshness_gap_count,
+    exit_criteria_gap_count,
     failure_drill_gap_count,
     idempotency_gap_count,
     incident_readiness_gap_count,
@@ -246,6 +247,7 @@ def dashboard_summary(
     repository_inventory_assurance_gap_items = repository_inventory_assurance_gap_count(db)
     daily_scan_execution_gap_items = daily_scan_execution_gap_count(db)
     critical_high_triage_gap_items = critical_high_triage_gap_count(db)
+    exit_criteria_gap_items = exit_criteria_gap_count(db, settings)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -357,4 +359,5 @@ def dashboard_summary(
         repository_inventory_assurance_gap_items=repository_inventory_assurance_gap_items,
         daily_scan_execution_gap_items=daily_scan_execution_gap_items,
         critical_high_triage_gap_items=critical_high_triage_gap_items,
+        exit_criteria_gap_items=exit_criteria_gap_items,
     )

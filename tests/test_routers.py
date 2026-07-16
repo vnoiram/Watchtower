@@ -110,6 +110,7 @@ from api.app.routers.operations import (
     list_idempotency_safety,
     list_incident_readiness,
     list_observability,
+    list_operational_exit_criteria,
     list_review_calendar,
     list_backup_evidence,
     list_credential_failures,
@@ -5761,6 +5762,29 @@ def test_completion_readiness_reports_project_completion_gaps() -> None:
         assert by_check["backup_restore_evidence"]["status"] == "ok"
         assert filtered.items[0]["check"] == "repository_inventory_54"
         assert summary.completion_readiness_gap_items >= 1
+
+
+def test_operational_exit_criteria_reports_review_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "exit-criteria")
+        app = create_application(db, repo)
+        db.add(Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=2)))
+        db.flush()
+        settings = Settings()
+
+        page = list_operational_exit_criteria(db=db, settings=settings, _=None)
+        filtered = list_operational_exit_criteria(check="active_owner", status="warn", db=db, settings=settings, _=None)
+        summary = dashboard_summary(db=db, settings=settings, _=None)
+        by_check = {item["check"]: item for item in page.items}
+
+        assert by_check["repository_inventory_54"]["status"] == "warn"
+        assert by_check["active_owner"]["status"] == "warn"
+        assert by_check["active_source_sbom_90"]["status"] == "warn"
+        assert by_check["daily_rescan"]["status"] == "warn"
+        assert by_check["backup_restore_evidence"]["status"] == "warn"
+        assert filtered.items[0]["check"] == "active_owner"
+        assert summary.exit_criteria_gap_items >= 1
 
 
 def test_e2e_evidence_reports_stage_gaps_and_filters() -> None:

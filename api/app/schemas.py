@@ -2233,6 +2233,15 @@ class CompletionReadinessOut(BaseModel):
     detail: str
 
 
+class OperationalExitCriteriaOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    target: float | int | None = None
+    percent: float | None = None
+    detail: str
+
+
 class E2eEvidenceOut(BaseModel):
     stage: str
     status: str
@@ -2822,3 +2831,4 @@ class DashboardSummary(BaseModel):
     repository_inventory_assurance_gap_items: int
     daily_scan_execution_gap_items: int
     critical_high_triage_gap_items: int
+    exit_criteria_gap_items: int
