@@ -96,6 +96,9 @@ const failureSignals = document.querySelector("#failure-signals");
 const isolatedSafeguards = document.querySelector("#isolated-safeguards");
 const isolatedScanHealth = document.querySelector("#isolated-scan-health");
 const secretsReview = document.querySelector("#secrets-review");
+const secretManagement = document.querySelector("#secret-management");
+const credentialExposure = document.querySelector("#credential-exposure");
+const authDeployment = document.querySelector("#auth-deployment");
 const workerPosture = document.querySelector("#worker-posture");
 const workerHardening = document.querySelector("#worker-hardening");
 const exploitIntel = document.querySelector("#exploit-intel");
@@ -144,6 +147,8 @@ const storagePressure = document.querySelector("#storage-pressure");
 const storageEncryption = document.querySelector("#storage-encryption");
 const githubSyncLag = document.querySelector("#github-sync-lag");
 const credentialFailures = document.querySelector("#credential-failures");
+const observability = document.querySelector("#observability");
+const incidentReadiness = document.querySelector("#incident-readiness");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -263,6 +268,11 @@ function renderMetrics(summary) {
     ["dependency_relationship_gap_items", "Dependency relations", "warn"],
     ["dependency_update_gap_items", "Update coverage", "warn"],
     ["remediation_priority_items", "Priority queue", "warn"],
+    ["secret_management_gap_items", "Secret management", "warn"],
+    ["credential_exposure_items", "Credential exposure", "danger"],
+    ["auth_deployment_gap_items", "Auth deployment", "warn"],
+    ["observability_gap_items", "Observability", "warn"],
+    ["incident_readiness_gap_items", "Incident readiness", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -1425,6 +1435,29 @@ function renderSecretsReview(page) {
     : `<tr><td colspan="5">No secret review items</td></tr>`;
 }
 
+function renderPosture(target, rows, emptyText) {
+  target.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.check)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.count)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">${escapeHtml(emptyText)}</td></tr>`;
+}
+
+function renderCredentialExposure(page) {
+  const rows = page.items || [];
+  credentialExposure.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.exposure_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No credential exposure items</td></tr>`;
+}
+
 function renderWorkerPosture(rows) {
   workerPosture.innerHTML = rows.length
     ? rows
@@ -1937,6 +1970,18 @@ function renderCredentialFailures(page) {
     : `<tr><td colspan="5">No credential failure records</td></tr>`;
 }
 
+function renderIncidentReadiness(page) {
+  const rows = page.items || [];
+  incidentReadiness.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.incident_type)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.has_response_audit ? "response audit" : item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No incident readiness gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2038,6 +2083,9 @@ async function refresh() {
   isolatedSafeguards.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   isolatedScanHealth.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   secretsReview.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  secretManagement.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  credentialExposure.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  authDeployment.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   workerPosture.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   workerHardening.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   exploitIntel.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2082,6 +2130,8 @@ async function refresh() {
   storageEncryption.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
   githubSyncLag.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   credentialFailures.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  observability.innerHTML = `<tr><td colspan="4">Loading</td></tr>`;
+  incidentReadiness.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2185,6 +2235,9 @@ async function refresh() {
       isolatedSafeguardPage,
       isolatedScanHealthPage,
       secretsReviewPage,
+      secretManagementPage,
+      credentialExposurePage,
+      authDeploymentPage,
       workerPosturePage,
       workerHardeningPage,
       exploitIntelPage,
@@ -2229,6 +2282,8 @@ async function refresh() {
       storageEncryptionPage,
       githubSyncLagPage,
       credentialFailurePage,
+      observabilityPage,
+      incidentReadinessPage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2331,6 +2386,9 @@ async function refresh() {
       loadJson("/isolated-lane/safeguards?limit=10"),
       loadJson("/isolated-lane/scan-health?limit=10"),
       loadJson("/security/secrets-review?limit=10"),
+      loadJson("/security/secret-management"),
+      loadJson("/security/credential-exposure?limit=10"),
+      loadJson("/security/auth-deployment"),
       loadJson("/operations/worker-posture"),
       loadJson("/operations/worker-hardening"),
       loadJson("/security/exploit-intel?limit=10"),
@@ -2375,6 +2433,8 @@ async function refresh() {
       loadJson("/storage/encryption-posture"),
       loadJson("/repository-sync/lag?limit=10"),
       loadJson("/operations/credential-failures?limit=10"),
+      loadJson("/operations/observability"),
+      loadJson("/operations/incident-readiness?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -2476,6 +2536,9 @@ async function refresh() {
     renderIsolatedSafeguards(isolatedSafeguardPage);
     renderIsolatedScanHealth(isolatedScanHealthPage);
     renderSecretsReview(secretsReviewPage);
+    renderPosture(secretManagement, secretManagementPage.items || [], "No secret management gaps");
+    renderCredentialExposure(credentialExposurePage);
+    renderPosture(authDeployment, authDeploymentPage.items || [], "No auth deployment gaps");
     renderWorkerPosture(workerPosturePage);
     renderWorkerHardening(workerHardeningPage);
     renderExploitIntel(exploitIntelPage);
@@ -2520,6 +2583,8 @@ async function refresh() {
     renderStorageEncryption(storageEncryptionPage);
     renderGithubSyncLag(githubSyncLagPage);
     renderCredentialFailures(credentialFailurePage);
+    renderPosture(observability, observabilityPage.items || [], "No observability gaps");
+    renderIncidentReadiness(incidentReadinessPage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -2621,6 +2686,9 @@ async function refresh() {
     isolatedSafeguards.innerHTML = `<tr><td colspan="5">Unable to load isolated safeguards</td></tr>`;
     isolatedScanHealth.innerHTML = `<tr><td colspan="5">Unable to load isolated scan health</td></tr>`;
     secretsReview.innerHTML = `<tr><td colspan="5">Unable to load secrets review</td></tr>`;
+    secretManagement.innerHTML = `<tr><td colspan="4">Unable to load secret management</td></tr>`;
+    credentialExposure.innerHTML = `<tr><td colspan="5">Unable to load credential exposure</td></tr>`;
+    authDeployment.innerHTML = `<tr><td colspan="4">Unable to load auth deployment</td></tr>`;
     workerPosture.innerHTML = `<tr><td colspan="4">Unable to load worker posture</td></tr>`;
     workerHardening.innerHTML = `<tr><td colspan="5">Unable to load worker hardening</td></tr>`;
     exploitIntel.innerHTML = `<tr><td colspan="5">Unable to load exploit intelligence</td></tr>`;
@@ -2665,6 +2733,8 @@ async function refresh() {
     storageEncryption.innerHTML = `<tr><td colspan="4">Unable to load storage encryption</td></tr>`;
     githubSyncLag.innerHTML = `<tr><td colspan="5">Unable to load GitHub sync lag</td></tr>`;
     credentialFailures.innerHTML = `<tr><td colspan="5">Unable to load credential failures</td></tr>`;
+    observability.innerHTML = `<tr><td colspan="4">Unable to load observability</td></tr>`;
+    incidentReadiness.innerHTML = `<tr><td colspan="5">Unable to load incident readiness</td></tr>`;
   }
 }
 

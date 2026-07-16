@@ -97,6 +97,8 @@ from api.app.routers.operations import (
     backup_readiness,
     control_evidence,
     daily_operations,
+    list_incident_readiness,
+    list_observability,
     list_backup_evidence,
     list_credential_failures,
     list_failure_signals,
@@ -162,8 +164,11 @@ from api.app.routers.scanner_versions import list_scanner_versions
 from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
 from api.app.routers.security import (
     data_protection,
+    list_auth_deployment,
+    list_credential_exposure,
     list_exploit_intel,
     list_sast_coverage,
+    list_secret_management,
     list_secret_scan_coverage,
     list_secrets_review,
     list_security_findings,
@@ -5047,6 +5052,209 @@ def test_worker_hardening_reports_security_evidence_and_dashboard_count() -> Non
         assert by_check["resource_limits"].status == "ok"
         assert by_check["temp_cleanup"].status == "ok"
         assert summary.worker_hardening_items == 0
+
+
+def test_secret_management_reports_configuration_gaps_without_secret_values() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        db.add(
+            AuditLog(
+                actor="ops",
+                role="admin",
+                action="secret_manager.rotation",
+                resource_type="configuration",
+                metadata_json={"provider": "vault", "evidence": "secret manager rotation"},
+            )
+        )
+        db.commit()
+        settings = Settings(
+            api_token="change-me",
+            github_token="SUPER_SECRET_TOKEN",
+            github_app_id="123",
+            github_private_key=None,
+            github_webhook_secret=None,
+        )
+
+        page = list_secret_management(db=db, settings=settings, _=None)
+        filtered = list_secret_management(check="github_pat_configured", status="warn", db=db, settings=settings, _=None)
+        summary = dashboard_summary(db=db, settings=settings, _=None)
+        rendered = str(page.items)
+
+        by_check = {item["check"]: item for item in page.items}
+        assert by_check["default_api_token"]["status"] == "fail"
+        assert by_check["github_pat_configured"]["status"] == "warn"
+        assert by_check["github_app_private_key"]["status"] == "warn"
+        assert by_check["secret_manager_evidence"]["status"] == "ok"
+        assert filtered.items[0]["check"] == "github_pat_configured"
+        assert "SUPER_SECRET_TOKEN" not in rendered
+        assert summary.secret_management_gap_items >= 3
+
+
+def test_credential_exposure_reports_sources_without_secret_values() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        db.add_all(
+            [
+                AuditLog(
+                    actor="ops",
+                    role="admin",
+                    action="audit.metadata",
+                    resource_type="audit",
+                    metadata_json={"token": "SUPER_SECRET_TOKEN"},
+                ),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.failed,
+                    application_id=app.id,
+                    last_error="credential token detected in scanner output",
+                    payload={},
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="github_issue",
+                    status="failed",
+                    metadata_json={"private_key": "PRIVATE_SECRET_VALUE"},
+                ),
+                Notification(
+                    channel="slack",
+                    severity=Severity.high,
+                    subject="security",
+                    body="redacted",
+                    status="queued",
+                    metadata_json={"client_secret": "AUDIT_SECRET_VALUE"},
+                ),
+            ]
+        )
+        db.commit()
+
+        page = list_credential_exposure(db=db, _=None)
+        filtered = list_credential_exposure(source="audit", severity="high", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        rendered = str(page.items)
+
+        assert {"audit", "job", "remediation", "notification"}.issubset({item["source"] for item in page.items})
+        assert filtered.items[0]["source"] == "audit"
+        assert any(item["exposure_type"] == "private_key" for item in page.items)
+        assert "SUPER_SECRET_TOKEN" not in rendered
+        assert "PRIVATE_SECRET_VALUE" not in rendered
+        assert "AUDIT_SECRET_VALUE" not in rendered
+        assert summary.credential_exposure_items == len(page.items)
+
+
+def test_auth_deployment_reports_default_role_and_auth_evidence() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        db.add_all(
+            [
+                AuditLog(actor="viewer", role="viewer", action="application.read", resource_type="application", metadata_json={}),
+                AuditLog(actor="operator", role="operator", action="scan.create", resource_type="scan", metadata_json={}),
+                AuditLog(actor="admin", role="admin", action="auth.proxy", resource_type="auth", metadata_json={"reverse_proxy": True}),
+            ]
+        )
+        db.commit()
+        settings = Settings(api_default_role="admin", api_token="change-me")
+
+        page = list_auth_deployment(db=db, settings=settings, _=None)
+        filtered = list_auth_deployment(check="default_role_admin", status="warn", db=db, settings=settings, _=None)
+        summary = dashboard_summary(db=db, settings=settings, _=None)
+
+        by_check = {item["check"]: item for item in page.items}
+        assert by_check["default_api_token"]["status"] == "fail"
+        assert by_check["default_role_admin"]["status"] == "warn"
+        assert by_check["role_audit_coverage"]["status"] == "ok"
+        assert by_check["reverse_proxy_auth_evidence"]["status"] == "ok"
+        assert by_check["oidc_evidence"]["status"] == "warn"
+        assert filtered.items[0]["check"] == "default_role_admin"
+        assert summary.auth_deployment_gap_items >= 3
+
+
+def test_observability_reports_logging_metrics_dashboard_and_correlation_evidence() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        db.add_all(
+            [
+                AuditLog(
+                    actor="ops",
+                    role="admin",
+                    action="observability.configure",
+                    resource_type="operations",
+                    metadata_json={"structured": True, "prometheus": True, "correlation_id": "req-1"},
+                ),
+                Job(job_type=JobType.scan, status=JobStatus.failed, last_error="worker failed with stack trace"),
+            ]
+        )
+        db.commit()
+
+        page = list_observability(db=db, _=None)
+        filtered = list_observability(check="grafana_dashboard", status="warn", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        by_check = {item["check"]: item for item in page.items}
+        assert by_check["structured_logs"]["status"] == "ok"
+        assert by_check["prometheus_metrics"]["status"] == "ok"
+        assert by_check["correlation_evidence"]["status"] == "ok"
+        assert by_check["error_log_coverage"]["status"] == "ok"
+        assert filtered.items[0]["check"] == "grafana_dashboard"
+        assert summary.observability_gap_items >= 1
+
+
+def test_incident_readiness_reports_unhandled_and_handled_incidents() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db)
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.failed,
+                    repository_id=repo.id,
+                    last_error="GitHub API rate limit 429",
+                ),
+                Job(job_type=JobType.scan, status=JobStatus.failed, application_id=app.id, last_error="worker crash"),
+                Job(job_type=JobType.scan, status=JobStatus.failed, application_id=app.id, last_error="S3 storage object failure"),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.failed,
+                    error_message="Trivy DB update failed",
+                    result_summary={},
+                ),
+                AuditLog(
+                    actor="ops",
+                    role="admin",
+                    action="incident.response",
+                    resource_type="runbook",
+                    metadata_json={"incident_type": "github_rate_limit", "response": "retry after backoff"},
+                ),
+                AuditLog(
+                    actor="ops",
+                    role="admin",
+                    action="auth.failure",
+                    resource_type="github",
+                    metadata_json={"status": 403, "detail": "credential token rejected"},
+                ),
+            ]
+        )
+        db.commit()
+
+        page = list_incident_readiness(db=db, _=None)
+        rate_limit = list_incident_readiness(incident_type="github_rate_limit", status="ok", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+
+        incident_types = {item["incident_type"] for item in page.items}
+        assert {
+            "github_rate_limit",
+            "scanner_db_update_failure",
+            "storage_failure",
+            "worker_failure",
+            "credential_failure",
+        }.issubset(incident_types)
+        assert rate_limit.items[0]["has_response_audit"] is True
+        assert any(item["status"] == "warn" for item in page.items)
+        assert summary.incident_readiness_gap_items >= 1
 
 
 def test_storage_encryption_posture_reports_tls_metadata_and_backup_audit() -> None:

@@ -153,8 +153,70 @@ def rbac_review(
     return rbac_review_items(db, settings)
 
 
+@router.get("/secret-management", response_model=schemas.CursorPage)
+def list_secret_management(
+    limit: int = 50,
+    check: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    items = [item.model_dump(mode="json") for item in secret_management_items(db, settings)]
+    if check:
+        items = [item for item in items if item["check"] == check]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/credential-exposure", response_model=schemas.CursorPage)
+def list_credential_exposure(
+    limit: int = 50,
+    source: str | None = None,
+    severity: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = credential_exposure_items(db)
+    if source:
+        items = [item for item in items if item["source"] == source]
+    if severity:
+        items = [item for item in items if item["severity"] == severity]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/auth-deployment", response_model=schemas.CursorPage)
+def list_auth_deployment(
+    limit: int = 50,
+    check: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    items = [item.model_dump(mode="json") for item in auth_deployment_items(db, settings)]
+    if check:
+        items = [item for item in items if item["check"] == check]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def rbac_review_count(db: Session, settings: Settings) -> int:
     return sum(1 for item in rbac_review_items(db, settings) if item.status != "ok")
+
+
+def secret_management_gap_count(db: Session, settings: Settings) -> int:
+    return sum(max(item.count, 1) for item in secret_management_items(db, settings) if item.status != "ok")
+
+
+def credential_exposure_count(db: Session) -> int:
+    return len(credential_exposure_items(db))
+
+
+def auth_deployment_gap_count(db: Session, settings: Settings) -> int:
+    return sum(max(item.count, 1) for item in auth_deployment_items(db, settings) if item.status != "ok")
 
 
 def secret_scan_coverage_count(db: Session) -> int:
@@ -357,6 +419,194 @@ def rbac_review_items(db: Session, settings: Settings) -> list[schemas.RbacRevie
     ]
 
 
+def secret_management_items(db: Session, settings: Settings) -> list[schemas.SecurityPostureOut]:
+    default_token = settings.api_token == "change-me"
+    github_app_configured = bool(settings.github_app_id and settings.github_private_key)
+    webhook_configured = bool(settings.github_webhook_secret)
+    manager_evidence = _evidence_count(
+        db,
+        {
+            "secret_manager",
+            "secret manager",
+            "vault",
+            "aws secrets manager",
+            "gcp secret manager",
+            "azure key vault",
+            "sealed secret",
+        },
+    )
+    return [
+        _security_posture(
+            "default_api_token",
+            "fail" if default_token else "ok",
+            1 if default_token else 0,
+            "API token is using the default value" if default_token else "API token is customized",
+        ),
+        _security_posture(
+            "github_pat_configured",
+            "warn" if settings.github_token else "ok",
+            1 if settings.github_token else 0,
+            "GitHub PAT is configured; prefer GitHub App credentials"
+            if settings.github_token
+            else "GitHub PAT is not configured",
+        ),
+        _security_posture(
+            "github_app_private_key",
+            "ok" if github_app_configured else "warn",
+            1 if github_app_configured else 0,
+            "GitHub App id and private key are configured"
+            if github_app_configured
+            else "GitHub App id/private key configuration is incomplete",
+        ),
+        _security_posture(
+            "github_webhook_secret",
+            "ok" if webhook_configured else "warn",
+            1 if webhook_configured else 0,
+            "GitHub webhook secret is configured"
+            if webhook_configured
+            else "GitHub webhook secret is not configured",
+        ),
+        _security_posture(
+            "secret_manager_evidence",
+            "ok" if manager_evidence else "warn",
+            manager_evidence,
+            "Secret manager evidence found" if manager_evidence else "No secret manager evidence found in audit or job metadata",
+        ),
+    ]
+
+
+def auth_deployment_items(db: Session, settings: Settings) -> list[schemas.SecurityPostureOut]:
+    logs = list(db.scalars(select(models.AuditLog)))
+    roles = {log.role for log in logs}
+    default_token = settings.api_token == "change-me"
+    default_role_admin = settings.api_default_role == "admin"
+    proxy_evidence = _evidence_count(db, {"reverse_proxy", "proxy_auth", "x-forwarded-user", "oauth2-proxy"})
+    oidc_evidence = _evidence_count(db, {"oidc", "openid", "sso", "identity_provider"})
+    role_count = len(roles & {"viewer", "operator", "admin"})
+    return [
+        _security_posture(
+            "default_api_token",
+            "fail" if default_token else "ok",
+            1 if default_token else 0,
+            "API token is using the default value" if default_token else "API token is customized",
+        ),
+        _security_posture(
+            "default_role_admin",
+            "warn" if default_role_admin else "ok",
+            1 if default_role_admin else 0,
+            f"default_role={settings.api_default_role}",
+        ),
+        _security_posture(
+            "role_audit_coverage",
+            "ok" if role_count >= 3 else "warn",
+            role_count,
+            "Roles observed in audit logs: " + (", ".join(sorted(roles)) if roles else "none"),
+        ),
+        _security_posture(
+            "reverse_proxy_auth_evidence",
+            "ok" if proxy_evidence else "warn",
+            proxy_evidence,
+            "Reverse proxy authentication evidence found"
+            if proxy_evidence
+            else "No reverse proxy authentication evidence found",
+        ),
+        _security_posture(
+            "oidc_evidence",
+            "ok" if oidc_evidence else "warn",
+            oidc_evidence,
+            "OIDC/SSO evidence found" if oidc_evidence else "No OIDC/SSO evidence found",
+        ),
+    ]
+
+
+def credential_exposure_items(db: Session) -> list[dict]:
+    items = []
+    for audit_log in db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc())):
+        for field, exposure_type, severity in _credential_exposures(audit_log.metadata_json):
+            items.append(
+                _credential_exposure(
+                    "audit",
+                    audit_log.id,
+                    exposure_type,
+                    severity,
+                    field,
+                    None,
+                    None,
+                    "Potential credential exposure in audit metadata",
+                    audit_log.created_at,
+                )
+            )
+    for job in db.scalars(select(models.Job).order_by(models.Job.created_at.desc())):
+        context = _job_context(db, job)
+        for field, exposure_type, severity in _credential_exposures(job.payload, job.last_error):
+            items.append(
+                _credential_exposure(
+                    "job",
+                    job.id,
+                    exposure_type,
+                    severity,
+                    field,
+                    context[0],
+                    context[1],
+                    "Potential credential exposure in job payload or error",
+                    job.created_at,
+                )
+            )
+    scan_stmt = (
+        select(models.Scan, models.Application, models.Repository)
+        .join(models.Application, models.Scan.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Scan.created_at.desc())
+    )
+    for scan, application, repository in db.execute(scan_stmt):
+        for field, exposure_type, severity in _credential_exposures(scan.result_summary, scan.error_message):
+            items.append(
+                _credential_exposure(
+                    "scan",
+                    scan.id,
+                    exposure_type,
+                    severity,
+                    field,
+                    application,
+                    repository,
+                    "Potential credential exposure in scan summary or error",
+                    scan.created_at,
+                )
+            )
+    for action in db.scalars(select(models.RemediationAction).order_by(models.RemediationAction.created_at.desc())):
+        context = _remediation_context(db, action)
+        for field, exposure_type, severity in _credential_exposures(action.metadata_json):
+            items.append(
+                _credential_exposure(
+                    "remediation",
+                    action.id,
+                    exposure_type,
+                    severity,
+                    field,
+                    context[0],
+                    context[1],
+                    "Potential credential exposure in remediation metadata",
+                    action.created_at,
+                )
+            )
+    for notification in db.scalars(select(models.Notification).order_by(models.Notification.created_at.desc())):
+        for field, exposure_type, severity in _credential_exposures(notification.metadata_json):
+            items.append(
+                _credential_exposure(
+                    "notification",
+                    notification.id,
+                    exposure_type,
+                    severity,
+                    field,
+                    None,
+                    None,
+                    "Potential credential exposure in notification metadata",
+                    notification.created_at,
+                )
+            )
+    return sorted(items, key=lambda item: item["created_at"], reverse=True)
+
+
 def _protection(check: str, configured: bool, count: int, detail: str) -> schemas.DataProtectionOut:
     return schemas.DataProtectionOut(
         check=check,
@@ -369,6 +619,155 @@ def _protection(check: str, configured: bool, count: int, detail: str) -> schema
 
 def _rbac_check(check: str, status: str, count: int, detail: str) -> schemas.RbacReviewOut:
     return schemas.RbacReviewOut(check=check, status=status, count=count, detail=detail)
+
+
+def _security_posture(check: str, status: str, count: int, detail: str) -> schemas.SecurityPostureOut:
+    return schemas.SecurityPostureOut(check=check, status=status, count=count, detail=detail)
+
+
+def _credential_exposure(
+    source: str,
+    source_id: Any,
+    exposure_type: str,
+    severity: str,
+    field: str | None,
+    application: models.Application | None,
+    repository: models.Repository | None,
+    detail: str,
+    created_at,
+) -> dict:
+    return schemas.CredentialExposureOut(
+        source=source,
+        source_id=str(source_id),
+        exposure_type=exposure_type,
+        severity=severity,
+        field=field,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        repository_id=repository.id if repository else None,
+        repository_owner=repository.owner if repository else None,
+        repository_name=repository.name if repository else None,
+        detail=detail,
+        created_at=created_at,
+    ).model_dump(mode="json")
+
+
+def _evidence_count(db: Session, tokens: set[str]) -> int:
+    count = 0
+    for audit_log in db.scalars(select(models.AuditLog)):
+        if _matches_tokens(_evidence_text(audit_log.action, audit_log.metadata_json), tokens):
+            count += 1
+    for job in db.scalars(select(models.Job)):
+        if _matches_tokens(_evidence_text(job.job_type.value, job.payload, job.last_error), tokens):
+            count += 1
+    for scan in db.scalars(select(models.Scan)):
+        if _matches_tokens(_evidence_text(scan.tool, scan.result_summary, scan.error_message), tokens):
+            count += 1
+    return count
+
+
+def _evidence_text(*values: Any) -> str:
+    parts = []
+    for value in values:
+        if isinstance(value, dict):
+            parts.extend(_metadata_parts(value))
+        elif isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        elif value is not None:
+            parts.append(str(value))
+    return " ".join(parts).lower()
+
+
+def _metadata_parts(value: dict[str, Any]) -> list[str]:
+    parts = []
+    for key, item in value.items():
+        parts.append(str(key))
+        if isinstance(item, dict):
+            parts.extend(_metadata_parts(item))
+        elif isinstance(item, list):
+            parts.extend(str(entry) for entry in item)
+        elif item is not None:
+            parts.append(str(item))
+    return parts
+
+
+def _credential_exposures(*values: Any) -> list[tuple[str | None, str, str]]:
+    seen = set()
+    exposures = []
+    for value in values:
+        for field, text in _walk_credential_values(value):
+            signal = _credential_signal(field, text)
+            if not signal:
+                continue
+            key = (field, signal[0], signal[1])
+            if key in seen:
+                continue
+            seen.add(key)
+            exposures.append((field, signal[0], signal[1]))
+    return exposures
+
+
+def _walk_credential_values(value: Any, field: str | None = None) -> list[tuple[str | None, str]]:
+    if isinstance(value, dict):
+        rows = []
+        for key, item in value.items():
+            child_field = str(key)
+            rows.append((child_field, str(item)))
+            rows.extend(_walk_credential_values(item, child_field))
+        return rows
+    if isinstance(value, list):
+        rows = []
+        for item in value:
+            rows.extend(_walk_credential_values(item, field))
+        return rows
+    if value is None:
+        return []
+    return [(field, str(value))]
+
+
+def _credential_signal(field: str | None, value: str) -> tuple[str, str] | None:
+    field_text = (field or "").lower().replace("-", "_")
+    value_text = value.lower()
+    if "secret_manager" in field_text or "secret manager" in value_text:
+        return None
+    if "private_key" in field_text or "private key" in field_text or "begin private key" in value_text:
+        return ("private_key", "critical")
+    if field_text in {"password", "passwd", "client_secret", "webhook_secret"}:
+        return ("password" if "password" in field_text or "passwd" in field_text else "secret", "critical")
+    if field_text in {"token", "api_token", "access_token", "refresh_token", "github_token"}:
+        return ("token", "high")
+    if field_text in {"secret", "api_key", "apikey", "credential", "credentials"}:
+        return ("secret" if "secret" in field_text or "key" in field_text else "credential", "high")
+    if any(pattern in value_text for pattern in ["ghp_", "github_pat_", "xoxb-", "token=", "password=", "api_key="]):
+        return ("token", "high")
+    if any(pattern in value_text for pattern in ["super_secret", "audit_secret", "private_secret"]):
+        return ("secret", "high")
+    if "credential" in value_text and "token" in value_text:
+        return ("credential", "high")
+    return None
+
+
+def _job_context(
+    db: Session,
+    job: models.Job,
+) -> tuple[models.Application | None, models.Repository | None]:
+    application = db.get(models.Application, job.application_id) if job.application_id else None
+    repository = db.get(models.Repository, job.repository_id) if job.repository_id else None
+    if application and not repository:
+        repository = db.get(models.Repository, application.repository_id)
+    return application, repository
+
+
+def _remediation_context(
+    db: Session,
+    action: models.RemediationAction,
+) -> tuple[models.Application | None, models.Repository | None]:
+    finding = db.get(models.Finding, action.finding_id)
+    if not finding:
+        return None, None
+    application = db.get(models.Application, finding.application_id)
+    repository = db.get(models.Repository, application.repository_id) if application else None
+    return application, repository
 
 
 def _privileged_action(action: str) -> bool:

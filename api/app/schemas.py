@@ -2163,6 +2163,50 @@ class VulnerabilityReevaluationCoverageOut(BaseModel):
     updated_at: datetime
 
 
+class SecurityPostureOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class CredentialExposureOut(BaseModel):
+    source: str
+    source_id: str
+    exposure_type: str
+    severity: str
+    field: str | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    detail: str
+    created_at: datetime
+
+
+class ObservabilityPostureOut(BaseModel):
+    check: str
+    status: str
+    count: int
+    detail: str
+
+
+class IncidentReadinessOut(BaseModel):
+    incident_type: str
+    status: str
+    source: str
+    source_id: str
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    has_response_audit: bool
+    detail: str
+    created_at: datetime
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2235,3 +2279,8 @@ class DashboardSummary(BaseModel):
     dependency_relationship_gap_items: int
     dependency_update_gap_items: int
     remediation_priority_items: int
+    secret_management_gap_items: int
+    credential_exposure_items: int
+    auth_deployment_gap_items: int
+    observability_gap_items: int
+    incident_readiness_gap_items: int
