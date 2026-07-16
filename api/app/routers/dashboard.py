@@ -72,6 +72,7 @@ from api.app.routers.remediation import (
 from api.app.routers.rollout import (
     application_readiness_count,
     mvp_readiness_gap_count,
+    repository_inventory_assurance_gap_count,
     repository_onboarding_gap_count,
     repository_inventory_gap_count,
     rollout_gap_count,
@@ -240,6 +241,7 @@ def dashboard_summary(
     mvp_readiness_gap_items = mvp_readiness_gap_count(db)
     remediation_evidence_gap_items = remediation_evidence_gap_count(db)
     owner_handoff_gap_items = owner_handoff_gap_count(db)
+    repository_inventory_assurance_gap_items = repository_inventory_assurance_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -347,4 +349,5 @@ def dashboard_summary(
         mvp_readiness_gap_items=mvp_readiness_gap_items,
         remediation_evidence_gap_items=remediation_evidence_gap_items,
         owner_handoff_gap_items=owner_handoff_gap_items,
+        repository_inventory_assurance_gap_items=repository_inventory_assurance_gap_items,
     )

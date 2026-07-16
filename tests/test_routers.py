@@ -171,6 +171,7 @@ from api.app.routers.rollout import (
     list_mvp_target_readiness,
     list_repository_onboarding_proof,
     list_repository_workflow_trace,
+    list_repository_inventory_assurance,
     list_repository_inventory_gaps,
     list_repository_rollout,
     list_rollout_gaps,
@@ -4685,6 +4686,37 @@ def test_list_owner_handoff_readiness_reports_handoff_gaps() -> None:
         assert ("handoff-deprecated", "lifecycle_exit_work") in issues
         assert stale_page.items[0]["application_name"] == stale.name
         assert summary.owner_handoff_gap_items >= 4
+
+
+def test_list_repository_inventory_assurance_reports_inventory_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        stale_repo = create_repository(db, "inventory-assurance-stale")
+        stale_repo.visibility = None
+        stale_repo.default_branch = None
+        stale_repo.primary_language = None
+        stale_repo.last_synced_at = now_utc() - timedelta(days=45)
+        missing_provider = create_repository(db, "inventory-assurance-provider")
+        missing_provider.provider_repository_id = None
+        missing_provider.visibility = "private"
+        missing_provider.default_branch = "main"
+        missing_provider.primary_language = "Python"
+        missing_provider.last_synced_at = now_utc()
+        db.flush()
+
+        page = list_repository_inventory_assurance(db=db, _=None)
+        filtered = list_repository_inventory_assurance(gap_type="missing_provider_id", provider=RepositoryProvider.github, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["gap_type"], item["repository_name"]) for item in page.items}
+
+        assert ("missing_visibility", stale_repo.name) in gaps
+        assert ("missing_default_branch", stale_repo.name) in gaps
+        assert ("missing_primary_language", stale_repo.name) in gaps
+        assert ("stale_sync", stale_repo.name) in gaps
+        assert ("missing_provider_id", missing_provider.name) in gaps
+        assert any(item["gap_type"] == "repository_count_below_target" and item["target"] == 54 for item in page.items)
+        assert filtered.items[0]["repository_name"] == missing_provider.name
+        assert summary.repository_inventory_assurance_gap_items >= 6
 
 
 def test_list_initial_inventory_reports_completion_and_filters() -> None:
