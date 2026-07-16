@@ -139,6 +139,25 @@ def list_scan_freshness_buckets(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/result-consistency", response_model=schemas.CursorPage)
+def list_scan_result_consistency(
+    limit: int = 50,
+    gap_type: str | None = None,
+    status: models.ScanStatus | None = None,
+    tool: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = scan_result_consistency_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if status:
+        items = [item for item in items if item["status"] == status.value]
+    if tool:
+        items = [item for item in items if item["tool"] == tool]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def daily_scan_slo_breach_count(db: Session) -> int:
     return sum(1 for item in daily_scan_slo_items(db) if item["breached"])
 
@@ -153,6 +172,44 @@ def raw_scan_artifact_gap_count(db: Session) -> int:
 
 def scan_format_gap_count(db: Session) -> int:
     return len(scan_format_compliance_items(db))
+
+
+def scan_result_consistency_gap_count(db: Session) -> int:
+    return len(scan_result_consistency_items(db))
+
+
+def scan_result_consistency_items(db: Session) -> list[dict]:
+    sbom_scan_ids = set(db.scalars(select(models.Sbom.scan_id)))
+    finding_scan_ids = {
+        scan_id
+        for scan_id in db.scalars(select(models.Finding.first_seen_scan_id))
+        if scan_id is not None
+    } | {
+        scan_id
+        for scan_id in db.scalars(select(models.Finding.last_seen_scan_id))
+        if scan_id is not None
+    }
+    stmt = (
+        select(models.Scan, models.Application, models.Repository)
+        .join(models.Application, models.Scan.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Scan.created_at.desc(), models.Scan.id.asc())
+    )
+    items = []
+    for scan, application, repository in db.execute(stmt):
+        summary = scan.result_summary or {}
+        artifacts = _scan_artifact_payloads(summary)
+        if scan.status == models.ScanStatus.succeeded and not summary:
+            items.append(_result_consistency_item("success_without_result", scan, application, repository, "Succeeded scan has no result summary"))
+        if scan.status == models.ScanStatus.succeeded and not artifacts and scan.id not in sbom_scan_ids and scan.id not in finding_scan_ids:
+            items.append(_result_consistency_item("success_without_artifact_or_finding", scan, application, repository, "Succeeded scan has no artifact, SBOM, or finding evidence"))
+        if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out} and not scan.error_message:
+            items.append(_result_consistency_item("failure_without_error", scan, application, repository, "Failed scan has no error message"))
+        if scan.status == models.ScanStatus.partially_succeeded and not summary.get("scanner_failures"):
+            items.append(_result_consistency_item("partial_without_scanner_failures", scan, application, repository, "Partially succeeded scan has no scanner_failures evidence"))
+        if scan.id in sbom_scan_ids and scan.status != models.ScanStatus.succeeded:
+            items.append(_result_consistency_item("sbom_without_scan_success", scan, application, repository, "SBOM is attached to a scan that did not succeed"))
+    return items
 
 
 def scan_format_compliance_items(db: Session) -> list[dict]:
@@ -241,6 +298,28 @@ def _format_item(
         status=scan.status,
         tool=scan.tool,
         artifact_type=artifact_type,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        detail=detail,
+        created_at=scan.created_at,
+    ).model_dump(mode="json")
+
+
+def _result_consistency_item(
+    gap_type: str,
+    scan: models.Scan,
+    application: models.Application,
+    repository: models.Repository,
+    detail: str,
+) -> dict:
+    return schemas.ScanResultConsistencyOut(
+        gap_type=gap_type,
+        scan_id=scan.id,
+        status=scan.status,
+        tool=scan.tool,
         application_id=application.id,
         application_name=application.name,
         repository_id=repository.id,

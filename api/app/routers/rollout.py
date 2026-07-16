@@ -213,6 +213,25 @@ def list_repository_workflow_trace(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/application-mapping-quality", response_model=schemas.CursorPage)
+def list_application_mapping_quality(
+    limit: int = 50,
+    gap_type: str | None = None,
+    provider: models.RepositoryProvider | None = None,
+    source_classification: models.SourceClassification | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = application_mapping_quality_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if provider:
+        items = [item for item in items if item["provider"] == provider.value]
+    if source_classification:
+        items = [item for item in items if item["source_classification"] == source_classification.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def rollout_gap_count(db: Session) -> int:
     return len(rollout_gap_items(db))
 
@@ -235,6 +254,10 @@ def repository_onboarding_gap_count(db: Session) -> int:
 
 def workflow_trace_gap_count(db: Session) -> int:
     return len(repository_workflow_trace_items(db))
+
+
+def application_mapping_gap_count(db: Session) -> int:
+    return len(application_mapping_quality_items(db))
 
 
 def rollout_baseline_items(db: Session) -> list[schemas.RolloutBaselineOut]:
@@ -413,6 +436,34 @@ def repository_drift_items(db: Session) -> list[dict]:
                         detail="Archived or fork repository still has active applications",
                     )
                 )
+    return items
+
+
+def application_mapping_quality_items(db: Session) -> list[dict]:
+    items = []
+    for repository in db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc())):
+        applications = list(
+            db.scalars(
+                select(models.Application)
+                .where(models.Application.repository_id == repository.id)
+                .order_by(models.Application.path.asc(), models.Application.id.asc())
+            )
+        )
+        path_counts: dict[str, int] = {}
+        for application in applications:
+            path_counts[application.path] = path_counts.get(application.path, 0) + 1
+        active_applications = [app for app in applications if app.lifecycle not in {models.Lifecycle.archived, models.Lifecycle.deprecated}]
+        if not repository.archived and not active_applications:
+            items.append(_mapping_item("active_repo_without_active_application", repository, None, "Active repository has no active application mapping"))
+        for application in applications:
+            if path_counts.get(application.path, 0) > 1:
+                items.append(_mapping_item("duplicate_application_path", repository, application, "Repository has duplicate application path mappings"))
+            if application.application_type == models.ApplicationType.unknown:
+                items.append(_mapping_item("unknown_application_type", repository, application, "Application type is unknown"))
+            if application.path == "." and _monorepo_evidence(application, repository) and not _application_has_path_evidence(application):
+                items.append(_mapping_item("root_monorepo_without_evidence", repository, application, "Monorepo-like repository maps application to root without path evidence"))
+            if repository.archived and application.lifecycle not in {models.Lifecycle.archived, models.Lifecycle.deprecated}:
+                items.append(_mapping_item("archived_repo_active_application", repository, application, "Archived repository has active application mapping"))
     return items
 
 
@@ -949,6 +1000,44 @@ def _repository_triage_evidence(db: Session, application_ids: list) -> bool:
             )
         )
     )
+
+
+def _monorepo_evidence(application: models.Application, repository: models.Repository) -> bool:
+    text = " ".join(
+        [
+            repository.name or "",
+            repository.primary_language or "",
+            " ".join(repository.topics or []),
+            application.name or "",
+        ]
+    ).lower()
+    return any(token in text for token in ["monorepo", "workspace", "packages", "apps"])
+
+
+def _application_has_path_evidence(application: models.Application) -> bool:
+    return application.path not in {"", "."}
+
+
+def _mapping_item(
+    gap_type: str,
+    repository: models.Repository,
+    application: models.Application | None,
+    detail: str,
+) -> dict:
+    return schemas.ApplicationMappingQualityOut(
+        gap_type=gap_type,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        provider=repository.provider,
+        source_classification=repository.source_classification,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        application_path=application.path if application else None,
+        application_type=application.application_type if application else None,
+        lifecycle=application.lifecycle if application else None,
+        detail=detail,
+    ).model_dump(mode="json")
 
 
 def _workflow_trace_item(

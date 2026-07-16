@@ -2507,6 +2507,70 @@ class RepositoryWorkflowTraceOut(BaseModel):
     detail: str
 
 
+class StateConsistencyOut(BaseModel):
+    gap_type: str
+    resource_type: str
+    resource_id: str
+    status: str
+    detail: str
+    created_at: datetime
+
+
+class MetadataCompletenessOut(BaseModel):
+    gap_type: str
+    resource_type: str
+    resource_id: str
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    detail: str
+    created_at: datetime
+
+
+class OrphanEvidenceOut(BaseModel):
+    gap_type: str
+    resource_type: str
+    resource_id: str
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    detail: str
+    created_at: datetime
+
+
+class ScanResultConsistencyOut(BaseModel):
+    gap_type: str
+    scan_id: UUID
+    status: models.ScanStatus
+    tool: str | None = None
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    detail: str
+    created_at: datetime
+
+
+class ApplicationMappingQualityOut(BaseModel):
+    gap_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider: models.RepositoryProvider
+    source_classification: models.SourceClassification
+    application_id: UUID | None = None
+    application_name: str | None = None
+    application_path: str | None = None
+    application_type: models.ApplicationType | None = None
+    lifecycle: models.Lifecycle | None = None
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2604,3 +2668,8 @@ class DashboardSummary(BaseModel):
     scanner_execution_gap_items: int
     retention_execution_gap_items: int
     workflow_trace_gap_items: int
+    state_consistency_gap_items: int
+    metadata_completeness_gap_items: int
+    orphan_evidence_gap_items: int
+    scan_result_consistency_gap_items: int
+    application_mapping_gap_items: int

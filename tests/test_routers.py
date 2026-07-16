@@ -131,7 +131,7 @@ from api.app.routers.operations import (
     worker_posture,
     weekly_review,
 )
-from api.app.routers.quality import list_duplicate_review, list_reopen_risk
+from api.app.routers.quality import list_duplicate_review, list_metadata_completeness, list_orphan_evidence, list_reopen_risk, list_state_consistency
 from api.app.routers.quality import list_false_positive_review
 from api.app.routers.remediation import (
     list_auto_resolution_evidence,
@@ -160,6 +160,7 @@ from api.app.routers.repositories import list_repository_classification_review
 from api.app.routers.repository_sync import list_import_failures, list_repository_sync
 from api.app.routers.repository_sync import list_repository_sync_lag
 from api.app.routers.rollout import (
+    list_application_mapping_quality,
     list_application_readiness,
     list_initial_inventory,
     list_mvp_target_readiness,
@@ -176,6 +177,7 @@ from api.app.routers.scan_health import list_scan_health
 from api.app.routers.scans import (
     list_daily_scan_slo,
     list_raw_scan_artifacts,
+    list_scan_result_consistency,
     list_scan_evidence_quality,
     list_scan_freshness_buckets,
     list_scan_format_compliance,
@@ -4335,6 +4337,172 @@ def test_list_efficiency_timeline_reports_durations_and_breaches() -> None:
         assert by_metric["mttn"]["duration_hours"] == 1.0
         assert by_metric["mttr"]["duration_hours"] == 2.0
         assert filtered.items[0]["finding_id"] == str(finding.id)
+
+
+def test_list_state_consistency_reports_status_timestamp_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "state-consistency")
+        app = create_application(db, repo)
+        resolved = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
+        open_finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
+        open_finding.resolved_at = now_utc()
+        db.add_all(
+            [
+                Job(job_type=JobType.scan, status=JobStatus.failed, application_id=app.id, repository_id=repo.id),
+                Notification(channel="slack", severity=Severity.high, subject="sent", body="sent", status="sent", metadata_json={"finding_id": str(open_finding.id)}),
+                RemediationAction(finding_id=resolved.id, action_type="github_issue", status="closed", provider="github", metadata_json={}),
+            ]
+        )
+        db.flush()
+
+        page = list_state_consistency(db=db, _=None)
+        filtered = list_state_consistency(gap_type="sent_without_sent_at", resource_type="notification", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["gap_type"], item["resource_type"]) for item in page.items}
+
+        assert ("resolved_without_resolved_at", "finding") in gaps
+        assert ("open_with_resolved_at", "finding") in gaps
+        assert ("terminal_without_completed_at", "job") in gaps
+        assert ("sent_without_sent_at", "notification") in gaps
+        assert ("closed_without_close_evidence", "remediation_action") in gaps
+        assert filtered.items[0]["resource_type"] == "notification"
+        assert summary.state_consistency_gap_items >= 5
+
+
+def test_list_metadata_completeness_reports_context_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "metadata-completeness")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
+        db.add_all(
+            [
+                Scan(application_id=app.id, trigger_type=TriggerType.push, status=ScanStatus.failed, result_summary={}),
+                Job(job_type=JobType.scan, status=JobStatus.failed, payload={}),
+                Notification(channel="slack", severity=Severity.critical, subject="missing", body="missing", status="queued", metadata_json={}),
+                RemediationAction(finding_id=finding.id, action_type="github_issue", status="created", provider="github", metadata_json={}),
+            ]
+        )
+        db.flush()
+
+        page = list_metadata_completeness(db=db, _=None)
+        filtered = list_metadata_completeness(gap_type="missing_commit_context", resource_type="scan", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["gap_type"], item["resource_type"]) for item in page.items}
+
+        assert ("missing_commit_context", "scan") in gaps
+        assert ("missing_error_context", "scan") in gaps
+        assert ("missing_application_context", "job") in gaps
+        assert ("missing_error_context", "job") in gaps
+        assert ("missing_finding_context", "notification") in gaps
+        assert ("missing_external_reference", "remediation_action") in gaps
+        assert filtered.items[0]["application_name"] == app.name
+        assert summary.metadata_completeness_gap_items >= 6
+
+
+def test_list_orphan_evidence_reports_unlinked_records() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "orphan-evidence")
+        app = create_application(db, repo)
+        resolved = create_finding(db, app, severity=Severity.low, status=FindingStatus.resolved)
+        component = Component(purl="pkg:pypi/orphan@1.0.0", ecosystem="pypi", name="orphan", version="1.0.0")
+        vulnerability = Vulnerability(source="osv", external_id="ORPHAN-1", severity=Severity.medium)
+        db.add_all(
+            [
+                component,
+                vulnerability,
+                Notification(
+                    channel="slack",
+                    severity=Severity.medium,
+                    subject="missing",
+                    body="missing",
+                    status="queued",
+                    metadata_json={"finding_id": "00000000-0000-0000-0000-000000000001"},
+                ),
+                RemediationAction(finding_id=resolved.id, action_type="github_issue", status="created", provider="github", metadata_json={}),
+                AuditLog(
+                    actor="operator",
+                    role="operator",
+                    action="scan.read",
+                    resource_type="scan",
+                    resource_id="00000000-0000-0000-0000-000000000002",
+                    metadata_json={},
+                ),
+            ]
+        )
+        db.flush()
+
+        page = list_orphan_evidence(db=db, _=None)
+        filtered = list_orphan_evidence(gap_type="audit_without_resource", resource_type="audit_log", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["gap_type"], item["resource_type"]) for item in page.items}
+
+        assert ("component_without_active_sbom", "component") in gaps
+        assert ("vulnerability_without_finding", "vulnerability") in gaps
+        assert ("notification_without_finding", "notification") in gaps
+        assert ("action_without_active_finding", "remediation_action") in gaps
+        assert ("audit_without_resource", "audit_log") in gaps
+        assert filtered.items[0]["resource_type"] == "audit_log"
+        assert summary.orphan_evidence_gap_items >= 5
+
+
+def test_list_scan_result_consistency_reports_scan_result_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "scan-result-consistency")
+        app = create_application(db, repo)
+        empty_success = Scan(application_id=app.id, status=ScanStatus.succeeded, tool="osv", result_summary={})
+        failed = Scan(application_id=app.id, status=ScanStatus.failed, tool="trivy", result_summary={})
+        partial = Scan(application_id=app.id, status=ScanStatus.partially_succeeded, tool="grype", result_summary={})
+        failed_with_sbom = Scan(application_id=app.id, status=ScanStatus.failed, tool="syft", result_summary={})
+        db.add_all([empty_success, failed, partial, failed_with_sbom])
+        db.flush()
+        db.add(Sbom(application_id=app.id, scan_id=failed_with_sbom.id, sbom_kind="source", sbom_digest="failed-sbom", storage_key="failed-sbom.json", active=True))
+        db.flush()
+
+        page = list_scan_result_consistency(db=db, _=None)
+        filtered = list_scan_result_consistency(gap_type="partial_without_scanner_failures", status=ScanStatus.partially_succeeded, tool="grype", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["gap_type"], item["scan_id"]) for item in page.items}
+
+        assert ("success_without_result", str(empty_success.id)) in gaps
+        assert ("success_without_artifact_or_finding", str(empty_success.id)) in gaps
+        assert ("failure_without_error", str(failed.id)) in gaps
+        assert ("partial_without_scanner_failures", str(partial.id)) in gaps
+        assert ("sbom_without_scan_success", str(failed_with_sbom.id)) in gaps
+        assert filtered.items[0]["scan_id"] == str(partial.id)
+        assert summary.scan_result_consistency_gap_items >= 5
+
+
+def test_list_application_mapping_quality_reports_mapping_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        archived_repo = create_repository(db, "mapping-archived")
+        archived_repo.archived = True
+        create_application(db, archived_repo, "archived-active")
+        unknown_repo = create_repository(db, "mapping-unknown")
+        unknown_app = create_application(db, unknown_repo, "unknown-app")
+        unknown_app.application_type = ApplicationType.unknown
+        monorepo = create_repository(db, "mapping-monorepo")
+        monorepo.topics = ["monorepo"]
+        monorepo_app = create_application(db, monorepo, "workspace")
+        monorepo_app.path = "."
+        empty_repo = create_repository(db, "mapping-empty")
+        db.flush()
+
+        page = list_application_mapping_quality(db=db, _=None)
+        filtered = list_application_mapping_quality(gap_type="archived_repo_active_application", provider=RepositoryProvider.github, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["gap_type"], item["repository_name"]) for item in page.items}
+
+        assert ("archived_repo_active_application", archived_repo.name) in gaps
+        assert ("unknown_application_type", unknown_repo.name) in gaps
+        assert ("root_monorepo_without_evidence", monorepo.name) in gaps
+        assert ("active_repo_without_active_application", empty_repo.name) in gaps
+        assert filtered.items[0]["repository_name"] == archived_repo.name
+        assert summary.application_mapping_gap_items >= 4
 
 
 def test_list_initial_inventory_reports_completion_and_filters() -> None:
