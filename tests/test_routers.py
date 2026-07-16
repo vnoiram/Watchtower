@@ -182,6 +182,7 @@ from api.app.routers.rollout import (
 from api.app.routers.scan_health import list_scan_health
 from api.app.routers.scans import (
     list_daily_scan_slo,
+    list_daily_scan_execution_evidence,
     list_raw_scan_artifacts,
     list_scan_result_consistency,
     list_scan_evidence_quality,
@@ -4717,6 +4718,42 @@ def test_list_repository_inventory_assurance_reports_inventory_gaps() -> None:
         assert any(item["gap_type"] == "repository_count_below_target" and item["target"] == 54 for item in page.items)
         assert filtered.items[0]["repository_name"] == missing_provider.name
         assert summary.repository_inventory_assurance_gap_items >= 6
+
+
+def test_list_daily_scan_execution_evidence_reports_missing_daily_execution() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "daily-execution")
+        complete = create_application(db, repo, "daily-complete")
+        stale = create_application(db, repo, "daily-stale")
+        failed = create_application(db, repo, "daily-failed")
+        missing_job = create_application(db, repo, "daily-missing-job")
+        db.add_all(
+            [
+                Scan(application_id=complete.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Job(job_type=JobType.scan, status=JobStatus.succeeded, application_id=complete.id, repository_id=repo.id, completed_at=now_utc()),
+                Scan(application_id=stale.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=2)),
+                Job(job_type=JobType.scan, status=JobStatus.succeeded, application_id=stale.id, repository_id=repo.id, completed_at=now_utc() - timedelta(days=2)),
+                Scan(application_id=failed.id, status=ScanStatus.failed, created_at=now_utc()),
+                Job(job_type=JobType.scan, status=JobStatus.failed, application_id=failed.id, repository_id=repo.id, completed_at=now_utc()),
+                Scan(application_id=missing_job.id, status=ScanStatus.succeeded, created_at=now_utc()),
+            ]
+        )
+        db.flush()
+
+        page = list_daily_scan_execution_evidence(db=db, _=None)
+        missing = list_daily_scan_execution_evidence(evidence_present=False, db=db, _=None)
+        filtered = list_daily_scan_execution_evidence(issue_type="missing_scan_job", evidence_present=False, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        by_app = {item["application_name"]: item for item in page.items}
+
+        assert by_app["daily-complete"]["evidence_present"] is True
+        assert by_app["daily-stale"]["issue_type"] == "stale_scan"
+        assert by_app["daily-failed"]["issue_type"] == "scan_not_succeeded"
+        assert by_app["daily-missing-job"]["issue_type"] == "missing_scan_job"
+        assert {item["application_name"] for item in missing.items} >= {"daily-stale", "daily-failed", "daily-missing-job"}
+        assert filtered.items[0]["application_name"] == "daily-missing-job"
+        assert summary.daily_scan_execution_gap_items >= 3
 
 
 def test_list_initial_inventory_reports_completion_and_filters() -> None:
