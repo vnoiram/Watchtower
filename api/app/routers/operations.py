@@ -493,6 +493,74 @@ def list_incident_readiness(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/completion-readiness", response_model=schemas.CursorPage)
+def list_completion_readiness(
+    limit: int = 50,
+    check: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: Principal = Depends(get_principal),
+):
+    items = [item.model_dump(mode="json") for item in completion_readiness_items(db, settings)]
+    if check:
+        items = [item for item in items if item["check"] == check]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/e2e-evidence", response_model=schemas.CursorPage)
+def list_e2e_evidence(
+    limit: int = 50,
+    stage: str | None = None,
+    status: str | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = e2e_evidence_items(db)
+    if stage:
+        items = [item for item in items if item["stage"] == stage]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/failure-drills", response_model=schemas.CursorPage)
+def list_failure_drills(
+    limit: int = 50,
+    drill_type: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = [item.model_dump(mode="json") for item in failure_drill_items(db)]
+    if drill_type:
+        items = [item for item in items if item["drill_type"] == drill_type]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
+@router.get("/runbook-evidence", response_model=schemas.CursorPage)
+def list_runbook_evidence(
+    limit: int = 50,
+    cadence: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = [item.model_dump(mode="json") for item in runbook_evidence_items(db)]
+    if cadence:
+        items = [item for item in items if item["cadence"] == cadence]
+    if status:
+        items = [item for item in items if item["status"] == status]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def failure_signal_count(db: Session) -> int:
     return len(failure_signal_items(db))
 
@@ -503,6 +571,22 @@ def observability_gap_count(db: Session) -> int:
 
 def incident_readiness_gap_count(db: Session) -> int:
     return sum(1 for item in incident_readiness_items(db) if item["status"] != "ok")
+
+
+def completion_readiness_gap_count(db: Session, settings: Settings) -> int:
+    return sum(max(item.count, 1) for item in completion_readiness_items(db, settings) if item.status != "ok")
+
+
+def e2e_evidence_gap_count(db: Session) -> int:
+    return sum(1 for item in e2e_evidence_items(db) if item["status"] != "ok")
+
+
+def failure_drill_gap_count(db: Session) -> int:
+    return sum(1 for item in failure_drill_items(db) if item.status != "ok")
+
+
+def runbook_evidence_gap_count(db: Session) -> int:
+    return sum(max(item.count, 1) for item in runbook_evidence_items(db) if item.status != "ok")
 
 
 def monthly_review_count(db: Session) -> int:
@@ -1151,6 +1235,141 @@ def incident_readiness_items(db: Session) -> list[dict]:
     return unique
 
 
+def completion_readiness_items(db: Session, settings: Settings) -> list[schemas.CompletionReadinessOut]:
+    repositories = list(db.scalars(select(models.Repository)))
+    applications = list(db.scalars(select(models.Application)))
+    scans = list(db.scalars(select(models.Scan)))
+    findings = list(db.scalars(select(models.Finding)))
+    actions = list(db.scalars(select(models.RemediationAction)))
+    vex_statements = list(db.scalars(select(models.VexStatement)))
+    active_apps = [app for app in applications if app.lifecycle != models.Lifecycle.archived]
+    active_sboms = list(
+        db.scalars(select(models.Sbom).where(models.Sbom.active.is_(True), models.Sbom.sbom_kind == "source"))
+    )
+    active_sbom_app_ids = {sbom.application_id for sbom in active_sboms}
+    owner_count = sum(1 for app in active_apps if app.owner)
+    classified_repos = sum(1 for repo in repositories if repo.visibility and repo.source_classification)
+    daily_cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+    recent_scan_apps = {scan.application_id for scan in scans if _after_cutoff(scan.created_at, daily_cutoff)}
+    critical_high = [
+        finding for finding in findings if finding.severity in {models.Severity.critical, models.Severity.high}
+    ]
+    open_critical_high = [finding for finding in critical_high if finding.status == models.FindingStatus.open]
+    action_finding_ids = {action.finding_id for action in actions if action.action_type == "github_issue" or action.url or action.branch}
+    rescan_after_action = sum(1 for action in actions if _has_scan_after(scans, _application_id_for_action(db, action), action.updated_at))
+    closure_evidence = sum(
+        1
+        for action in actions
+        if action.action_type == "github_issue"
+        and (action.status == "closed" or bool((action.metadata_json or {}).get("github_issue_closed_at")))
+    )
+    restore_logs = _recent_restore_logs(db)
+    monitoring = len(list_scan_health(db=db, _=None).items) + len(failure_signal_items(db))
+    storage_configured = bool(settings.minio_endpoint and settings.minio_access_key and settings.minio_secret_key and settings.minio_bucket)
+    return [
+        _completion("repository_inventory_54", len(repositories) >= 54, len(repositories), 54, _percent(len(repositories), 54), "Registered repositories"),
+        _completion("repository_classification", classified_repos == len(repositories), len(repositories) - classified_repos, 0, _percent(classified_repos, len(repositories)), "Repositories with visibility and source classification"),
+        _completion("active_owner", owner_count == len(active_apps), len(active_apps) - owner_count, 0, _percent(owner_count, len(active_apps)), "Active applications with owner"),
+        _completion("active_source_sbom_90", _percent(len(active_sbom_app_ids), len(active_apps)) >= 90.0, max(len(active_apps) - len(active_sbom_app_ids), 0), 90, _percent(len(active_sbom_app_ids), len(active_apps)), "Active applications with active source SBOM"),
+        _completion("daily_rescan", len(recent_scan_apps) >= len(active_apps), max(len(active_apps) - len(recent_scan_apps), 0), 0, _percent(len(recent_scan_apps), len(active_apps)), "Active applications scanned in the last 24 hours"),
+        _completion("critical_high_inventory", True, len(critical_high), None, None, "Critical/high findings centrally visible"),
+        _completion("issue_or_pr_creation", not open_critical_high or all(finding.id in action_finding_ids for finding in open_critical_high), sum(1 for finding in open_critical_high if finding.id not in action_finding_ids), 0, None, "Open critical/high findings with issue or PR action evidence"),
+        _completion("post_fix_rescan", not actions or rescan_after_action > 0, max(len(actions) - rescan_after_action, 0), 0, None, "Remediation actions with later scan evidence"),
+        _completion("resolved_finding_closure", closure_evidence > 0 or not any(finding.status == models.FindingStatus.resolved for finding in findings), _resolved_without_closure_count(db), 0, None, "Resolved findings with issue closure evidence"),
+        _completion("vex_review_dates", all(vex.review_date for vex in vex_statements), sum(1 for vex in vex_statements if not vex.review_date), 0, None, "VEX statements with review dates"),
+        _completion("scan_failure_monitoring", monitoring > 0, monitoring, None, None, "Scan health or failure signal monitoring evidence"),
+        _completion("backup_restore_evidence", storage_configured and bool(restore_logs), 0 if storage_configured and restore_logs else 1, 0, None, "Object storage configured and restore verification evidence exists"),
+        _completion("isolated_runbook", _operation_evidence_count(db, {"isolated", "restricted", "separate runner"}) > 0, _operation_evidence_count(db, {"isolated", "restricted", "separate runner"}), None, None, "Isolated code operational rule evidence"),
+    ]
+
+
+def e2e_evidence_items(db: Session) -> list[dict]:
+    items = []
+    stmt = (
+        select(models.Finding, models.Application, models.Repository)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Finding.created_at.desc(), models.Finding.id.asc())
+    )
+    scans = list(db.scalars(select(models.Scan)))
+    notifications = list(db.scalars(select(models.Notification)))
+    actions = list(db.scalars(select(models.RemediationAction)))
+    for finding, application, repository in db.execute(stmt):
+        app_scans = [scan for scan in scans if scan.application_id == finding.application_id]
+        scan = max(app_scans, key=lambda row: _comparable_datetime(row.created_at), default=None)
+        notification = next((item for item in notifications if item.status == "sent" and _metadata_uuid(item.metadata_json, "finding_id") == finding.id), None)
+        action = next((item for item in actions if item.finding_id == finding.id and (item.action_type == "github_issue" or item.url or item.branch)), None)
+        validation = next((item for item in actions if item.finding_id == finding.id and ((item.metadata_json or {}).get("validation_status") == "succeeded" or (item.metadata_json or {}).get("validation_scan_id"))), None)
+        later_scan = _has_scan_after(scans, finding.application_id, action.updated_at) if action else False
+        closure = next((item for item in actions if item.finding_id == finding.id and item.action_type == "github_issue" and (item.status == "closed" or (item.metadata_json or {}).get("github_issue_closed_at"))), None)
+        stages = [
+            ("scan", scan is not None, "scan", scan.id if scan else None, "Finding has scan evidence"),
+            ("notification", notification is not None, "notification", notification.id if notification else None, "Finding has sent notification evidence"),
+            ("issue_pr", action is not None, "remediation_action", action.id if action else None, "Finding has issue or PR action evidence"),
+            ("validation_rescan", validation is not None or later_scan, "remediation_action" if validation else "scan", validation.id if validation else None, "Finding has validation or post-action rescan evidence"),
+            ("resolved", finding.status == models.FindingStatus.resolved, "finding", finding.id, "Finding is resolved"),
+            ("closure", closure is not None, "remediation_action", closure.id if closure else None, "Resolved finding has issue closure evidence"),
+        ]
+        for stage, ok, source, evidence_id, detail in stages:
+            if stage == "closure" and finding.status != models.FindingStatus.resolved:
+                continue
+            items.append(
+                _e2e_item(stage, "ok" if ok else "gap", finding, application, repository, source if ok else None, evidence_id, detail)
+            )
+    return items
+
+
+def failure_drill_items(db: Session) -> list[schemas.FailureDrillOut]:
+    signals = failure_signal_items(db)
+    audit_logs = list(db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())))
+    drill_tokens = {
+        "github_rate_limit": {"github_rate_limit", "rate limit", "429"},
+        "github_timeout": {"github_timeout", "github timeout", "github timed out"},
+        "clone_failure": {"clone_failure", "clone failed", "clone error"},
+        "private_repository_auth": {"private_auth_failure", "private repository", "401", "403", "credential"},
+        "scanner_db_update_failure": {"trivy db", "scanner db", "database update", "db update"},
+        "storage_failure": {"storage_failure", "minio", "s3", "storage"},
+        "postgres_pause": {"postgres", "database unavailable", "db unavailable", "connection refused"},
+        "worker_crash": {"worker_failure", "worker crash", "worker exited"},
+        "duplicate_webhook": {"duplicate webhook", "webhook duplicate", "skipped_duplicate"},
+        "job_concurrency": {"concurrency", "duplicate job", "locked_by", "retry exhausted"},
+    }
+    rows = []
+    for drill_type, tokens in drill_tokens.items():
+        evidence = _drill_evidence(signals, audit_logs, tokens)
+        rows.append(
+            schemas.FailureDrillOut(
+                drill_type=drill_type,
+                status="ok" if evidence else "gap",
+                evidence_source=evidence[0] if evidence else None,
+                evidence_id=evidence[1] if evidence else None,
+                detail="Failure drill or live incident evidence found" if evidence else "No failure drill evidence found",
+                observed_at=evidence[2] if evidence else None,
+            )
+        )
+    return rows
+
+
+def runbook_evidence_items(db: Session) -> list[schemas.RunbookEvidenceOut]:
+    now = datetime.now(timezone.utc)
+    day = now - timedelta(days=1)
+    week = now - timedelta(days=7)
+    month = now - timedelta(days=30)
+    return [
+        _runbook("daily", "repository_sync", _recent_job_count(db, models.JobType.repository_sync, day), "Repository sync in the last 24 hours", day),
+        _runbook("daily", "scan", _recent_job_count(db, models.JobType.scan, day), "Scan job in the last 24 hours", day),
+        _runbook("daily", "critical_high_notification", _recent_notification_count(db, day), "Sent critical/high notification in the last 24 hours", day),
+        _runbook("daily", "sla_vex_check", _recent_audit_count(db, {"sla", "vex"}, day), "SLA or VEX check audit evidence in the last 24 hours", day),
+        _runbook("weekly", "full_scan", _recent_audit_count(db, {"full scan", "weekly scan"}, week), "Weekly full scan evidence", week),
+        _runbook("weekly", "pr_staleness", _recent_audit_count(db, {"pr staleness", "pull request staleness"}, week), "PR staleness review evidence", week),
+        _runbook("weekly", "medium_review", _recent_audit_count(db, {"medium review", "medium_findings"}, week), "Medium finding review evidence", week),
+        _runbook("weekly", "scanner_version", _recent_audit_count(db, {"scanner version", "tool version"}, week), "Scanner version review evidence", week),
+        _runbook("weekly", "false_positive", _recent_audit_count(db, {"false positive"}, week), "False positive review evidence", week),
+        _runbook("monthly", "vex_risk_runtime_restore", _recent_audit_count(db, {"vex", "risk acceptance", "runtime eol", "restore"}, month), "Monthly VEX/risk/runtime/restore review evidence", month),
+        _runbook("quarterly", "owner_exposure_permissions", _recent_audit_count(db, {"owner", "exposure", "github app", "permission", "isolated", "auto merge"}, month), "Quarterly owner/exposure/permission/scope evidence", month),
+    ]
+
+
 def manual_workload_count(db: Session) -> int:
     return sum(row.count for row in _workload_rows(db))
 
@@ -1328,6 +1547,80 @@ def _observability(check: str, status: str, count: int, detail: str) -> schemas.
     return schemas.ObservabilityPostureOut(check=check, status=status, count=count, detail=detail)
 
 
+def _completion(
+    check: str,
+    ok: bool,
+    count: int,
+    target: float | int | None,
+    percent: float | None,
+    detail: str,
+) -> schemas.CompletionReadinessOut:
+    return schemas.CompletionReadinessOut(
+        check=check,
+        status="ok" if ok else "warn",
+        count=count,
+        target=target,
+        percent=percent,
+        detail=detail,
+    )
+
+
+def _e2e_item(
+    stage: str,
+    status: str,
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    evidence_source: str | None,
+    evidence_id,
+    detail: str,
+) -> dict:
+    return schemas.E2eEvidenceOut(
+        stage=stage,
+        status=status,
+        finding_id=finding.id,
+        severity=finding.severity,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        evidence_source=evidence_source,
+        evidence_id=str(evidence_id) if evidence_id else None,
+        detail=detail,
+        created_at=finding.created_at,
+    ).model_dump(mode="json")
+
+
+def _drill_evidence(signals: list[dict], audit_logs: list[models.AuditLog], tokens: set[str]):
+    for signal in signals:
+        text = _operation_text(signal.get("signal_type"), signal.get("detail"), signal.get("status"))
+        if _contains_any(text, tokens):
+            return signal["source"], signal["source_id"], signal["created_at"]
+    for audit_log in audit_logs:
+        text = _operation_text(audit_log.action, audit_log.resource_type, audit_log.metadata_json)
+        if _contains_any(text, tokens):
+            return "audit_log", str(audit_log.id), audit_log.created_at
+    return None
+
+
+def _runbook(
+    cadence: str,
+    check: str,
+    count: int,
+    detail: str,
+    cutoff: datetime,
+) -> schemas.RunbookEvidenceOut:
+    return schemas.RunbookEvidenceOut(
+        cadence=cadence,
+        check=check,
+        status="ok" if count else "warn",
+        count=count,
+        detail=detail,
+        latest_evidence_at=cutoff if count else None,
+    )
+
+
 def _workload(item: str, count: int, nonzero_status: str, detail: str) -> schemas.OperationalWorkloadOut:
     return schemas.OperationalWorkloadOut(
         item=item,
@@ -1463,6 +1756,28 @@ def _operation_evidence_count(db: Session, tokens: set[str]) -> int:
         if _contains_any(_operation_text(scan.tool, scan.result_summary, scan.error_message), tokens):
             count += 1
     return count
+
+
+def _recent_job_count(db: Session, job_type: models.JobType, cutoff: datetime) -> int:
+    return sum(1 for job in db.scalars(select(models.Job).where(models.Job.job_type == job_type)) if _after_cutoff(job.created_at, cutoff))
+
+
+def _recent_notification_count(db: Session, cutoff: datetime) -> int:
+    return sum(
+        1
+        for notification in db.scalars(select(models.Notification).where(models.Notification.status == "sent"))
+        if notification.severity in {models.Severity.critical, models.Severity.high}
+        and _after_cutoff(notification.created_at, cutoff)
+    )
+
+
+def _recent_audit_count(db: Session, tokens: set[str], cutoff: datetime) -> int:
+    return sum(
+        1
+        for audit_log in db.scalars(select(models.AuditLog))
+        if _after_cutoff(audit_log.created_at, cutoff)
+        and _contains_any(_operation_text(audit_log.action, audit_log.resource_type, audit_log.metadata_json), tokens)
+    )
 
 
 def _operation_text(*values) -> str:
@@ -1902,6 +2217,8 @@ def _recent_jobs(db: Session, job_type: models.JobType, cutoff: datetime) -> lis
 def _after_cutoff(value: datetime, cutoff: datetime) -> bool:
     if value.tzinfo is None:
         cutoff = cutoff.replace(tzinfo=None)
+    elif cutoff.tzinfo is None:
+        value = value.replace(tzinfo=None)
     return value >= cutoff
 
 
@@ -1911,3 +2228,7 @@ def _before(value: datetime, reference: datetime) -> bool:
     elif reference.tzinfo is None:
         value = value.replace(tzinfo=None)
     return value < reference
+
+
+def _comparable_datetime(value: datetime) -> datetime:
+    return value.replace(tzinfo=None) if value.tzinfo else value
