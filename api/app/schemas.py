@@ -1752,6 +1752,23 @@ class MvpTargetReadinessOut(BaseModel):
     detail: str
 
 
+class MvpReadinessDrilldownOut(BaseModel):
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    ready: bool
+    failing_checks: list[str]
+    visibility: str | None = None
+    source_classification: models.SourceClassification | None = None
+    application_count: int
+    owner_completeness_percent: float
+    active_sbom_coverage_percent: float
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    open_critical_high_count: int
+    detail: str
+
+
 class KpiEvidenceOut(BaseModel):
     metric: str
     record_type: str
@@ -2700,3 +2717,4 @@ class DashboardSummary(BaseModel):
     application_mapping_gap_items: int
     operational_action_items: int
     evidence_freshness_gap_items: int
+    mvp_readiness_gap_items: int

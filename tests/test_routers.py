@@ -165,6 +165,7 @@ from api.app.routers.rollout import (
     list_application_mapping_quality,
     list_application_readiness,
     list_initial_inventory,
+    list_mvp_readiness_drilldown,
     list_mvp_target_readiness,
     list_repository_onboarding_proof,
     list_repository_workflow_trace,
@@ -4572,6 +4573,40 @@ def test_list_evidence_freshness_reports_stale_operational_evidence() -> None:
         assert {"restore", "vex_review", "medium_review", "scanner_version"} <= checks
         assert {item["check"] for item in weekly.items} == {"medium_review", "scanner_version"}
         assert summary.evidence_freshness_gap_items >= 4
+
+
+def test_list_mvp_readiness_drilldown_reports_repository_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        ready_repo = create_repository(db, "mvp-drilldown-ready")
+        ready_repo.topics = ["mvp-target"]
+        ready_repo.visibility = "private"
+        ready_app = create_application(db, ready_repo, "ready-app")
+        ready_app.owner = "team"
+        ready_scan = Scan(application_id=ready_app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add(ready_scan)
+        db.flush()
+        db.add(Sbom(application_id=ready_app.id, scan_id=ready_scan.id, sbom_kind="source", sbom_digest="mvp-ready", storage_key="mvp-ready.json", active=True))
+
+        gap_repo = create_repository(db, "mvp-drilldown-gap")
+        gap_repo.topics = ["mvp"]
+        gap_repo.visibility = None
+        gap_app = create_application(db, gap_repo, "gap-app")
+        gap_app.owner = None
+        db.add(Scan(application_id=gap_app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=45)))
+        create_finding(db, gap_app, severity=Severity.critical, status=FindingStatus.open)
+        db.flush()
+
+        page = list_mvp_readiness_drilldown(db=db, _=None)
+        filtered = list_mvp_readiness_drilldown(ready=False, check="critical_high_triage", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        by_name = {item["repository_name"]: item for item in page.items}
+
+        assert by_name[ready_repo.name]["ready"] is True
+        assert by_name[gap_repo.name]["ready"] is False
+        assert {"repository_classification", "owners", "active_source_sbom", "fresh_scan", "critical_high_triage"} <= set(by_name[gap_repo.name]["failing_checks"])
+        assert filtered.items[0]["repository_name"] == gap_repo.name
+        assert summary.mvp_readiness_gap_items >= 1
 
 
 def test_list_initial_inventory_reports_completion_and_filters() -> None:
