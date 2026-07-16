@@ -23,8 +23,8 @@ from api.app.routers.isolated_lane import (
 from api.app.routers.job_health import job_health_reason
 from api.app.routers.jobs import job_concurrency_risk_count, job_retry_gap_count
 from api.app.routers.kpis import mvp_target_breach_count, notification_failure_count, scan_failure_rate_percent
-from api.app.routers.notifications import notification_slo_breach_count
-from api.app.routers.findings import medium_review_count, risk_score_gap_count
+from api.app.routers.notifications import notification_retry_gap_count, notification_slo_breach_count
+from api.app.routers.findings import finding_traceability_gap_count, medium_review_count, risk_score_gap_count
 from api.app.routers.operations import (
     completion_readiness_gap_count,
     e2e_evidence_gap_count,
@@ -66,11 +66,12 @@ from api.app.routers.rollout import (
     repository_inventory_gap_count,
     rollout_gap_count,
     rollout_wave_gap_count,
+    workflow_trace_gap_count,
 )
 from api.app.routers.repository_sync import import_failure_count
 from api.app.routers.repositories import repository_classification_gap_count
 from api.app.routers.scans import daily_scan_slo_breach_count, raw_scan_artifact_gap_count, scan_format_gap_count, scan_freshness_gap_count
-from api.app.routers.scanners import scanner_database_freshness_count
+from api.app.routers.scanners import scanner_database_freshness_count, scanner_execution_gap_count
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import (
     auth_deployment_gap_count,
@@ -82,7 +83,7 @@ from api.app.routers.security import (
 )
 from api.app.routers.sla import count_sla_breached_findings
 from api.app.routers.sboms import sbom_normalization_quality_count
-from api.app.routers.storage import retention_review_count, storage_encryption_count, storage_pressure_count
+from api.app.routers.storage import retention_execution_gap_count, retention_review_count, storage_encryption_count, storage_pressure_count
 from api.app.routers.vulnerabilities import (
     vulnerability_enrichment_gap_count,
     vulnerability_provenance_gap_count,
@@ -207,6 +208,11 @@ def dashboard_summary(
     provider_sync_gap_items = provider_sync_gap_count(db)
     audit_action_gap_items = audit_action_gap_count(db)
     review_calendar_due_items = review_calendar_due_count(db)
+    finding_traceability_gap_items = finding_traceability_gap_count(db)
+    notification_retry_gap_items = notification_retry_gap_count(db)
+    scanner_execution_gap_items = scanner_execution_gap_count(db)
+    retention_execution_gap_items = retention_execution_gap_count(db)
+    workflow_trace_gap_items = workflow_trace_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -299,4 +305,9 @@ def dashboard_summary(
         provider_sync_gap_items=provider_sync_gap_items,
         audit_action_gap_items=audit_action_gap_items,
         review_calendar_due_items=review_calendar_due_items,
+        finding_traceability_gap_items=finding_traceability_gap_items,
+        notification_retry_gap_items=notification_retry_gap_items,
+        scanner_execution_gap_items=scanner_execution_gap_items,
+        retention_execution_gap_items=retention_execution_gap_items,
+        workflow_trace_gap_items=workflow_trace_gap_items,
     )

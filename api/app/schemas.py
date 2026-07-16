@@ -2422,6 +2422,91 @@ class ReviewCalendarOut(BaseModel):
     detail: str
 
 
+class FindingTraceabilityOut(BaseModel):
+    gap_type: str
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    first_seen_scan_id: UUID | None = None
+    last_seen_scan_id: UUID | None = None
+    notification_id: UUID | None = None
+    remediation_action_id: UUID | None = None
+    validation_scan_id: UUID | None = None
+    detail: str
+    updated_at: datetime
+
+
+class NotificationRetryPostureOut(BaseModel):
+    gap_type: str
+    notification_id: UUID
+    channel: str
+    severity: models.Severity
+    status: str
+    finding_id: UUID | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    retry_job_id: UUID | None = None
+    duplicate_count: int = 0
+    detail: str
+    created_at: datetime
+
+
+class ScannerExecutionMatrixOut(BaseModel):
+    gap_type: str
+    tool: str
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    tool_version: str | None = None
+    detail: str
+
+
+class RetentionExecutionOut(BaseModel):
+    gap_type: str
+    reason: str
+    source_id: str
+    storage_key: str | None = None
+    scan_id: UUID | None = None
+    sbom_id: UUID | None = None
+    application_id: UUID | None = None
+    application_name: str | None = None
+    repository_id: UUID | None = None
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    audit_log_id: UUID | None = None
+    detail: str
+    created_at: datetime
+
+
+class RepositoryWorkflowTraceOut(BaseModel):
+    gap_type: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    provider: models.RepositoryProvider
+    source_classification: models.SourceClassification
+    application_count: int
+    active_source_sbom_count: int
+    latest_scan_id: UUID | None = None
+    latest_scan_status: models.ScanStatus | None = None
+    latest_scan_created_at: datetime | None = None
+    open_critical_high_count: int
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2514,3 +2599,8 @@ class DashboardSummary(BaseModel):
     provider_sync_gap_items: int
     audit_action_gap_items: int
     review_calendar_due_items: int
+    finding_traceability_gap_items: int
+    notification_retry_gap_items: int
+    scanner_execution_gap_items: int
+    retention_execution_gap_items: int
+    workflow_trace_gap_items: int
