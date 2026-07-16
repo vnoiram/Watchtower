@@ -2613,6 +2613,25 @@ class EvidenceFreshnessOut(BaseModel):
     detail: str
 
 
+class RemediationEvidenceChainOut(BaseModel):
+    finding_id: UUID
+    severity: models.Severity
+    status: models.FindingStatus
+    application_id: UUID
+    application_name: str
+    repository_id: UUID
+    repository_owner: str
+    repository_name: str
+    notification_id: UUID | None = None
+    issue_or_pr_action_id: UUID | None = None
+    validation_status: str | None = None
+    validation_scan_id: UUID | None = None
+    validation_scan_status: models.ScanStatus | None = None
+    closure_status: str
+    missing_stages: list[str]
+    detail: str
+
+
 class DashboardSummary(BaseModel):
     repositories: int
     applications: int
@@ -2718,3 +2737,4 @@ class DashboardSummary(BaseModel):
     operational_action_items: int
     evidence_freshness_gap_items: int
     mvp_readiness_gap_items: int
+    remediation_evidence_gap_items: int

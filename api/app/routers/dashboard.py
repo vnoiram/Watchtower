@@ -64,6 +64,7 @@ from api.app.routers.remediation import (
     pr_ci_failure_count,
     pr_staleness_count,
     provider_sync_gap_count,
+    remediation_evidence_gap_count,
     remediation_coverage_count,
     remediation_priority_count,
     stale_remediation_count,
@@ -237,6 +238,7 @@ def dashboard_summary(
     operational_action_items = operational_action_count(db)
     evidence_freshness_gap_items = evidence_freshness_gap_count(db)
     mvp_readiness_gap_items = mvp_readiness_gap_count(db)
+    remediation_evidence_gap_items = remediation_evidence_gap_count(db)
     return schemas.DashboardSummary(
         repositories=repositories,
         applications=applications,
@@ -342,4 +344,5 @@ def dashboard_summary(
         operational_action_items=operational_action_items,
         evidence_freshness_gap_items=evidence_freshness_gap_items,
         mvp_readiness_gap_items=mvp_readiness_gap_items,
+        remediation_evidence_gap_items=remediation_evidence_gap_items,
     )
