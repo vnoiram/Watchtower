@@ -70,7 +70,7 @@ from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
 from api.app.routers.findings import list_finding_evidence_gaps, list_findings, list_finding_lifecycle_review
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
-from api.app.routers.findings import list_medium_review, list_resolution_candidates, list_risk_score_explanations
+from api.app.routers.findings import list_finding_traceability, list_medium_review, list_resolution_candidates, list_risk_score_explanations
 from api.app.routers.governance import (
     list_auto_merge_scope,
     list_exposure_review,
@@ -95,6 +95,7 @@ from api.app.routers.kpis import (
 from api.app.routers.maintenance import list_application_maintenance_candidates
 from api.app.routers.notifications import (
     list_notification_digest_readiness,
+    list_notification_retry_posture,
     list_notification_slo,
     list_notifications,
 )
@@ -163,6 +164,7 @@ from api.app.routers.rollout import (
     list_initial_inventory,
     list_mvp_target_readiness,
     list_repository_onboarding_proof,
+    list_repository_workflow_trace,
     list_repository_inventory_gaps,
     list_repository_rollout,
     list_rollout_gaps,
@@ -179,7 +181,7 @@ from api.app.routers.scans import (
     list_scan_format_compliance,
 )
 from api.app.routers.scanner_inventory import list_scanner_inventory
-from api.app.routers.scanners import list_scanner_database_freshness, list_scanner_failures
+from api.app.routers.scanners import list_scanner_database_freshness, list_scanner_execution_matrix, list_scanner_failures
 from api.app.routers.scanner_versions import list_scanner_versions
 from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
 from api.app.routers.security import (
@@ -197,7 +199,7 @@ from api.app.routers.security import (
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sbom_normalization_quality, list_sboms
 from api.app.routers.sla import list_sla_findings
-from api.app.routers.storage import list_storage_cleanup_candidates, retention_review, storage_encryption_posture, storage_pressure
+from api.app.routers.storage import list_retention_execution, list_storage_cleanup_candidates, retention_review, storage_encryption_posture, storage_pressure
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_invalidation_candidates, list_vex_statements
 from api.app.routers.vulnerabilities import (
@@ -6119,3 +6121,150 @@ def test_list_review_calendar_reports_overdue_due_soon_and_filters_review_type()
         assert ("medium_finding_review", "due_soon") in statuses
         assert medium_page.items[0]["source_id"] == str(medium.id)
         assert summary.review_calendar_due_items == len([item for item in page.items if item["status"] in {"overdue", "due_soon"}])
+
+
+def test_list_finding_traceability_reports_missing_workflow_evidence() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "finding-traceability")
+        app = create_application(db, repo)
+        missing_all = create_finding(db, app, severity=Severity.critical)
+        resolved = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
+        resolved.resolved_at = now_utc()
+        db.add(
+            RemediationAction(
+                finding_id=resolved.id,
+                action_type="github_issue",
+                status="created",
+                provider="github",
+                provider_id="1",
+                url="https://github.test/issues/1",
+            )
+        )
+        db.flush()
+
+        page = list_finding_traceability(db=db, _=None)
+        critical_page = list_finding_traceability(gap_type="missing_notification", severity=Severity.critical, db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["finding_id"], item["gap_type"]) for item in page.items}
+
+        assert (str(missing_all.id), "missing_scan_context") in gaps
+        assert (str(missing_all.id), "missing_notification") in gaps
+        assert (str(missing_all.id), "missing_issue_or_pr") in gaps
+        assert (str(resolved.id), "missing_validation_scan") in gaps
+        assert (str(resolved.id), "missing_closure_evidence") in gaps
+        assert critical_page.items[0]["finding_id"] == str(missing_all.id)
+        assert summary.finding_traceability_gap_items == len(page.items)
+
+
+def test_list_notification_retry_posture_reports_retry_context_and_duplicate_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "notification-retry")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.high)
+        stale = Notification(
+            channel="slack",
+            severity=Severity.high,
+            subject="stale",
+            body="queued",
+            status="queued",
+            metadata_json={"finding_id": str(finding.id)},
+            created_at=now_utc() - timedelta(hours=25),
+        )
+        failed = Notification(channel="email", severity=Severity.critical, subject="failed", body="failed", status="failed", metadata_json={"finding_id": str(finding.id)})
+        missing_context = Notification(channel="slack", severity=Severity.medium, subject="orphan", body="orphan", status="queued", metadata_json={})
+        duplicate_a = Notification(channel="slack", severity=Severity.high, subject="dup", body="dup", status="queued", metadata_json={"finding_id": str(finding.id)})
+        duplicate_b = Notification(channel="slack", severity=Severity.high, subject="dup", body="dup", status="queued", metadata_json={"finding_id": str(finding.id)})
+        db.add_all([stale, failed, missing_context, duplicate_a, duplicate_b])
+        db.flush()
+
+        page = list_notification_retry_posture(db=db, _=None)
+        slack_page = list_notification_retry_posture(gap_type="duplicate_notification", channel="slack", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {item["gap_type"] for item in page.items}
+
+        assert {"stale_queued_notification", "failed_without_retry_job", "missing_finding_context", "duplicate_notification"} <= gaps
+        assert {item["notification_id"] for item in slack_page.items} == {str(duplicate_a.id), str(duplicate_b.id)}
+        assert summary.notification_retry_gap_items == len(page.items)
+
+
+def test_list_scanner_execution_matrix_reports_missing_stale_failed_and_version_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "scanner-matrix")
+        app = create_application(db, repo)
+        db.add_all(
+            [
+                Scan(application_id=app.id, status=ScanStatus.succeeded, tool="osv", tool_version="1.0.0", created_at=now_utc() - timedelta(days=31)),
+                Scan(application_id=app.id, status=ScanStatus.failed, tool="trivy", tool_version="0.1.0", error_message="failed", created_at=now_utc()),
+                Scan(application_id=app.id, status=ScanStatus.succeeded, tool="grype", created_at=now_utc()),
+            ]
+        )
+        db.flush()
+
+        page = list_scanner_execution_matrix(db=db, _=None)
+        grype_page = list_scanner_execution_matrix(tool="grype", gap_type="missing_tool_version", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["tool"], item["gap_type"]) for item in page.items}
+
+        assert ("osv", "stale_scanner_run") in gaps
+        assert ("trivy", "failed_latest_scanner") in gaps
+        assert ("grype", "missing_tool_version") in gaps
+        assert ("gitleaks", "missing_required_scanner") in gaps
+        assert ("semgrep", "missing_required_scanner") in gaps
+        assert grype_page.items[0]["application_id"] == str(app.id)
+        assert summary.scanner_execution_gap_items == len(page.items)
+
+
+def test_list_retention_execution_reports_cleanup_audit_and_retained_candidates() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "retention-execution")
+        app = create_application(db, repo)
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            result_summary={"artifacts": {"raw": {"storage_key": "old.sarif", "digest": "abc"}}},
+            created_at=now_utc() - timedelta(days=91),
+        )
+        db.add(scan)
+        db.flush()
+        inactive = Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="inactive", storage_key="inactive.json", active=False, generated_at=now_utc() - timedelta(days=2))
+        db.add(inactive)
+        db.flush()
+
+        page = list_retention_execution(db=db, _=None)
+        inactive_page = list_retention_execution(reason="inactive_sbom", gap_type="inactive_sbom_retained", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["reason"], item["gap_type"]) for item in page.items}
+
+        assert ("inactive_sbom", "missing_cleanup_audit") in gaps
+        assert ("inactive_sbom", "inactive_sbom_retained") in gaps
+        assert ("old_scan_artifact", "old_artifact_retained") in gaps
+        assert inactive_page.items[0]["sbom_id"] == str(inactive.id)
+        assert summary.retention_execution_gap_items == len(page.items)
+
+
+def test_list_repository_workflow_trace_reports_repository_flow_gaps() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        missing_app_repo = create_repository(db, "missing-app")
+        repo = create_repository(db, "workflow-trace")
+        app = create_application(db, repo)
+        finding = create_finding(db, app, severity=Severity.critical)
+        db.flush()
+
+        page = list_repository_workflow_trace(db=db, _=None)
+        provider_page = list_repository_workflow_trace(provider=RepositoryProvider.github, gap_type="missing_application_detection", db=db, _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        gaps = {(item["repository_id"], item["gap_type"]) for item in page.items}
+
+        assert (str(missing_app_repo.id), "missing_sync") in gaps
+        assert (str(missing_app_repo.id), "missing_application_detection") in gaps
+        assert (str(repo.id), "missing_active_source_sbom") in gaps
+        assert (str(repo.id), "missing_recent_scan") in gaps
+        assert (str(repo.id), "missing_triage_evidence") in gaps
+        assert provider_page.items[0]["repository_id"] == str(missing_app_repo.id)
+        assert str(finding.id)
+        assert summary.workflow_trace_gap_items == len(page.items)

@@ -181,6 +181,25 @@ def list_risk_score_explanations(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/traceability", response_model=schemas.CursorPage)
+def list_finding_traceability(
+    limit: int = 50,
+    gap_type: str | None = None,
+    severity: models.Severity | None = None,
+    status: models.FindingStatus | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = finding_traceability_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    if status:
+        items = [item for item in items if item["status"] == status.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 @router.post("/{finding_id}/github-issue", response_model=schemas.RemediationActionOut)
 def enqueue_github_issue(
     finding_id: UUID,
@@ -219,6 +238,39 @@ def medium_review_count(db: Session) -> int:
 
 def risk_score_gap_count(db: Session) -> int:
     return len(risk_score_explanation_items(db))
+
+
+def finding_traceability_gap_count(db: Session) -> int:
+    return len(finding_traceability_items(db))
+
+
+def finding_traceability_items(db: Session) -> list[dict]:
+    notifications = _sent_notifications_by_finding(db)
+    actions = _actions_by_finding(db)
+    scans = list(db.scalars(select(models.Scan)))
+    stmt = (
+        select(models.Finding, models.Application, models.Repository)
+        .join(models.Application, models.Finding.application_id == models.Application.id)
+        .join(models.Repository, models.Application.repository_id == models.Repository.id)
+        .order_by(models.Finding.updated_at.desc(), models.Finding.id.asc())
+    )
+    items = []
+    for finding, application, repository in db.execute(stmt):
+        finding_actions = actions.get(finding.id, [])
+        notification = notifications.get(finding.id)
+        issue_action = next((action for action in finding_actions if _has_issue_or_pr([action])), None)
+        validation_scan = _validation_scan(db, finding_actions) or _latest_scan_after(scans, finding.application_id, issue_action.updated_at if issue_action else None)
+        if not finding.first_seen_scan_id and not finding.last_seen_scan_id:
+            items.append(_traceability_item("missing_scan_context", finding, application, repository, notification, issue_action, validation_scan, "Finding has no first or last scan context"))
+        if notification is None and finding.severity in {models.Severity.critical, models.Severity.high}:
+            items.append(_traceability_item("missing_notification", finding, application, repository, notification, issue_action, validation_scan, "Critical or high finding has no sent notification evidence"))
+        if issue_action is None and finding.status in {models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress}:
+            items.append(_traceability_item("missing_issue_or_pr", finding, application, repository, notification, issue_action, validation_scan, "Open finding has no issue or PR action evidence"))
+        if issue_action is not None and validation_scan is None and finding.status in {models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress, models.FindingStatus.resolved}:
+            items.append(_traceability_item("missing_validation_scan", finding, application, repository, notification, issue_action, validation_scan, "Remediation action has no validation scan evidence"))
+        if finding.status == models.FindingStatus.resolved and not _has_closure_evidence(finding_actions):
+            items.append(_traceability_item("missing_closure_evidence", finding, application, repository, notification, issue_action, validation_scan, "Resolved finding has no issue closure evidence"))
+    return items
 
 
 def risk_score_explanation_items(db: Session) -> list[dict]:
@@ -513,6 +565,20 @@ def _sent_notification_finding_ids(db: Session) -> set[UUID]:
     return finding_ids
 
 
+def _sent_notifications_by_finding(db: Session) -> dict[UUID, models.Notification]:
+    notifications = {}
+    stmt = (
+        select(models.Notification)
+        .where(models.Notification.status == "sent")
+        .order_by(models.Notification.sent_at.desc().nullslast(), models.Notification.created_at.desc())
+    )
+    for notification in db.scalars(stmt):
+        finding_id = _metadata_uuid(notification.metadata_json, "finding_id")
+        if finding_id is not None:
+            notifications.setdefault(finding_id, notification)
+    return notifications
+
+
 def _has_issue_or_pr(actions: list[models.RemediationAction]) -> bool:
     for action in actions:
         metadata = action.metadata_json or {}
@@ -521,8 +587,63 @@ def _has_issue_or_pr(actions: list[models.RemediationAction]) -> bool:
     return False
 
 
+def _has_closure_evidence(actions: list[models.RemediationAction]) -> bool:
+    for action in actions:
+        metadata = action.metadata_json or {}
+        if action.status in {"closed", "resolved", "merged"} or metadata.get("github_issue_closed_at") or metadata.get("closed_at") or metadata.get("merged_at"):
+            return True
+    return False
+
+
 def _has_successful_validation(actions: list[models.RemediationAction]) -> bool:
     return any((action.metadata_json or {}).get("validation_status") == "succeeded" for action in actions)
+
+
+def _validation_scan(db: Session, actions: list[models.RemediationAction]) -> models.Scan | None:
+    for action in actions:
+        scan_id = _metadata_uuid(action.metadata_json, "validation_scan_id")
+        if scan_id is None:
+            continue
+        scan = db.get(models.Scan, scan_id)
+        if scan:
+            return scan
+        if (action.metadata_json or {}).get("validation_status") == "succeeded":
+            return None
+    return None
+
+
+def _latest_scan_after(scans: list[models.Scan], application_id: UUID, after: datetime | None) -> models.Scan | None:
+    if after is None:
+        return None
+    candidates = [
+        scan
+        for scan in scans
+        if scan.application_id == application_id and scan.created_at >= _comparable_datetime(after, scan.created_at)
+    ]
+    return max(candidates, key=lambda scan: (scan.created_at, scan.id), default=None)
+
+
+def _metadata_uuid(metadata: dict | None, key: str) -> UUID | None:
+    if not metadata or not metadata.get(key):
+        return None
+    try:
+        return UUID(str(metadata[key]))
+    except ValueError:
+        return None
+
+
+def _matching_datetime(reference: datetime, value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return reference.replace(tzinfo=None)
+    return reference
+
+
+def _comparable_datetime(reference: datetime, value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return reference.replace(tzinfo=None)
+    if reference.tzinfo is None:
+        return reference.replace(tzinfo=value.tzinfo)
+    return reference
 
 
 def _close_state(action: models.RemediationAction | None) -> str:
@@ -533,6 +654,36 @@ def _close_state(action: models.RemediationAction | None) -> str:
     if action.status == "close_failed":
         return "close_failed"
     return "pending_close"
+
+
+def _traceability_item(
+    gap_type: str,
+    finding: models.Finding,
+    application: models.Application,
+    repository: models.Repository,
+    notification: models.Notification | None,
+    action: models.RemediationAction | None,
+    validation_scan: models.Scan | None,
+    detail: str,
+) -> dict:
+    return schemas.FindingTraceabilityOut(
+        gap_type=gap_type,
+        finding_id=finding.id,
+        severity=finding.severity,
+        status=finding.status,
+        application_id=application.id,
+        application_name=application.name,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        first_seen_scan_id=finding.first_seen_scan_id,
+        last_seen_scan_id=finding.last_seen_scan_id,
+        notification_id=notification.id if notification else None,
+        remediation_action_id=action.id if action else None,
+        validation_scan_id=validation_scan.id if validation_scan else None,
+        detail=detail,
+        updated_at=finding.updated_at,
+    ).model_dump(mode="json")
 
 
 def _evidence_gap_item(

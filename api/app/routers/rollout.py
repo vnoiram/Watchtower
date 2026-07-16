@@ -194,6 +194,25 @@ def list_repository_onboarding_proof(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/workflow-trace", response_model=schemas.CursorPage)
+def list_repository_workflow_trace(
+    limit: int = 50,
+    gap_type: str | None = None,
+    provider: models.RepositoryProvider | None = None,
+    source_classification: models.SourceClassification | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = repository_workflow_trace_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if provider:
+        items = [item for item in items if item["provider"] == provider.value]
+    if source_classification:
+        items = [item for item in items if item["source_classification"] == source_classification.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def rollout_gap_count(db: Session) -> int:
     return len(rollout_gap_items(db))
 
@@ -212,6 +231,10 @@ def repository_inventory_gap_count(db: Session) -> int:
 
 def repository_onboarding_gap_count(db: Session) -> int:
     return sum(1 for item in repository_onboarding_proof_items(db) if not item["ready"])
+
+
+def workflow_trace_gap_count(db: Session) -> int:
+    return len(repository_workflow_trace_items(db))
 
 
 def rollout_baseline_items(db: Session) -> list[schemas.RolloutBaselineOut]:
@@ -390,6 +413,33 @@ def repository_drift_items(db: Session) -> list[dict]:
                         detail="Archived or fork repository still has active applications",
                     )
                 )
+    return items
+
+
+def repository_workflow_trace_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(days=30)
+    items = []
+    for repository in db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc())):
+        applications = list(db.scalars(select(models.Application).where(models.Application.repository_id == repository.id)))
+        application_ids = [application.id for application in applications]
+        active_applications = [application for application in applications if application.lifecycle != models.Lifecycle.archived]
+        scans = _repository_scans(db, repository.id)
+        latest_scan = scans[0] if scans else None
+        active_sbom_ids = _active_sbom_application_ids(db, [application.id for application in active_applications])
+        critical_high = _open_critical_high_count(db, application_ids)
+        has_triage = _repository_triage_evidence(db, application_ids)
+        context = (repository, applications, active_sbom_ids, latest_scan, critical_high)
+        if repository.provider == models.RepositoryProvider.github and repository.last_synced_at is None:
+            items.append(_workflow_trace_item("missing_sync", *context, "GitHub repository has no sync timestamp"))
+        if not applications:
+            items.append(_workflow_trace_item("missing_application_detection", *context, "Repository has no detected applications"))
+        if active_applications and len(active_sbom_ids) < len(active_applications):
+            items.append(_workflow_trace_item("missing_active_source_sbom", *context, "Active applications are missing active source SBOM coverage"))
+        if active_applications and (latest_scan is None or _before(latest_scan.created_at, stale_cutoff)):
+            items.append(_workflow_trace_item("missing_recent_scan", *context, "Repository has no scan in the last 30 days"))
+        if critical_high and not has_triage:
+            items.append(_workflow_trace_item("missing_triage_evidence", *context, "Open critical/high findings have no notification, issue/PR, VEX, or review evidence"))
     return items
 
 
@@ -868,6 +918,61 @@ def _drift_item(
         latest_scan_id=latest_scan.id if latest_scan else None,
         latest_scan_created_at=latest_scan.created_at if latest_scan else None,
         count=count,
+        detail=detail,
+    ).model_dump(mode="json")
+
+
+def _repository_triage_evidence(db: Session, application_ids: list) -> bool:
+    if not application_ids:
+        return False
+    finding_ids = list(
+        db.scalars(
+            select(models.Finding.id).where(
+                models.Finding.application_id.in_(application_ids),
+                models.Finding.severity.in_([models.Severity.critical, models.Severity.high]),
+            )
+        )
+    )
+    if not finding_ids:
+        return True
+    if db.scalar(select(func.count()).select_from(models.Notification).where(models.Notification.severity.in_([models.Severity.critical, models.Severity.high]), models.Notification.status == "sent")):
+        return True
+    if db.scalar(select(func.count()).select_from(models.RemediationAction).where(models.RemediationAction.finding_id.in_(finding_ids))):
+        return True
+    if db.scalar(select(func.count()).select_from(models.VexStatement).where(models.VexStatement.finding_id.in_(finding_ids))):
+        return True
+    return bool(
+        db.scalar(
+            select(func.count()).select_from(models.Finding).where(
+                models.Finding.id.in_(finding_ids),
+                models.Finding.status.in_([models.FindingStatus.accepted_risk, models.FindingStatus.false_positive, models.FindingStatus.in_progress]),
+            )
+        )
+    )
+
+
+def _workflow_trace_item(
+    gap_type: str,
+    repository: models.Repository,
+    applications: list[models.Application],
+    active_sbom_ids: set,
+    latest_scan: models.Scan | None,
+    open_critical_high_count: int,
+    detail: str,
+) -> dict:
+    return schemas.RepositoryWorkflowTraceOut(
+        gap_type=gap_type,
+        repository_id=repository.id,
+        repository_owner=repository.owner,
+        repository_name=repository.name,
+        provider=repository.provider,
+        source_classification=repository.source_classification,
+        application_count=len(applications),
+        active_source_sbom_count=len(active_sbom_ids),
+        latest_scan_id=latest_scan.id if latest_scan else None,
+        latest_scan_status=latest_scan.status if latest_scan else None,
+        latest_scan_created_at=latest_scan.created_at if latest_scan else None,
+        open_critical_high_count=open_critical_high_count,
         detail=detail,
     ).model_dump(mode="json")
 

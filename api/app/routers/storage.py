@@ -53,8 +53,28 @@ def storage_encryption_posture(
     return storage_encryption_posture_items(db, settings)
 
 
+@router.get("/retention-execution", response_model=schemas.CursorPage)
+def list_retention_execution(
+    limit: int = 50,
+    gap_type: str | None = None,
+    reason: str | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = retention_execution_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if reason:
+        items = [item for item in items if item["reason"] == reason]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def retention_review_count(db: Session) -> int:
     return sum(item.count for item in retention_review_items(db))
+
+
+def retention_execution_gap_count(db: Session) -> int:
+    return len(retention_execution_items(db))
 
 
 def storage_pressure_count(db: Session) -> int:
@@ -151,6 +171,25 @@ def storage_encryption_posture_items(db: Session, settings: Settings) -> list[sc
             "Backup encryption audit evidence",
         ),
     ]
+
+
+def retention_execution_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(hours=24)
+    cleanup_audits = _cleanup_audit_logs(db)
+    candidates = list_storage_cleanup_candidates(limit=100, db=db, _=None).items
+    items = []
+    for candidate in candidates:
+        audit = _cleanup_audit_for_candidate(candidate, cleanup_audits)
+        if audit is None:
+            items.append(_retention_execution_item("missing_cleanup_audit", candidate, None, "Cleanup candidate has no cleanup audit evidence"))
+        if _before(_candidate_created_at(candidate), stale_cutoff):
+            items.append(_retention_execution_item("stale_cleanup_candidate", candidate, audit, "Cleanup candidate is older than 24 hours"))
+        if candidate["reason"] == "inactive_sbom":
+            items.append(_retention_execution_item("inactive_sbom_retained", candidate, audit, "Inactive SBOM remains in storage inventory"))
+        if candidate["reason"] == "old_scan_artifact":
+            items.append(_retention_execution_item("old_artifact_retained", candidate, audit, "Old scan artifact remains in storage inventory"))
+    return items
 
 
 def _inactive_sboms(db: Session) -> list[dict]:
@@ -256,6 +295,56 @@ def _cleanup_item(
         repository_owner=repository.owner,
         repository_name=repository.name,
         created_at=created_at,
+    ).model_dump(mode="json")
+
+
+def _cleanup_audit_logs(db: Session) -> list[models.AuditLog]:
+    logs = []
+    for log in db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())):
+        text = f"{log.action} {log.resource_type} {log.resource_id} {log.metadata_json}".lower()
+        if "cleanup" in text or "retention" in text or "storage.delete" in text:
+            logs.append(log)
+    return logs
+
+
+def _cleanup_audit_for_candidate(candidate: dict, logs: list[models.AuditLog]) -> models.AuditLog | None:
+    identifiers = {
+        str(candidate.get("storage_key") or ""),
+        str(candidate.get("scan_id") or ""),
+        str(candidate.get("sbom_id") or ""),
+    }
+    identifiers.discard("")
+    for log in logs:
+        text = f"{log.action} {log.resource_type} {log.resource_id} {log.metadata_json}"
+        if any(identifier in text for identifier in identifiers):
+            return log
+    return None
+
+
+def _candidate_created_at(candidate: dict) -> datetime:
+    value = candidate["created_at"]
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value))
+
+
+def _retention_execution_item(gap_type: str, candidate: dict, audit: models.AuditLog | None, detail: str) -> dict:
+    source_id = str(candidate.get("sbom_id") or candidate.get("scan_id") or candidate.get("storage_key") or candidate["reason"])
+    return schemas.RetentionExecutionOut(
+        gap_type=gap_type,
+        reason=candidate["reason"],
+        source_id=source_id,
+        storage_key=candidate.get("storage_key"),
+        scan_id=candidate.get("scan_id"),
+        sbom_id=candidate.get("sbom_id"),
+        application_id=candidate.get("application_id"),
+        application_name=candidate.get("application_name"),
+        repository_id=candidate.get("repository_id"),
+        repository_owner=candidate.get("repository_owner"),
+        repository_name=candidate.get("repository_name"),
+        audit_log_id=audit.id if audit else None,
+        detail=detail,
+        created_at=_candidate_created_at(candidate),
     ).model_dump(mode="json")
 
 

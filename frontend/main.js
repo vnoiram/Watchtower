@@ -164,6 +164,11 @@ const scanFreshnessBuckets = document.querySelector("#scan-freshness-buckets");
 const providerSyncEvidence = document.querySelector("#provider-sync-evidence");
 const auditActionCoverage = document.querySelector("#audit-action-coverage");
 const reviewCalendar = document.querySelector("#review-calendar");
+const findingTraceability = document.querySelector("#finding-traceability");
+const notificationRetryPosture = document.querySelector("#notification-retry-posture");
+const scannerExecutionMatrix = document.querySelector("#scanner-execution-matrix");
+const retentionExecution = document.querySelector("#retention-execution");
+const workflowTrace = document.querySelector("#workflow-trace");
 
 const severityRank = { critical: 0, high: 1 };
 
@@ -303,6 +308,11 @@ function renderMetrics(summary) {
     ["provider_sync_gap_items", "Provider sync", "warn"],
     ["audit_action_gap_items", "Audit actions", "warn"],
     ["review_calendar_due_items", "Review calendar", "warn"],
+    ["finding_traceability_gap_items", "Traceability", "warn"],
+    ["notification_retry_gap_items", "Notification retry", "warn"],
+    ["scanner_execution_gap_items", "Scanner matrix", "warn"],
+    ["retention_execution_gap_items", "Retention exec", "warn"],
+    ["workflow_trace_gap_items", "Workflow trace", "warn"],
   ];
   metrics.innerHTML = cards
     .map(([key, label, tone]) => `<article class="metric ${tone}"><strong>${summary[key] ?? 0}</strong><span>${label}</span></article>`)
@@ -2168,6 +2178,66 @@ function renderReviewCalendar(page) {
     : `<tr><td colspan="5">No review calendar items</td></tr>`;
 }
 
+function renderFindingTraceability(page) {
+  const rows = page.items || [];
+  findingTraceability.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No finding traceability gaps</td></tr>`;
+}
+
+function renderNotificationRetryPosture(page) {
+  const rows = page.items || [];
+  notificationRetryPosture.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.channel)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No notification retry gaps</td></tr>`;
+}
+
+function renderScannerExecutionMatrix(page) {
+  const rows = page.items || [];
+  scannerExecutionMatrix.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.tool)}</td><td>${escapeHtml(item.latest_scan_status || "missing")}</td><td>${escapeHtml(item.application_name)}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No scanner execution gaps</td></tr>`;
+}
+
+function renderRetentionExecution(page) {
+  const rows = page.items || [];
+  retentionExecution.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.storage_key || item.source_id)}</td><td>${escapeHtml(item.application_name || item.repository_name || "-")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No retention execution gaps</td></tr>`;
+}
+
+function renderWorkflowTrace(page) {
+  const rows = page.items || [];
+  workflowTrace.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) =>
+            `<tr><td>${escapeHtml(item.gap_type)}</td><td>${escapeHtml(item.repository_owner)}/${escapeHtml(item.repository_name)}</td><td>${escapeHtml(item.provider)}</td><td>${escapeHtml(item.latest_scan_status || "missing")}</td><td>${escapeHtml(item.detail)}</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5">No repository workflow gaps</td></tr>`;
+}
+
 async function refresh() {
   metrics.innerHTML = "";
   findings.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
@@ -2333,6 +2403,11 @@ async function refresh() {
   providerSyncEvidence.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   auditActionCoverage.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   reviewCalendar.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  findingTraceability.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  notificationRetryPosture.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  scannerExecutionMatrix.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  retentionExecution.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
+  workflowTrace.innerHTML = `<tr><td colspan="5">Loading</td></tr>`;
   try {
     const [
       summary,
@@ -2500,6 +2575,11 @@ async function refresh() {
       providerSyncEvidencePage,
       auditActionCoveragePage,
       reviewCalendarPage,
+      findingTraceabilityPage,
+      notificationRetryPosturePage,
+      scannerExecutionMatrixPage,
+      retentionExecutionPage,
+      workflowTracePage,
     ] = await Promise.all([
       loadJson("/dashboard/summary"),
       loadJson("/findings?status=open&severity=critical&limit=10"),
@@ -2666,6 +2746,11 @@ async function refresh() {
       loadJson("/remediation/provider-sync?limit=10"),
       loadJson("/audit/action-coverage?limit=10"),
       loadJson("/operations/review-calendar?limit=10"),
+      loadJson("/findings/traceability?limit=10"),
+      loadJson("/notifications/retry-posture?limit=10"),
+      loadJson("/scanners/execution-matrix?limit=10"),
+      loadJson("/storage/retention-execution?limit=10"),
+      loadJson("/rollout/workflow-trace?limit=10"),
     ]);
     renderMetrics(summary);
     renderFindings({ items: [...(criticalFindings.items || []), ...(highFindings.items || [])] });
@@ -2831,6 +2916,11 @@ async function refresh() {
     renderProviderSyncEvidence(providerSyncEvidencePage);
     renderAuditActionCoverage(auditActionCoveragePage);
     renderReviewCalendar(reviewCalendarPage);
+    renderFindingTraceability(findingTraceabilityPage);
+    renderNotificationRetryPosture(notificationRetryPosturePage);
+    renderScannerExecutionMatrix(scannerExecutionMatrixPage);
+    renderRetentionExecution(retentionExecutionPage);
+    renderWorkflowTrace(workflowTracePage);
   } catch (error) {
     metrics.innerHTML = `<article class="metric danger"><strong>!</strong><span>${error.message}</span></article>`;
     findings.innerHTML = `<tr><td colspan="5">Unable to load findings</td></tr>`;
@@ -2996,6 +3086,11 @@ async function refresh() {
     providerSyncEvidence.innerHTML = `<tr><td colspan="5">Unable to load provider sync evidence</td></tr>`;
     auditActionCoverage.innerHTML = `<tr><td colspan="5">Unable to load audit action coverage</td></tr>`;
     reviewCalendar.innerHTML = `<tr><td colspan="5">Unable to load review calendar</td></tr>`;
+    findingTraceability.innerHTML = `<tr><td colspan="5">Unable to load finding traceability</td></tr>`;
+    notificationRetryPosture.innerHTML = `<tr><td colspan="5">Unable to load notification retry posture</td></tr>`;
+    scannerExecutionMatrix.innerHTML = `<tr><td colspan="5">Unable to load scanner execution matrix</td></tr>`;
+    retentionExecution.innerHTML = `<tr><td colspan="5">Unable to load retention execution</td></tr>`;
+    workflowTrace.innerHTML = `<tr><td colspan="5">Unable to load repository workflow trace</td></tr>`;
   }
 }
 

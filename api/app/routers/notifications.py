@@ -90,8 +90,58 @@ def list_notification_digest_readiness(
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
+@router.get("/retry-posture", response_model=schemas.CursorPage)
+def list_notification_retry_posture(
+    limit: int = 50,
+    gap_type: str | None = None,
+    channel: str | None = None,
+    severity: models.Severity | None = None,
+    db: Session = Depends(get_db),
+    _: Principal = Depends(get_principal),
+):
+    items = notification_retry_posture_items(db)
+    if gap_type:
+        items = [item for item in items if item["gap_type"] == gap_type]
+    if channel:
+        items = [item for item in items if item["channel"] == channel]
+    if severity:
+        items = [item for item in items if item["severity"] == severity.value]
+    return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
+
+
 def notification_slo_breach_count(db: Session) -> int:
     return sum(1 for item in notification_slo_items(db) if item["breached"])
+
+
+def notification_retry_gap_count(db: Session) -> int:
+    return len(notification_retry_posture_items(db))
+
+
+def notification_retry_posture_items(db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(hours=24)
+    notifications = list(
+        db.scalars(select(models.Notification).order_by(models.Notification.created_at.asc(), models.Notification.id.asc()))
+    )
+    retry_jobs = _notification_retry_jobs(db)
+    duplicate_counts = _duplicate_notification_counts(notifications)
+    items = []
+    for notification in notifications:
+        finding = _finding_from_metadata(db, notification.metadata_json)
+        application = db.get(models.Application, finding.application_id) if finding else None
+        repository = db.get(models.Repository, application.repository_id) if application else None
+        retry_job = _retry_job_for_notification(notification, retry_jobs)
+        duplicate_count = duplicate_counts.get(_notification_identity(notification), 0)
+        context = (notification, finding, application, repository, retry_job, duplicate_count)
+        if notification.status == "queued" and _before(notification.created_at, stale_cutoff):
+            items.append(_retry_item("stale_queued_notification", *context, "Queued notification is older than 24 hours"))
+        if notification.status == "failed" and retry_job is None:
+            items.append(_retry_item("failed_without_retry_job", *context, "Failed notification has no queued retry job"))
+        if finding is None:
+            items.append(_retry_item("missing_finding_context", *context, "Notification metadata does not resolve to a finding"))
+        if duplicate_count > 1:
+            items.append(_retry_item("duplicate_notification", *context, "Multiple notifications share channel, subject, finding, and status"))
+    return items
 
 
 def notification_slo_items(db: Session) -> list[dict]:
@@ -211,6 +261,77 @@ def _finding_from_metadata(db: Session, metadata: dict | None) -> models.Finding
         return None
 
 
+def _notification_retry_jobs(db: Session) -> list[models.Job]:
+    return list(
+        db.scalars(
+            select(models.Job).where(
+                models.Job.job_type == models.JobType.notification,
+                models.Job.status.in_([models.JobStatus.queued, models.JobStatus.running]),
+            )
+        )
+    )
+
+
+def _retry_job_for_notification(notification: models.Notification, jobs: list[models.Job]) -> models.Job | None:
+    notification_id = str(notification.id)
+    finding_id = str((notification.metadata_json or {}).get("finding_id") or "")
+    for job in jobs:
+        payload = job.payload or {}
+        if str(payload.get("notification_id") or "") == notification_id:
+            return job
+        if finding_id and str(payload.get("finding_id") or "") == finding_id:
+            return job
+        if notification.subject and str(payload.get("subject") or "") == notification.subject:
+            return job
+    return None
+
+
+def _duplicate_notification_counts(notifications: list[models.Notification]) -> dict[tuple[str, str, str, str], int]:
+    counts: dict[tuple[str, str, str, str], int] = {}
+    for notification in notifications:
+        identity = _notification_identity(notification)
+        counts[identity] = counts.get(identity, 0) + 1
+    return counts
+
+
+def _notification_identity(notification: models.Notification) -> tuple[str, str, str, str]:
+    return (
+        notification.channel,
+        notification.subject,
+        str((notification.metadata_json or {}).get("finding_id") or ""),
+        notification.status,
+    )
+
+
+def _retry_item(
+    gap_type: str,
+    notification: models.Notification,
+    finding: models.Finding | None,
+    application: models.Application | None,
+    repository: models.Repository | None,
+    retry_job: models.Job | None,
+    duplicate_count: int,
+    detail: str,
+) -> dict:
+    return schemas.NotificationRetryPostureOut(
+        gap_type=gap_type,
+        notification_id=notification.id,
+        channel=notification.channel,
+        severity=notification.severity,
+        status=notification.status,
+        finding_id=finding.id if finding else None,
+        application_id=application.id if application else None,
+        application_name=application.name if application else None,
+        repository_id=repository.id if repository else None,
+        repository_owner=repository.owner if repository else None,
+        repository_name=repository.name if repository else None,
+        retry_job_id=retry_job.id if retry_job else None,
+        duplicate_count=duplicate_count,
+        detail=detail,
+        created_at=notification.created_at,
+    ).model_dump(mode="json")
+
+
 def _sent_notifications_by_finding(db: Session) -> dict[UUID, datetime]:
     notifications = db.execute(
         select(models.Notification)
@@ -223,6 +344,14 @@ def _sent_notifications_by_finding(db: Session) -> dict[UUID, datetime]:
         if finding_id and finding_id not in by_finding:
             by_finding[finding_id] = notification.sent_at or notification.created_at
     return by_finding
+
+
+def _before(value: datetime, reference: datetime) -> bool:
+    if value.tzinfo is None:
+        reference = reference.replace(tzinfo=None)
+    elif reference.tzinfo is None:
+        value = value.replace(tzinfo=None)
+    return value < reference
 
 
 def _metadata_uuid(value: object) -> UUID | None:
