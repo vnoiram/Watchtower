@@ -5787,6 +5787,100 @@ def test_operational_exit_criteria_reports_review_gaps() -> None:
         assert summary.exit_criteria_gap_items >= 1
 
 
+def test_completion_readiness_ignores_archived_sbom_and_scan_for_active_criteria() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "completion-active-only")
+        active = create_application(db, repo, "active-without-evidence")
+        active.owner = "team"
+        archived = create_application(db, repo, "archived-with-evidence")
+        archived.lifecycle = Lifecycle.archived
+        archived.owner = "team"
+        archived_scan = Scan(application_id=archived.id, status=ScanStatus.succeeded, created_at=now_utc())
+        db.add(archived_scan)
+        db.flush()
+        db.add(
+            Sbom(
+                application_id=archived.id,
+                scan_id=archived_scan.id,
+                sbom_digest="archived-only",
+                storage_key="archived-only.json",
+                active=True,
+                sbom_kind="source",
+            )
+        )
+        db.flush()
+
+        page = list_completion_readiness(db=db, settings=Settings(), _=None)
+        summary = dashboard_summary(db=db, settings=Settings(), _=None)
+        by_check = {item["check"]: item for item in page.items}
+
+        assert by_check["active_source_sbom_90"]["status"] == "warn"
+        assert by_check["active_source_sbom_90"]["count"] == 1
+        assert by_check["active_source_sbom_90"]["percent"] == 0.0
+        assert by_check["daily_rescan"]["status"] == "warn"
+        assert by_check["daily_rescan"]["count"] == 1
+        assert by_check["daily_rescan"]["percent"] == 0.0
+        assert summary.missing_active_sbom == 1
+        assert summary.sbom_coverage_percent == 0.0
+        assert summary.stale_scans == 1
+
+
+def test_completion_readiness_requires_all_remediation_and_closure_evidence() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        repo = create_repository(db, "completion-all-evidence")
+        rescanned = create_application(db, repo, "rescanned")
+        missing_rescan = create_application(db, repo, "missing-rescan")
+        old_time = now_utc() - timedelta(days=2)
+        rescanned_finding = create_finding(db, rescanned, severity=Severity.high, status=FindingStatus.open)
+        missing_rescan_finding = create_finding(db, missing_rescan, severity=Severity.critical, status=FindingStatus.open)
+        closed_finding = create_finding(db, rescanned, severity=Severity.high, status=FindingStatus.resolved)
+        create_finding(db, missing_rescan, severity=Severity.critical, status=FindingStatus.resolved)
+        db.add_all(
+            [
+                RemediationAction(
+                    finding_id=rescanned_finding.id,
+                    action_type="github_issue",
+                    status="created",
+                    provider="github",
+                    url="https://github.com/local/demo/issues/1",
+                    metadata_json={},
+                    created_at=old_time,
+                    updated_at=old_time,
+                ),
+                RemediationAction(
+                    finding_id=missing_rescan_finding.id,
+                    action_type="github_issue",
+                    status="created",
+                    provider="github",
+                    url="https://github.com/local/demo/issues/2",
+                    metadata_json={},
+                    created_at=old_time,
+                    updated_at=old_time,
+                ),
+                RemediationAction(
+                    finding_id=closed_finding.id,
+                    action_type="github_issue",
+                    status="closed",
+                    provider="github",
+                    url="https://github.com/local/demo/issues/3",
+                    metadata_json={},
+                ),
+                Scan(application_id=rescanned.id, status=ScanStatus.succeeded, created_at=now_utc()),
+            ]
+        )
+        db.flush()
+
+        page = list_completion_readiness(db=db, settings=Settings(), _=None)
+        by_check = {item["check"]: item for item in page.items}
+
+        assert by_check["post_fix_rescan"]["status"] == "warn"
+        assert by_check["post_fix_rescan"]["count"] == 2
+        assert by_check["resolved_finding_closure"]["status"] == "warn"
+        assert by_check["resolved_finding_closure"]["count"] == 1
+
+
 def test_e2e_evidence_reports_stage_gaps_and_filters() -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:

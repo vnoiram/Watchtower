@@ -124,14 +124,23 @@ def dashboard_summary(
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     repositories = db.scalar(select(func.count()).select_from(models.Repository)) or 0
     applications = db.scalar(select(func.count()).select_from(models.Application)) or 0
+    active_applications = db.scalar(
+        select(func.count()).select_from(models.Application).where(models.Application.lifecycle != models.Lifecycle.archived)
+    ) or 0
     open_critical = db.scalar(select(func.count()).select_from(models.Finding).where(models.Finding.status == models.FindingStatus.open, models.Finding.severity == models.Severity.critical)) or 0
     open_high = db.scalar(select(func.count()).select_from(models.Finding).where(models.Finding.status == models.FindingStatus.open, models.Finding.severity == models.Severity.high)) or 0
     failed_jobs = db.scalar(select(func.count()).select_from(models.Job).where(models.Job.status == models.JobStatus.failed)) or 0
     expired_vex = db.scalar(select(func.count()).select_from(models.VexStatement).where(models.VexStatement.review_date < datetime.now(timezone.utc))) or 0
-    stale_scans = db.scalar(select(func.count()).select_from(models.Application).where(~models.Application.scans.any(models.Scan.created_at >= cutoff))) or 0
+    stale_scans = db.scalar(
+        select(func.count()).select_from(models.Application).where(
+            models.Application.lifecycle != models.Lifecycle.archived,
+            ~models.Application.scans.any(models.Scan.created_at >= cutoff),
+        )
+    ) or 0
     missing_active_sbom = (
         db.scalar(
             select(func.count()).select_from(models.Application).where(
+                models.Application.lifecycle != models.Lifecycle.archived,
                 ~models.Application.id.in_(
                     select(models.Sbom.application_id).where(
                         models.Sbom.active.is_(True),
@@ -143,7 +152,7 @@ def dashboard_summary(
         or 0
     )
     sbom_coverage_percent = (
-        round(((applications - missing_active_sbom) / applications) * 100, 1) if applications else 0.0
+        round(((active_applications - missing_active_sbom) / active_applications) * 100, 1) if active_applications else 0.0
     )
     now = datetime.now(timezone.utc)
     unhealthy_jobs = sum(1 for job in db.execute(select(models.Job)).scalars() if job_health_reason(job, now))
