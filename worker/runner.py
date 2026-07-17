@@ -32,7 +32,13 @@ from api.app.models import (
     now_utc,
 )
 from api.app.services.artifacts import ArtifactStore, artifact_key
-from api.app.services.jobs import enqueue_job, lock_next_job, mark_job_failed, mark_job_succeeded
+from api.app.services.jobs import (
+    enqueue_job,
+    lock_next_job,
+    mark_job_failed,
+    mark_job_succeeded,
+    mark_job_timed_out,
+)
 from api.app.services.notifications import deliver_notification, enqueue_finding_notifications
 from api.app.services.registry import detect_applications
 from api.app.services.remediation import (
@@ -42,7 +48,13 @@ from api.app.services.remediation import (
     process_github_issue_actions,
 )
 from api.app.services.repositories import sync_github_repositories
-from api.app.services.scanner import normalize_osv_results, normalize_trivy_results
+from api.app.services.scanner import (
+    normalize_gitleaks_results,
+    normalize_grype_results,
+    normalize_osv_results,
+    normalize_semgrep_results,
+    normalize_trivy_results,
+)
 from api.app.services.sbom import upsert_source_sbom
 from api.app.services.vulnerabilities import upsert_findings
 
@@ -50,8 +62,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("watchtower.worker")
 
 
+class ScanTimeoutError(RuntimeError):
+    """Raised when an external process (clone or scanner) exceeds the configured timeout."""
+
+
+def default_process_timeout() -> float | None:
+    settings = get_settings()
+    return settings.worker_job_timeout_seconds if settings.worker_job_timeout_seconds > 0 else None
+
+
 def run_command(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=False)
+    timeout = default_process_timeout()
+    try:
+        return subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise ScanTimeoutError(f"{args[0]} timed out after {timeout}s") from exc
 
 
 def clone_repository(repo: Repository, destination: Path) -> Path:
@@ -126,9 +151,16 @@ def run_syft(target: Path, output_path: Path) -> dict:
     return payload
 
 
-def run_json_scanner(tool: str, args: list[str], output_path: Path) -> dict:
+# Some scanners exit non-zero to signal "findings were reported", not a scanner failure.
+_TOLERATED_FINDINGS_EXIT_CODES: dict[str, tuple[int, ...]] = {
+    "gitleaks": (1,),
+    "semgrep": (1,),
+}
+
+
+def run_json_scanner(tool: str, args: list[str], output_path: Path) -> dict | list:
     result = run_command(args)
-    if result.returncode != 0:
+    if result.returncode not in (0, *_TOLERATED_FINDINGS_EXIT_CODES.get(tool, ())):
         raise RuntimeError(f"{tool} failed: {result.stderr.strip() or result.stdout.strip()}")
     if not result.stdout.strip():
         raise RuntimeError(f"{tool} produced empty output")
@@ -137,8 +169,8 @@ def run_json_scanner(tool: str, args: list[str], output_path: Path) -> dict:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"{tool} produced invalid JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"{tool} output must be a JSON object")
+    if not isinstance(payload, (dict, list)):
+        raise RuntimeError(f"{tool} output must be a JSON object or array")
     return payload
 
 
@@ -154,6 +186,30 @@ def run_trivy(target: Path, output_path: Path) -> dict:
     return run_json_scanner(
         "trivy",
         ["trivy", "fs", "--format", "json", str(target)],
+        output_path,
+    )
+
+
+def run_grype(target: Path, output_path: Path) -> dict:
+    return run_json_scanner(
+        "grype",
+        ["grype", f"dir:{target}", "-o", "json"],
+        output_path,
+    )
+
+
+def run_gitleaks(target: Path, output_path: Path) -> list:
+    return run_json_scanner(
+        "gitleaks",
+        ["gitleaks", "detect", "--source", str(target), "--no-git", "--report-format", "json", "--report-path", "/dev/stdout"],
+        output_path,
+    )
+
+
+def run_semgrep(target: Path, output_path: Path) -> dict:
+    return run_json_scanner(
+        "semgrep",
+        ["semgrep", "scan", "--json", "--config", "auto", str(target)],
         output_path,
     )
 
@@ -207,6 +263,7 @@ def scan_application(
         scanner_steps = (
             ("osv", "osv.json", run_osv_scanner, normalize_osv_results),
             ("trivy", "trivy.json", run_trivy, normalize_trivy_results),
+            ("grype", "grype.json", run_grype, normalize_grype_results),
         )
         for source, filename, runner, normalizer in scanner_steps:
             scanner_output_path = workdir / f"{scan.id}-{filename}"
@@ -226,6 +283,34 @@ def scan_application(
                 scanner_failures.append({"tool": source, "error": str(exc)})
                 logger.warning(
                     "vulnerability scanner failed app_id=%s tool=%s error=%s",
+                    app.id,
+                    source,
+                    exc,
+                )
+
+        secrets_findings: list[dict] = []
+        sast_findings: list[dict] = []
+        posture_steps = (
+            ("gitleaks", "gitleaks.json", run_gitleaks, normalize_gitleaks_results, secrets_findings),
+            ("semgrep", "semgrep.json", run_semgrep, normalize_semgrep_results, sast_findings),
+        )
+        for source, filename, runner, normalizer, sink in posture_steps:
+            scanner_output_path = workdir / f"{scan.id}-{filename}"
+            try:
+                scanner_payload = runner(target, scanner_output_path)
+                if not scanner_output_path.exists():
+                    scanner_output_path.write_text(json.dumps(scanner_payload), encoding="utf-8")
+                scanner_key = artifact_key(str(repo.id), str(app.id), str(scan.id), filename)
+                scanner_digest = store.put_file(scanner_key, scanner_output_path)
+                artifacts[source] = {
+                    "storage_key": scanner_key,
+                    "digest": scanner_digest,
+                }
+                sink.extend(normalizer(scanner_payload))
+            except Exception as exc:  # noqa: BLE001
+                scanner_failures.append({"tool": source, "error": str(exc)})
+                logger.warning(
+                    "security scanner failed app_id=%s tool=%s error=%s",
                     app.id,
                     source,
                     exc,
@@ -286,10 +371,19 @@ def scan_application(
             "notification_count": len(notifications),
             "issue_request_count": len(issue_requests),
             "issue_close_request_count": len(persistence.resolved_finding_ids),
+            "secrets": secrets_findings,
+            "sast": sast_findings,
             "scanner_failures": scanner_failures,
             "artifacts": artifacts,
         }
         return True
+    except ScanTimeoutError as exc:
+        scan.status = ScanStatus.timed_out
+        scan.completed_at = now_utc()
+        scan.error_message = str(exc)
+        scan.result_summary = {"scanner_failure": True, "sbom_stored": False}
+        logger.warning("application scan timed out app_id=%s error=%s", app.id, exc)
+        return False
     except Exception as exc:  # noqa: BLE001
         scan.status = ScanStatus.failed
         scan.completed_at = now_utc()
@@ -315,10 +409,18 @@ def run_scan_job(db: Session, job: Job) -> None:
         apps = upsert_detected_applications(db, repo, root)
         store = ArtifactStore(get_settings())
         successes = 0
+        all_timed_out = bool(apps)
         for app in apps:
             if scan_application(db, repo, app, root, store, temp_root, trigger_type=trigger_type):
                 successes += 1
+                all_timed_out = False
+            else:
+                latest = latest_scan_for_application(db, app)
+                if not latest or latest.status != ScanStatus.timed_out:
+                    all_timed_out = False
         if successes == 0:
+            if all_timed_out:
+                raise ScanTimeoutError("all application scans timed out")
             raise RuntimeError("all application scans failed")
 
 
@@ -562,6 +664,10 @@ def work_once(worker_id: str) -> bool:
             mark_job_succeeded(job)
             db.commit()
             logger.info("job succeeded id=%s type=%s", job.id, job.job_type)
+        except ScanTimeoutError as exc:
+            logger.exception("job timed out id=%s", job.id)
+            mark_job_timed_out(job, str(exc))
+            db.commit()
         except Exception as exc:  # noqa: BLE001
             logger.exception("job failed id=%s", job.id)
             mark_job_failed(job, str(exc))

@@ -402,11 +402,10 @@ def worker_posture(
 
 @router.get("/worker-hardening", response_model=list[schemas.WorkerHardeningOut])
 def worker_hardening(
-    db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _: Principal = Depends(get_principal),
 ):
-    return worker_hardening_items(db, settings)
+    return worker_hardening_items(settings)
 
 
 @router.get("/scan-targets", response_model=list[schemas.ScanTargetOut])
@@ -741,8 +740,8 @@ def restore_evidence_count(db: Session, settings: Settings) -> int:
     return sum(max(item["count"], 1) for item in restore_evidence_items(db, settings) if item["status"] != "ok")
 
 
-def worker_hardening_count(db: Session, settings: Settings) -> int:
-    return sum(max(item.count, 1) for item in worker_hardening_items(db, settings) if item.status != "ok")
+def worker_hardening_count(settings: Settings) -> int:
+    return sum(max(item.count, 1) for item in worker_hardening_items(settings) if item.status != "ok")
 
 
 def queue_pressure_count(db: Session) -> int:
@@ -1006,14 +1005,13 @@ def worker_posture_items(db: Session, settings: Settings) -> list[schemas.Worker
     ]
 
 
-def worker_hardening_items(db: Session, settings: Settings) -> list[schemas.WorkerHardeningOut]:
-    audit_logs = list(db.scalars(select(models.AuditLog)))
-    jobs = list(db.scalars(select(models.Job)))
-    root_evidence = _hardening_evidence(audit_logs, jobs, "rootless", "non_root", "run_as_user")
-    readonly_evidence = _hardening_evidence(audit_logs, jobs, "read_only", "readonly", "read-only")
-    network_evidence = _hardening_evidence(audit_logs, jobs, "network_policy", "network_restricted", "network")
-    resource_evidence = _hardening_evidence(audit_logs, jobs, "cpu_limit", "memory_limit", "resource_limit")
-    temp_cleanup_evidence = _hardening_evidence(audit_logs, jobs, "temp_cleanup", "workspace_cleanup", "cleanup")
+def worker_hardening_items(settings: Settings) -> list[schemas.WorkerHardeningOut]:
+    # These read the explicit WORKER_* settings, which must be kept in sync with the
+    # actual docker-compose.yml/Dockerfile configuration by whoever deploys this service.
+    # This is deliberately not inferred from audit-log/job text: a keyword match against
+    # unrelated log entries (e.g. any job whose payload happens to mention "network")
+    # cannot flip these checks to "ok" the way the previous heuristic could.
+    has_resource_limits = settings.worker_cpu_limit > 0 and settings.worker_memory_limit_mb > 0
     return [
         _hardening_check(
             "job_timeout",
@@ -1022,11 +1020,41 @@ def worker_hardening_items(db: Session, settings: Settings) -> list[schemas.Work
             "setting",
             f"worker_job_timeout_seconds={settings.worker_job_timeout_seconds}",
         ),
-        _hardening_check("non_root_worker", "ok" if root_evidence else "warn", len(root_evidence), "metadata_or_audit", "Worker rootless/non-root evidence"),
-        _hardening_check("read_only_filesystem", "ok" if readonly_evidence else "warn", len(readonly_evidence), "metadata_or_audit", "Worker read-only filesystem evidence"),
-        _hardening_check("network_restriction", "ok" if network_evidence else "warn", len(network_evidence), "metadata_or_audit", "Worker network restriction evidence"),
-        _hardening_check("resource_limits", "ok" if resource_evidence else "warn", len(resource_evidence), "metadata_or_audit", "Worker CPU or memory limit evidence"),
-        _hardening_check("temp_cleanup", "ok" if temp_cleanup_evidence else "warn", len(temp_cleanup_evidence), "metadata_or_audit", "Worker temporary workspace cleanup evidence"),
+        _hardening_check(
+            "non_root_worker",
+            "ok" if settings.worker_run_as_non_root else "fail",
+            1 if settings.worker_run_as_non_root else 0,
+            "setting",
+            f"worker_run_as_non_root={settings.worker_run_as_non_root}",
+        ),
+        _hardening_check(
+            "read_only_filesystem",
+            "ok" if settings.worker_read_only_filesystem else "fail",
+            1 if settings.worker_read_only_filesystem else 0,
+            "setting",
+            f"worker_read_only_filesystem={settings.worker_read_only_filesystem}",
+        ),
+        _hardening_check(
+            "network_restriction",
+            "ok" if settings.worker_network_restricted else "warn",
+            1 if settings.worker_network_restricted else 0,
+            "setting",
+            f"worker_network_restricted={settings.worker_network_restricted}",
+        ),
+        _hardening_check(
+            "resource_limits",
+            "ok" if has_resource_limits else "fail",
+            1 if has_resource_limits else 0,
+            "setting",
+            f"worker_cpu_limit={settings.worker_cpu_limit} worker_memory_limit_mb={settings.worker_memory_limit_mb}",
+        ),
+        _hardening_check(
+            "temp_cleanup",
+            "ok",
+            1,
+            "code_guarantee",
+            "worker/runner.py uses tempfile.TemporaryDirectory, which removes the workspace on exit even if the job raises",
+        ),
     ]
 
 
@@ -1500,7 +1528,7 @@ def completion_readiness_items(db: Session, settings: Settings) -> list[schemas.
         _completion("vex_review_dates", all(vex.review_date for vex in vex_statements), sum(1 for vex in vex_statements if not vex.review_date), 0, None, "VEX statements with review dates"),
         _completion("scan_failure_monitoring", monitoring > 0, monitoring, None, None, "Scan health or failure signal monitoring evidence"),
         _completion("backup_restore_evidence", storage_configured and bool(restore_logs), 0 if storage_configured and restore_logs else 1, 0, None, "Object storage configured and restore verification evidence exists"),
-        _completion("isolated_runbook", _operation_evidence_count(db, {"isolated", "restricted", "separate runner"}) > 0, _operation_evidence_count(db, {"isolated", "restricted", "separate runner"}), None, None, "Isolated code operational rule evidence"),
+        _completion("isolated_runbook", _isolated_runbook_evidence_count(db) > 0, _isolated_runbook_evidence_count(db), None, None, "Isolated code operational rule evidence"),
     ]
 
 
@@ -2178,23 +2206,6 @@ def _hardening_check(
     )
 
 
-def _hardening_evidence(
-    audit_logs: list[models.AuditLog],
-    jobs: list[models.Job],
-    *tokens: str,
-) -> list[object]:
-    evidence = []
-    for log in audit_logs:
-        text = f"{log.action} {log.resource_type} {log.resource_id} {log.metadata_json}".lower()
-        if "worker" in text and any(token in text for token in tokens):
-            evidence.append(log)
-    for job in jobs:
-        text = f"{job.job_type.value} {job.payload}".lower()
-        if any(token in text for token in tokens):
-            evidence.append(job)
-    return evidence
-
-
 def _scan_target(
     check: str,
     status: str,
@@ -2272,6 +2283,20 @@ def _rollback(check: str, nonzero_status: str, count: int, detail: str) -> schem
     )
 
 
+def _isolated_runbook_evidence_count(db: Session) -> int:
+    # Scoped to the "runbook." audit action namespace for the same reason as
+    # _recent_audit_count: an ordinary audit entry that merely mentions "isolated"
+    # (e.g. registering a repository with source_classification=isolated) must not
+    # be mistaken for evidence that the isolated-lane operational rules were reviewed.
+    tokens = {"isolated", "restricted", "separate runner"}
+    return sum(
+        1
+        for audit_log in db.scalars(select(models.AuditLog))
+        if audit_log.action.startswith("runbook.")
+        and _contains_any(_operation_text(audit_log.action, audit_log.metadata_json), tokens)
+    )
+
+
 def _operation_evidence_count(db: Session, tokens: set[str]) -> int:
     count = 0
     for audit_log in db.scalars(select(models.AuditLog)):
@@ -2300,10 +2325,15 @@ def _recent_notification_count(db: Session, cutoff: datetime) -> int:
 
 
 def _recent_audit_count(db: Session, tokens: set[str], cutoff: datetime) -> int:
+    # Require the dedicated "runbook." audit action namespace so that an unrelated
+    # audit entry which merely happens to mention one of these words (e.g. any
+    # ordinary "vex.create" action) cannot be mistaken for evidence that the
+    # scheduled runbook review was actually performed.
     return sum(
         1
         for audit_log in db.scalars(select(models.AuditLog))
         if _after_cutoff(audit_log.created_at, cutoff)
+        and audit_log.action.startswith("runbook.")
         and _contains_any(_operation_text(audit_log.action, audit_log.resource_type, audit_log.metadata_json), tokens)
     )
 

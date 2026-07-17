@@ -188,7 +188,11 @@ const operationalExitCriteria = document.querySelector("#operational-exit-criter
 const severityRank = { critical: 0, high: 1 };
 
 function authHeaders() {
-  return { Authorization: `Bearer ${tokenInput.value || "change-me"}` };
+  const token = tokenInput.value.trim();
+  if (!token) {
+    throw new Error("API token is required. Enter a token in the Token field before loading data.");
+  }
+  return { Authorization: `Bearer ${token}` };
 }
 
 async function loadJson(path) {

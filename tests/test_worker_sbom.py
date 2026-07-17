@@ -134,6 +134,9 @@ def test_scan_application_persists_successful_syft_sbom(monkeypatch, tmp_path: P
         monkeypatch.setattr(runner, "run_syft", fake_run_syft)
         monkeypatch.setattr(runner, "run_osv_scanner", lambda *_: {"results": []})
         monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+        monkeypatch.setattr(runner, "run_grype", lambda *_: {"matches": []})
+        monkeypatch.setattr(runner, "run_gitleaks", lambda *_: [])
+        monkeypatch.setattr(runner, "run_semgrep", lambda *_: {"results": []})
 
         assert runner.scan_application(db, repo, app, tmp_path, store, tmp_path)
         db.flush()
@@ -151,7 +154,12 @@ def test_scan_application_persists_successful_syft_sbom(monkeypatch, tmp_path: P
             f"repositories/{repo.id}/applications/{app.id}/scans/{scan.id}/source-sbom.cdx.json",
             f"repositories/{repo.id}/applications/{app.id}/scans/{scan.id}/osv.json",
             f"repositories/{repo.id}/applications/{app.id}/scans/{scan.id}/trivy.json",
+            f"repositories/{repo.id}/applications/{app.id}/scans/{scan.id}/grype.json",
+            f"repositories/{repo.id}/applications/{app.id}/scans/{scan.id}/gitleaks.json",
+            f"repositories/{repo.id}/applications/{app.id}/scans/{scan.id}/semgrep.json",
         ]
+        assert scan.result_summary["secrets"] == []
+        assert scan.result_summary["sast"] == []
         assert db.scalar(select(Component).where(Component.purl == "pkg:generic/fastapi@0.111.0"))
 
 
@@ -174,6 +182,9 @@ def test_scan_application_accepts_remediation_validation_trigger(monkeypatch, tm
         monkeypatch.setattr(runner, "run_syft", fake_run_syft)
         monkeypatch.setattr(runner, "run_osv_scanner", lambda *_: {"results": []})
         monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+        monkeypatch.setattr(runner, "run_grype", lambda *_: {"matches": []})
+        monkeypatch.setattr(runner, "run_gitleaks", lambda *_: [])
+        monkeypatch.setattr(runner, "run_semgrep", lambda *_: {"results": []})
 
         assert runner.scan_application(
             db,
@@ -188,6 +199,71 @@ def test_scan_application_accepts_remediation_validation_trigger(monkeypatch, tm
 
         scan = db.scalar(select(Scan))
         assert scan.trigger_type == TriggerType.remediation_validation
+
+
+def test_scan_application_records_secrets_and_sast_findings(monkeypatch, tmp_path: Path) -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        disable_notifications(monkeypatch)
+        repo, app = create_repo_and_app(db, tmp_path)
+        store = FakeArtifactStore()
+
+        def fake_run_syft(_: Path, output_path: Path) -> dict:
+            payload = {"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}
+            output_path.write_text(json.dumps(payload), encoding="utf-8")
+            return payload
+
+        monkeypatch.setattr(runner, "run_syft", fake_run_syft)
+        monkeypatch.setattr(runner, "run_osv_scanner", lambda *_: {"results": []})
+        monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+        monkeypatch.setattr(runner, "run_grype", lambda *_: {"matches": []})
+        monkeypatch.setattr(
+            runner,
+            "run_gitleaks",
+            lambda *_: [{"RuleID": "generic-api-key", "Description": "Generic API Key", "File": "config.py", "StartLine": 3}],
+        )
+        monkeypatch.setattr(
+            runner,
+            "run_semgrep",
+            lambda *_: {
+                "results": [
+                    {
+                        "check_id": "python.lang.security.audit.dangerous-eval",
+                        "path": "app/main.py",
+                        "start": {"line": 42},
+                        "extra": {"message": "Detected use of eval", "severity": "ERROR"},
+                    }
+                ]
+            },
+        )
+
+        assert runner.scan_application(db, repo, app, tmp_path, store, tmp_path)
+        db.flush()
+
+        scan = db.scalar(select(Scan))
+        assert scan.status == ScanStatus.succeeded
+        assert scan.result_summary["secrets"] == [
+            {
+                "type": "secret",
+                "rule_id": "generic-api-key",
+                "severity": "high",
+                "path": "config.py",
+                "title": "Generic API Key",
+                "detail": "config.py:3",
+                "commit": None,
+                "fingerprint": None,
+            }
+        ]
+        assert scan.result_summary["sast"] == [
+            {
+                "type": "sast",
+                "rule_id": "python.lang.security.audit.dangerous-eval",
+                "severity": "high",
+                "path": "app/main.py",
+                "title": "Detected use of eval",
+                "detail": "app/main.py:42",
+            }
+        ]
 
 
 def test_scan_application_persists_vulnerability_findings(monkeypatch, tmp_path: Path) -> None:
@@ -228,6 +304,9 @@ def test_scan_application_persists_vulnerability_findings(monkeypatch, tmp_path:
             },
         )
         monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+        monkeypatch.setattr(runner, "run_grype", lambda *_: {"matches": []})
+        monkeypatch.setattr(runner, "run_gitleaks", lambda *_: [])
+        monkeypatch.setattr(runner, "run_semgrep", lambda *_: {"results": []})
 
         assert runner.scan_application(db, repo, app, tmp_path, store, tmp_path)
         db.flush()
@@ -286,6 +365,9 @@ def test_scan_application_enqueues_chat_notifications(monkeypatch, tmp_path: Pat
             },
         )
         monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+        monkeypatch.setattr(runner, "run_grype", lambda *_: {"matches": []})
+        monkeypatch.setattr(runner, "run_gitleaks", lambda *_: [])
+        monkeypatch.setattr(runner, "run_semgrep", lambda *_: {"results": []})
 
         assert runner.scan_application(db, repo, app, tmp_path, store, tmp_path)
         db.flush()
@@ -344,6 +426,9 @@ def test_scan_application_enqueues_github_issue_requests(monkeypatch, tmp_path: 
             },
         )
         monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+        monkeypatch.setattr(runner, "run_grype", lambda *_: {"matches": []})
+        monkeypatch.setattr(runner, "run_gitleaks", lambda *_: [])
+        monkeypatch.setattr(runner, "run_semgrep", lambda *_: {"results": []})
 
         assert runner.scan_application(db, repo, app, tmp_path, store, tmp_path)
         db.flush()
@@ -394,6 +479,9 @@ def test_scan_application_records_partial_success_for_scanner_failure(
         monkeypatch.setattr(runner, "run_syft", fake_run_syft)
         monkeypatch.setattr(runner, "run_osv_scanner", lambda *_: (_ for _ in ()).throw(RuntimeError("osv missing")))
         monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+        monkeypatch.setattr(runner, "run_grype", lambda *_: {"matches": []})
+        monkeypatch.setattr(runner, "run_gitleaks", lambda *_: [])
+        monkeypatch.setattr(runner, "run_semgrep", lambda *_: {"results": []})
         monkeypatch.setattr(runner, "normalize_trivy_results", fake_normalize_trivy_results)
 
         assert runner.scan_application(db, repo, app, tmp_path, store, tmp_path)
@@ -464,6 +552,9 @@ def test_scan_application_enqueues_github_issue_closures(monkeypatch, tmp_path: 
         monkeypatch.setattr(runner, "run_syft", fake_run_syft)
         monkeypatch.setattr(runner, "run_osv_scanner", lambda *_: {"results": []})
         monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+        monkeypatch.setattr(runner, "run_grype", lambda *_: {"matches": []})
+        monkeypatch.setattr(runner, "run_gitleaks", lambda *_: [])
+        monkeypatch.setattr(runner, "run_semgrep", lambda *_: {"results": []})
 
         assert runner.scan_application(db, repo, app, tmp_path, store, tmp_path)
         db.flush()
@@ -786,6 +877,9 @@ def test_run_remediation_validation_job_scans_action_application(monkeypatch, tm
         monkeypatch.setattr(runner, "run_syft", fake_run_syft)
         monkeypatch.setattr(runner, "run_osv_scanner", lambda *_: {"results": []})
         monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
+        monkeypatch.setattr(runner, "run_grype", lambda *_: {"matches": []})
+        monkeypatch.setattr(runner, "run_gitleaks", lambda *_: [])
+        monkeypatch.setattr(runner, "run_semgrep", lambda *_: {"results": []})
 
         runner.run_remediation_validation_job(db, job)
         db.flush()
