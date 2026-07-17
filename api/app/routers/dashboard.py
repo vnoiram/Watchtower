@@ -205,7 +205,7 @@ def dashboard_summary(
     pr_staleness_items = pr_staleness_count(db)
     medium_review_items = medium_review_count(db)
     false_positive_review_items = false_positive_review_count(db)
-    worker_hardening_items = worker_hardening_count(db, settings)
+    worker_hardening_items = worker_hardening_count(settings)
     storage_encryption_items = storage_encryption_count(db, settings)
     input_coverage_gap_items = application_input_coverage_count(db)
     container_input_gap_items = container_input_coverage_count(db)

@@ -5501,22 +5501,20 @@ def test_list_false_positive_review_reports_findings_vex_expiry_and_dashboard_co
         assert summary.false_positive_review_items == 2
 
 
-def test_worker_hardening_reports_security_evidence_and_dashboard_count() -> None:
+def test_worker_hardening_reports_explicit_settings_and_dashboard_count() -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
-        db.add_all(
-            [
-                AuditLog(actor="ops", role="admin", action="worker.rootless.verify", resource_type="worker", resource_id="w1", metadata_json={"rootless": True}),
-                AuditLog(actor="ops", role="admin", action="worker.read_only.verify", resource_type="worker", resource_id="w1", metadata_json={"read_only": True}),
-                AuditLog(actor="ops", role="admin", action="worker.network_policy.verify", resource_type="worker", resource_id="w1", metadata_json={"network_restricted": True}),
-                AuditLog(actor="ops", role="admin", action="worker.resource_limit.verify", resource_type="worker", resource_id="w1", metadata_json={"cpu_limit": "1", "memory_limit": "512Mi"}),
-                AuditLog(actor="ops", role="admin", action="worker.temp_cleanup.verify", resource_type="worker", resource_id="w1", metadata_json={"temp_cleanup": True}),
-            ]
+        hardened_settings = Settings(
+            worker_job_timeout_seconds=1800,
+            worker_run_as_non_root=True,
+            worker_read_only_filesystem=True,
+            worker_network_restricted=True,
+            worker_cpu_limit=2.0,
+            worker_memory_limit_mb=2048,
         )
-        db.flush()
 
-        rows = worker_hardening(db=db, settings=Settings(worker_job_timeout_seconds=1800), _=None)
-        summary = dashboard_summary(db=db, settings=Settings(worker_job_timeout_seconds=1800), _=None)
+        rows = worker_hardening(settings=hardened_settings, _=None)
+        summary = dashboard_summary(db=db, settings=hardened_settings, _=None)
         by_check = {row.check: row for row in rows}
 
         assert by_check["job_timeout"].status == "ok"
@@ -5526,6 +5524,21 @@ def test_worker_hardening_reports_security_evidence_and_dashboard_count() -> Non
         assert by_check["resource_limits"].status == "ok"
         assert by_check["temp_cleanup"].status == "ok"
         assert summary.worker_hardening_items == 0
+
+        # A misconfigured deployment (unset flags) must surface as a real gap,
+        # not silently pass because of an unrelated audit-log/job keyword match.
+        unhardened_settings = Settings(
+            worker_run_as_non_root=False,
+            worker_read_only_filesystem=False,
+            worker_network_restricted=False,
+            worker_cpu_limit=0,
+            worker_memory_limit_mb=0,
+        )
+        unhardened_rows = worker_hardening(settings=unhardened_settings, _=None)
+        by_unhardened_check = {row.check: row for row in unhardened_rows}
+        assert by_unhardened_check["non_root_worker"].status == "fail"
+        assert by_unhardened_check["read_only_filesystem"].status == "fail"
+        assert by_unhardened_check["resource_limits"].status == "fail"
 
 
 def test_secret_management_reports_configuration_gaps_without_secret_values() -> None:
@@ -5958,7 +5971,7 @@ def test_runbook_evidence_reports_cadence_gaps_and_filters() -> None:
             [
                 Job(job_type=JobType.repository_sync, status=JobStatus.succeeded, created_at=now_utc()),
                 Job(job_type=JobType.scan, status=JobStatus.succeeded, created_at=now_utc()),
-                AuditLog(actor="ops", role="admin", action="medium review", resource_type="runbook", metadata_json={"cadence": "weekly"}, created_at=now_utc()),
+                AuditLog(actor="ops", role="admin", action="runbook.weekly_review.completed", resource_type="medium review", metadata_json={"cadence": "weekly"}, created_at=now_utc()),
             ]
         )
         db.commit()
@@ -5972,6 +5985,30 @@ def test_runbook_evidence_reports_cadence_gaps_and_filters() -> None:
         assert by_check["scan"]["status"] == "ok"
         assert any(item["check"] == "medium_review" for item in filtered.items)
         assert summary.runbook_evidence_gap_items >= 1
+
+
+def test_runbook_evidence_ignores_unrelated_audit_log_mentioning_keyword() -> None:
+    SessionLocal = session_factory()
+    with SessionLocal() as db:
+        # An ordinary VEX create action naturally mentions "vex" in its audit trail.
+        # This must not be mistaken for evidence that the sla_vex_check runbook item
+        # was actually performed - only a dedicated "runbook.*" action should count.
+        db.add(
+            AuditLog(
+                actor="ops",
+                role="operator",
+                action="vex.create",
+                resource_type="vex_statement",
+                metadata_json={"status": "not_affected"},
+                created_at=now_utc(),
+            )
+        )
+        db.commit()
+
+        page = list_runbook_evidence(db=db, _=None)
+        by_check = {item["check"]: item for item in page.items}
+        assert by_check["sla_vex_check"]["status"] == "warn"
+        assert by_check["sla_vex_check"]["count"] == 0
 
 
 def test_artifact_provenance_reports_storage_digest_and_path_gaps() -> None:

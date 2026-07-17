@@ -1,3 +1,4 @@
+import secrets
 from dataclasses import dataclass
 
 from fastapi import Depends, Header
@@ -16,14 +17,31 @@ class Principal:
 ROLE_ORDER = {"viewer": 1, "operator": 2, "admin": 3}
 
 
+def _extract_bearer_token(authorization: str | None) -> str | None:
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[len("Bearer ") :]
+    return token or None
+
+
 def get_principal(
     authorization: str | None = Header(default=None),
     settings: Settings = Depends(get_settings),
 ) -> Principal:
-    expected = f"Bearer {settings.api_token}"
-    if not authorization or authorization != expected:
+    token = _extract_bearer_token(authorization)
+    if not token:
         raise problem(401, "Unauthorized", "Missing or invalid bearer token")
-    return Principal(actor="api-token", role=settings.api_default_role)
+
+    tokens = settings.parsed_api_tokens()
+    if tokens:
+        for candidate, (actor, role) in tokens.items():
+            if secrets.compare_digest(token, candidate):
+                return Principal(actor=actor, role=role)
+        raise problem(401, "Unauthorized", "Missing or invalid bearer token")
+
+    if secrets.compare_digest(token, settings.api_token):
+        return Principal(actor="api-token", role=settings.api_default_role)
+    raise problem(401, "Unauthorized", "Missing or invalid bearer token")
 
 
 def require_role(required: str):

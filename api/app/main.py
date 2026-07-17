@@ -1,5 +1,7 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from api.app.config import get_settings
 from api.app.errors import install_exception_handlers
 from api.app.routers import (
     ai_fix,
@@ -47,6 +49,13 @@ from api.app.routers import (
 
 app = FastAPI(title="Watchtower Maintenance API", version="0.1.0")
 install_exception_handlers(app)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_settings().cors_allowed_origin_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 api_prefix = "/v1"
 app.include_router(repositories.router, prefix=api_prefix)

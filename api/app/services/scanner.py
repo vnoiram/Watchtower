@@ -129,3 +129,76 @@ def normalize_trivy_results(payload: dict) -> list[NormalizedFinding]:
             )
     return findings
 
+
+def normalize_grype_results(payload: dict) -> list[NormalizedFinding]:
+    findings: list[NormalizedFinding] = []
+    for match in payload.get("matches", []) or []:
+        vulnerability = match.get("vulnerability") or {}
+        artifact = match.get("artifact") or {}
+        name = artifact.get("name") or "unknown"
+        version = artifact.get("version")
+        ecosystem = artifact.get("type")
+        fix_versions = (vulnerability.get("fix") or {}).get("versions") or []
+        findings.append(
+            NormalizedFinding(
+                source="grype",
+                vulnerability_id=vulnerability.get("id", "unknown"),
+                package_name=name,
+                package_version=version,
+                ecosystem=ecosystem,
+                purl=artifact.get("purl") or normalize_purl(ecosystem, name, version),
+                severity=normalize_severity(vulnerability.get("severity")),
+                fixed_version=fix_versions[0] if fix_versions else None,
+                title=vulnerability.get("description"),
+                references=tuple(vulnerability.get("urls") or ()),
+            )
+        )
+    return findings
+
+
+def normalize_gitleaks_results(payload: list | dict) -> list[dict]:
+    """Shape gitleaks leaks for scan.result_summary["secrets"], as read by api.app.routers.security."""
+    leaks = payload if isinstance(payload, list) else payload.get("leaks", []) or []
+    findings: list[dict] = []
+    for leak in leaks:
+        findings.append(
+            {
+                "type": "secret",
+                "rule_id": leak.get("RuleID"),
+                "severity": Severity.high.value,
+                "path": leak.get("File"),
+                "title": leak.get("Description") or leak.get("RuleID") or "secret detected",
+                "detail": f"{leak.get('File')}:{leak.get('StartLine')}" if leak.get("File") else None,
+                "commit": leak.get("Commit"),
+                "fingerprint": leak.get("Fingerprint"),
+            }
+        )
+    return findings
+
+
+_SEMGREP_SEVERITY = {
+    "error": Severity.high,
+    "warning": Severity.medium,
+    "info": Severity.info,
+}
+
+
+def normalize_semgrep_results(payload: dict) -> list[dict]:
+    """Shape semgrep results for scan.result_summary["sast"], as read by api.app.routers.security."""
+    findings: list[dict] = []
+    for result in payload.get("results", []) or []:
+        extra = result.get("extra") or {}
+        start_line = (result.get("start") or {}).get("line")
+        severity = _SEMGREP_SEVERITY.get((extra.get("severity") or "").lower(), Severity.unknown)
+        findings.append(
+            {
+                "type": "sast",
+                "rule_id": result.get("check_id"),
+                "severity": severity.value,
+                "path": result.get("path"),
+                "title": extra.get("message") or result.get("check_id") or "static analysis finding",
+                "detail": f"{result.get('path')}:{start_line}" if result.get("path") else extra.get("message"),
+            }
+        )
+    return findings
+

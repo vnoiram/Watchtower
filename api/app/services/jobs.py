@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -54,6 +54,10 @@ def mark_job_succeeded(job: Job) -> None:
     job.last_error = None
 
 
+def _retry_backoff_seconds(attempts: int) -> int:
+    return min(60 * 2**attempts, 3600)
+
+
 def mark_job_failed(job: Job, error: str) -> None:
     job.last_error = error
     if job.attempts >= job.max_attempts:
@@ -63,4 +67,11 @@ def mark_job_failed(job: Job, error: str) -> None:
         job.status = JobStatus.queued
         job.locked_by = None
         job.locked_at = None
+        job.run_after = datetime.now(timezone.utc) + timedelta(seconds=_retry_backoff_seconds(job.attempts))
+
+
+def mark_job_timed_out(job: Job, error: str) -> None:
+    job.status = JobStatus.timed_out
+    job.last_error = error
+    job.completed_at = datetime.now(timezone.utc)
 
