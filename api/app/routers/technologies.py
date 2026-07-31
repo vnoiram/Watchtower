@@ -31,7 +31,9 @@ def list_technologies(
         stmt = stmt.where(models.Technology.category == category)
     if name:
         stmt = stmt.where(models.Technology.name.ilike(f"%{name}%"))
-    stmt = stmt.order_by(models.Technology.detected_at.desc(), models.Technology.id.asc()).limit(min(limit, 100))
+    stmt = stmt.order_by(models.Technology.detected_at.desc(), models.Technology.id.asc()).limit(
+        min(limit, 100)
+    )
 
     items = []
     for technology, application, repository in db.execute(stmt):

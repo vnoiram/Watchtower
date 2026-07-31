@@ -73,7 +73,9 @@ def _latest_scans_by_application(
     scans = db.execute(
         select(models.Scan)
         .where(models.Scan.application_id.in_(application_ids))
-        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+        .order_by(
+            models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc()
+        )
     ).scalars()
     for scan in scans:
         latest_scans.setdefault(scan.application_id, scan)

@@ -21,7 +21,9 @@ def list_repository_sync(
     _: Principal = Depends(get_principal),
 ):
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-    stmt = select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc())
+    stmt = select(models.Repository).order_by(
+        models.Repository.owner.asc(), models.Repository.name.asc()
+    )
     if provider:
         stmt = stmt.where(models.Repository.provider == provider)
     if source_classification:
@@ -87,7 +89,9 @@ def list_import_failures(
     if provider:
         items = [item for item in items if item["provider"] == provider.value]
     if source_classification:
-        items = [item for item in items if item["source_classification"] == source_classification.value]
+        items = [
+            item for item in items if item["source_classification"] == source_classification.value
+        ]
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
@@ -103,7 +107,9 @@ def import_failure_items(db: Session) -> list[dict]:
         select(models.Job)
         .where(
             models.Job.job_type.in_([models.JobType.repository_sync, models.JobType.scan]),
-            models.Job.status.in_([models.JobStatus.failed, models.JobStatus.timed_out, models.JobStatus.cancelled]),
+            models.Job.status.in_(
+                [models.JobStatus.failed, models.JobStatus.timed_out, models.JobStatus.cancelled]
+            ),
         )
         .order_by(models.Job.created_at.desc(), models.Job.id.asc())
     )
@@ -139,20 +145,57 @@ def import_failure_items(db: Session) -> list[dict]:
 def repository_sync_lag_items(db: Session) -> list[dict]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     items = []
-    repositories = db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc()))
+    repositories = db.scalars(
+        select(models.Repository).order_by(
+            models.Repository.owner.asc(), models.Repository.name.asc()
+        )
+    )
     for repository in repositories:
         latest_scan = _latest_repository_scan(db, repository.id)
         context = (repository, latest_scan)
         if repository.last_synced_at is None:
-            items.append(_lag_item("never_synced", *context, detail="Repository has no sync timestamp"))
+            items.append(
+                _lag_item("never_synced", *context, detail="Repository has no sync timestamp")
+            )
         elif repository.last_synced_at < _matching_datetime(cutoff, repository.last_synced_at):
-            items.append(_lag_item("stale_sync", *context, detail="Repository sync is older than 30 days"))
-        if repository.pushed_at and repository.last_synced_at and repository.pushed_at > _matching_datetime(repository.last_synced_at, repository.pushed_at):
-            items.append(_lag_item("pushed_after_sync", *context, detail="Repository push is newer than last sync"))
-        if repository.pushed_at and latest_scan and repository.pushed_at > _matching_datetime(latest_scan.created_at, repository.pushed_at):
-            items.append(_lag_item("pushed_after_scan", *context, detail="Repository push is newer than latest scan"))
-        if repository.provider == models.RepositoryProvider.github and not repository.provider_repository_id:
-            items.append(_lag_item("missing_provider_repository_id", *context, detail="GitHub repository has no provider_repository_id"))
+            items.append(
+                _lag_item("stale_sync", *context, detail="Repository sync is older than 30 days")
+            )
+        if (
+            repository.pushed_at
+            and repository.last_synced_at
+            and repository.pushed_at
+            > _matching_datetime(repository.last_synced_at, repository.pushed_at)
+        ):
+            items.append(
+                _lag_item(
+                    "pushed_after_sync", *context, detail="Repository push is newer than last sync"
+                )
+            )
+        if (
+            repository.pushed_at
+            and latest_scan
+            and repository.pushed_at
+            > _matching_datetime(latest_scan.created_at, repository.pushed_at)
+        ):
+            items.append(
+                _lag_item(
+                    "pushed_after_scan",
+                    *context,
+                    detail="Repository push is newer than latest scan",
+                )
+            )
+        if (
+            repository.provider == models.RepositoryProvider.github
+            and not repository.provider_repository_id
+        ):
+            items.append(
+                _lag_item(
+                    "missing_provider_repository_id",
+                    *context,
+                    detail="GitHub repository has no provider_repository_id",
+                )
+            )
     return items
 
 
@@ -162,7 +205,13 @@ def _import_failure_type(error: str) -> str | None:
         return "rate_limit"
     if "timeout" in text or "timed out" in text:
         return "timeout"
-    if "auth" in text or "credential" in text or "permission" in text or "401" in text or "403" in text:
+    if (
+        "auth" in text
+        or "credential" in text
+        or "permission" in text
+        or "401" in text
+        or "403" in text
+    ):
         return "auth_failed"
     if "clone" in text or "git clone" in text:
         return "clone_failed"
@@ -173,7 +222,9 @@ def _latest_sync_jobs(db: Session) -> dict:
     jobs = db.execute(
         select(models.Job)
         .where(models.Job.job_type == models.JobType.repository_sync)
-        .order_by(models.Job.repository_id.asc(), models.Job.created_at.desc(), models.Job.id.desc())
+        .order_by(
+            models.Job.repository_id.asc(), models.Job.created_at.desc(), models.Job.id.desc()
+        )
     ).scalars()
     by_repository = {}
     for job in jobs:
@@ -182,13 +233,19 @@ def _latest_sync_jobs(db: Session) -> dict:
     return by_repository
 
 
-def _sync_reasons(repository: models.Repository, job: models.Job | None, cutoff: datetime) -> list[str]:
+def _sync_reasons(
+    repository: models.Repository, job: models.Job | None, cutoff: datetime
+) -> list[str]:
     reasons = []
     if repository.last_synced_at is None:
         reasons.append("never_synced")
     elif repository.last_synced_at < _matching_datetime(cutoff, repository.last_synced_at):
         reasons.append("stale_sync")
-    if job and job.status in {models.JobStatus.failed, models.JobStatus.cancelled, models.JobStatus.timed_out}:
+    if job and job.status in {
+        models.JobStatus.failed,
+        models.JobStatus.cancelled,
+        models.JobStatus.timed_out,
+    }:
         reasons.append("sync_job_failed")
     if repository.archived:
         reasons.append("archived")

@@ -76,7 +76,9 @@ def component_records_from_cyclonedx(payload: dict[str, Any]) -> list[ComponentR
         if not name:
             continue
         version = component.get("version")
-        purl = component.get("purl") or normalize_purl("generic", str(name), str(version) if version else None)
+        purl = component.get("purl") or normalize_purl(
+            "generic", str(name), str(version) if version else None
+        )
         ecosystem = component.get("type")
         records.append(
             ComponentRecord(

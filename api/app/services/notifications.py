@@ -33,7 +33,9 @@ class NotificationDeliveryTarget:
 def notification_targets(settings: Settings) -> list[NotificationDeliveryTarget]:
     targets: list[NotificationDeliveryTarget] = []
     if settings.slack_webhook_url:
-        targets.append(NotificationDeliveryTarget(channel="slack", webhook_url=settings.slack_webhook_url))
+        targets.append(
+            NotificationDeliveryTarget(channel="slack", webhook_url=settings.slack_webhook_url)
+        )
     if settings.discord_webhook_url:
         targets.append(
             NotificationDeliveryTarget(channel="discord", webhook_url=settings.discord_webhook_url)

@@ -26,7 +26,9 @@ def kpi_summary(
     findings = list(db.scalars(select(models.Finding)))
     notifications = list(db.scalars(select(models.Notification)))
     ai_fix_actions = list(
-        db.scalars(select(models.RemediationAction).where(models.RemediationAction.action_type == "ai_fix"))
+        db.scalars(
+            select(models.RemediationAction).where(models.RemediationAction.action_type == "ai_fix")
+        )
     )
     sbom_coverage = list_sbom_coverage(limit=100, db=db, _=None).items
     covered_apps = sum(1 for item in sbom_coverage if item["has_active_source_sbom"])
@@ -35,9 +37,13 @@ def kpi_summary(
         scan.application_id for scan in scans if _after_cutoff(scan.created_at, daily_cutoff)
     }
     failed_scans = [
-        scan for scan in scans if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out}
+        scan
+        for scan in scans
+        if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out}
     ]
-    sent_notifications = [notification for notification in notifications if notification.status == "sent"]
+    sent_notifications = [
+        notification for notification in notifications if notification.status == "sent"
+    ]
     failed_notifications = [
         notification for notification in notifications if notification.status == "failed"
     ]
@@ -114,10 +120,14 @@ def efficiency_kpis(
     _: Principal = Depends(get_principal),
 ):
     findings = list(db.scalars(select(models.Finding)))
-    notifications = list(db.scalars(select(models.Notification).where(models.Notification.status == "sent")))
+    notifications = list(
+        db.scalars(select(models.Notification).where(models.Notification.status == "sent"))
+    )
     actions = list(db.scalars(select(models.RemediationAction)))
     issue_actions = [
-        action for action in actions if action.action_type == "github_issue" and action.status in {"created", "closed"}
+        action
+        for action in actions
+        if action.action_type == "github_issue" and action.status in {"created", "closed"}
     ]
     auto_resolved = [
         finding
@@ -135,7 +145,9 @@ def efficiency_kpis(
         ),
         _metric(
             "mean_time_to_notify_hours",
-            _mean_hours([_finding_to_notification_hours(db, notification) for notification in notifications]),
+            _mean_hours(
+                [_finding_to_notification_hours(db, notification) for notification in notifications]
+            ),
             "hours",
             "Average time from finding creation to sent notification",
         ),
@@ -153,7 +165,16 @@ def efficiency_kpis(
         ),
         _metric(
             "auto_resolution_rate_percent",
-            _percent(len(auto_resolved), len([finding for finding in findings if finding.status == models.FindingStatus.resolved])),
+            _percent(
+                len(auto_resolved),
+                len(
+                    [
+                        finding
+                        for finding in findings
+                        if finding.status == models.FindingStatus.resolved
+                    ]
+                ),
+            ),
             "percent",
             "Resolved findings with successful remediation evidence",
         ),
@@ -173,9 +194,7 @@ def quality_kpis(
         finding for finding in findings if finding.status == models.FindingStatus.false_positive
     ]
     expired_vex = [
-        vex
-        for vex in vex_statements
-        if _before(vex.review_date, datetime.now(timezone.utc))
+        vex for vex in vex_statements if _before(vex.review_date, datetime.now(timezone.utc))
     ]
     failed_auto_merge = [
         action
@@ -184,7 +203,9 @@ def quality_kpis(
         or (action.metadata_json or {}).get("auto_merge_allowed") is False
     ]
     ci_observed = [action for action in actions if "ci_passed" in (action.metadata_json or {})]
-    ci_failed = [action for action in ci_observed if (action.metadata_json or {}).get("ci_passed") is False]
+    ci_failed = [
+        action for action in ci_observed if (action.metadata_json or {}).get("ci_passed") is False
+    ]
     reopen_count = reopen_risk_count(db)
     return [
         _metric(
@@ -226,19 +247,58 @@ def operational_load_kpis(
     _: Principal = Depends(get_principal),
 ):
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-    audit_logs = [log for log in db.scalars(select(models.AuditLog)) if _after_cutoff(log.created_at, cutoff)]
+    audit_logs = [
+        log for log in db.scalars(select(models.AuditLog)) if _after_cutoff(log.created_at, cutoff)
+    ]
     actions = list(db.scalars(select(models.RemediationAction)))
     manual_checks = sum(1 for log in audit_logs if _manual_action_reason(log))
-    manual_issues = sum(1 for log in audit_logs if log.action in {"finding.github_issue.enqueue", "github.issue.create"})
-    manual_dependency_updates = sum(1 for log in audit_logs if _manual_action_reason(log) == "manual_dependency_update")
-    open_findings = sum(1 for finding in db.scalars(select(models.Finding)) if finding.status == models.FindingStatus.open)
-    stale_prs = sum(1 for action in actions if _has_pr_signal(action) and _before(action.updated_at, cutoff))
+    manual_issues = sum(
+        1
+        for log in audit_logs
+        if log.action in {"finding.github_issue.enqueue", "github.issue.create"}
+    )
+    manual_dependency_updates = sum(
+        1 for log in audit_logs if _manual_action_reason(log) == "manual_dependency_update"
+    )
+    open_findings = sum(
+        1
+        for finding in db.scalars(select(models.Finding))
+        if finding.status == models.FindingStatus.open
+    )
+    stale_prs = sum(
+        1 for action in actions if _has_pr_signal(action) and _before(action.updated_at, cutoff)
+    )
     return [
-        _metric("monthly_manual_check_count", manual_checks, "count", "Manual review or operation audit logs in the last 30 days"),
-        _metric("manual_issue_creation_count", manual_issues, "count", "Manual issue creation audit logs in the last 30 days"),
-        _metric("manual_dependency_update_count", manual_dependency_updates, "count", "Manual dependency update audit logs in the last 30 days"),
-        _metric("unaddressed_finding_count", open_findings, "count", "Open findings awaiting remediation"),
-        _metric("long_stale_pr_count", stale_prs, "count", "PR-like remediation actions untouched for 30 days"),
+        _metric(
+            "monthly_manual_check_count",
+            manual_checks,
+            "count",
+            "Manual review or operation audit logs in the last 30 days",
+        ),
+        _metric(
+            "manual_issue_creation_count",
+            manual_issues,
+            "count",
+            "Manual issue creation audit logs in the last 30 days",
+        ),
+        _metric(
+            "manual_dependency_update_count",
+            manual_dependency_updates,
+            "count",
+            "Manual dependency update audit logs in the last 30 days",
+        ),
+        _metric(
+            "unaddressed_finding_count",
+            open_findings,
+            "count",
+            "Open findings awaiting remediation",
+        ),
+        _metric(
+            "long_stale_pr_count",
+            stale_prs,
+            "count",
+            "PR-like remediation actions untouched for 30 days",
+        ),
     ]
 
 
@@ -290,14 +350,20 @@ def list_efficiency_timeline(
 
 def scan_failure_rate_percent(db: Session) -> float:
     scans = list(db.scalars(select(models.Scan)))
-    failed = sum(1 for scan in scans if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out})
+    failed = sum(
+        1
+        for scan in scans
+        if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out}
+    )
     return _percent(failed, len(scans))
 
 
 def notification_failure_count(db: Session) -> int:
     return (
         db.scalar(
-            select(func.count()).select_from(models.Notification).where(models.Notification.status == "failed")
+            select(func.count())
+            .select_from(models.Notification)
+            .where(models.Notification.status == "failed")
         )
         or 0
     )
@@ -330,13 +396,15 @@ def mvp_target_compliance_items(db: Session) -> list[schemas.MvpTargetCompliance
         [
             scan
             for scan in scans
-            if scan.trigger_type == models.TriggerType.schedule and scan.application_id in application_ids
+            if scan.trigger_type == models.TriggerType.schedule
+            and scan.application_id in application_ids
         ]
     )
     successful_daily = sum(
         1
         for application_id, scan in latest_scheduled.items()
-        if scan.status == models.ScanStatus.succeeded and _after_cutoff(scan.created_at, daily_cutoff)
+        if scan.status == models.ScanStatus.succeeded
+        and _after_cutoff(scan.created_at, daily_cutoff)
     )
     fixable_findings = [
         finding
@@ -350,26 +418,77 @@ def mvp_target_compliance_items(db: Session) -> list[schemas.MvpTargetCompliance
         for action in actions
         if action.action_type in {"github_issue", "ai_fix"} or _has_pr_signal(action)
     }
-    remediation_actions = [action for action in actions if action.action_type in {"github_issue", "ai_fix"} or _has_pr_signal(action)]
+    remediation_actions = [
+        action
+        for action in actions
+        if action.action_type in {"github_issue", "ai_fix"} or _has_pr_signal(action)
+    ]
     rescanned_actions = [
         action
         for action in remediation_actions
-        if (action.metadata_json or {}).get("validation_scan_id") or (action.metadata_json or {}).get("validation_status") == "succeeded"
+        if (action.metadata_json or {}).get("validation_scan_id")
+        or (action.metadata_json or {}).get("validation_status") == "succeeded"
     ]
     exception_like = [
         finding
         for finding in findings
-        if finding.status in {models.FindingStatus.accepted_risk, models.FindingStatus.false_positive}
+        if finding.status
+        in {models.FindingStatus.accepted_risk, models.FindingStatus.false_positive}
     ]
     vex_finding_ids = set(db.scalars(select(models.VexStatement.finding_id)))
     timeless_exceptions = sum(1 for finding in exception_like if finding.id not in vex_finding_ids)
     return [
-        _target("repository_registration", _repository_count(db), 54, "count", at_least=True, detail="Registered repository count"),
-        _target("sbom_coverage_percent", _percent(len(active_sbom_app_ids & set(application_ids)), len(applications)), 90, "percent", at_least=True, detail="Active applications with active source SBOM"),
-        _target("daily_scan_success_percent", _percent(successful_daily, len(applications)), 95, "percent", at_least=True, detail="Active applications with successful scheduled scan in the last 24 hours"),
-        _target("auto_pr_creation_percent", _percent(len([finding for finding in fixable_findings if finding.id in action_finding_ids]), len(fixable_findings)), 70, "percent", at_least=True, detail="Fixable critical/high findings with Issue or PR evidence"),
-        _target("post_remediation_rescan_percent", _percent(len(rescanned_actions), len(remediation_actions)), 100, "percent", at_least=True, detail="Issue or PR remediation actions with validation rescan evidence"),
-        _target("timeless_exception_count", timeless_exceptions, 0, "count", at_least=False, detail="Exception-like findings without VEX review evidence"),
+        _target(
+            "repository_registration",
+            _repository_count(db),
+            54,
+            "count",
+            at_least=True,
+            detail="Registered repository count",
+        ),
+        _target(
+            "sbom_coverage_percent",
+            _percent(len(active_sbom_app_ids & set(application_ids)), len(applications)),
+            90,
+            "percent",
+            at_least=True,
+            detail="Active applications with active source SBOM",
+        ),
+        _target(
+            "daily_scan_success_percent",
+            _percent(successful_daily, len(applications)),
+            95,
+            "percent",
+            at_least=True,
+            detail="Active applications with successful scheduled scan in the last 24 hours",
+        ),
+        _target(
+            "auto_pr_creation_percent",
+            _percent(
+                len([finding for finding in fixable_findings if finding.id in action_finding_ids]),
+                len(fixable_findings),
+            ),
+            70,
+            "percent",
+            at_least=True,
+            detail="Fixable critical/high findings with Issue or PR evidence",
+        ),
+        _target(
+            "post_remediation_rescan_percent",
+            _percent(len(rescanned_actions), len(remediation_actions)),
+            100,
+            "percent",
+            at_least=True,
+            detail="Issue or PR remediation actions with validation rescan evidence",
+        ),
+        _target(
+            "timeless_exception_count",
+            timeless_exceptions,
+            0,
+            "count",
+            at_least=False,
+            detail="Exception-like findings without VEX review evidence",
+        ),
     ]
 
 
@@ -388,33 +507,113 @@ def kpi_evidence_items(db: Session) -> list[dict]:
     for application, repository in db.execute(
         select(models.Application, models.Repository)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
-        .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        .order_by(
+            models.Repository.owner.asc(),
+            models.Repository.name.asc(),
+            models.Application.name.asc(),
+        )
     ):
         has_sbom = application.id in active_sbom_app_ids
-        items.append(_kpi_evidence("sbom_coverage", "application", str(application.id), has_sbom, "covered" if has_sbom else "missing", application, repository, "Application active source SBOM coverage"))
+        items.append(
+            _kpi_evidence(
+                "sbom_coverage",
+                "application",
+                str(application.id),
+                has_sbom,
+                "covered" if has_sbom else "missing",
+                application,
+                repository,
+                "Application active source SBOM coverage",
+            )
+        )
         latest_scan = latest_scan_by_app.get(application.id)
         daily = latest_scan is not None and _after_cutoff(latest_scan.created_at, daily_cutoff)
-        items.append(_kpi_evidence("daily_scan_coverage", "application", str(application.id), daily, "covered" if daily else "missing", application, repository, "Application scanned in the last 24 hours"))
+        items.append(
+            _kpi_evidence(
+                "daily_scan_coverage",
+                "application",
+                str(application.id),
+                daily,
+                "covered" if daily else "missing",
+                application,
+                repository,
+                "Application scanned in the last 24 hours",
+            )
+        )
 
-    for notification in db.scalars(select(models.Notification).order_by(models.Notification.created_at.desc(), models.Notification.id.asc())):
+    for notification in db.scalars(
+        select(models.Notification).order_by(
+            models.Notification.created_at.desc(), models.Notification.id.asc()
+        )
+    ):
         finding, application, repository = _notification_context(db, notification)
         included = notification.status == "sent"
         if notification.status in {"sent", "failed"}:
-            items.append(_kpi_evidence("notification_success", "notification", str(notification.id), included, notification.status, application, repository, "Terminal notification delivery record"))
+            items.append(
+                _kpi_evidence(
+                    "notification_success",
+                    "notification",
+                    str(notification.id),
+                    included,
+                    notification.status,
+                    application,
+                    repository,
+                    "Terminal notification delivery record",
+                )
+            )
 
     for action, finding, application, repository in _action_context_rows(db):
         metadata = action.metadata_json or {}
         ai_success = action.action_type == "ai_fix" and (
-            action.status in {"succeeded", "merged", "closed"} or metadata.get("validation_status") == "succeeded"
+            action.status in {"succeeded", "merged", "closed"}
+            or metadata.get("validation_status") == "succeeded"
         )
         if action.action_type == "ai_fix":
-            items.append(_kpi_evidence("ai_fix_success", "remediation_action", str(action.id), ai_success, action.status, application, repository, "AI fix action success evidence"))
+            items.append(
+                _kpi_evidence(
+                    "ai_fix_success",
+                    "remediation_action",
+                    str(action.id),
+                    ai_success,
+                    action.status,
+                    application,
+                    repository,
+                    "AI fix action success evidence",
+                )
+            )
         if "ci_passed" in metadata:
             ci_success = metadata.get("ci_passed") is True
-            items.append(_kpi_evidence("pr_ci_success", "remediation_action", str(action.id), ci_success, "passed" if ci_success else "failed", application, repository, "PR CI result evidence"))
-        if finding.fixed_version and finding.severity in {models.Severity.critical, models.Severity.high}:
-            created = action.action_type in {"github_issue", "ai_fix"} or bool(action.url or action.branch)
-            items.append(_kpi_evidence("auto_pr_creation", "remediation_action", str(action.id), created, action.status, application, repository, "Fixable critical/high finding remediation action evidence"))
+            items.append(
+                _kpi_evidence(
+                    "pr_ci_success",
+                    "remediation_action",
+                    str(action.id),
+                    ci_success,
+                    "passed" if ci_success else "failed",
+                    application,
+                    repository,
+                    "PR CI result evidence",
+                )
+            )
+        if finding.fixed_version and finding.severity in {
+            models.Severity.critical,
+            models.Severity.high,
+        }:
+            created = action.action_type in {"github_issue", "ai_fix"} or bool(
+                action.url or action.branch
+            )
+            items.append(
+                _kpi_evidence(
+                    "auto_pr_creation",
+                    "remediation_action",
+                    str(action.id),
+                    created,
+                    action.status,
+                    application,
+                    repository,
+                    "Fixable critical/high finding remediation action evidence",
+                )
+            )
     return items
 
 
@@ -429,13 +628,27 @@ def efficiency_timeline_items(db: Session) -> list[dict]:
         .order_by(models.Finding.created_at.desc(), models.Finding.id.asc())
     )
     for finding, application, repository in rows:
-        first_scan = db.get(models.Scan, finding.first_seen_scan_id) if finding.first_seen_scan_id else None
+        first_scan = (
+            db.get(models.Scan, finding.first_seen_scan_id) if finding.first_seen_scan_id else None
+        )
         notification = notifications_by_finding.get(finding.id)
         action = actions_by_finding.get(finding.id)
         for metric, start_at, end_at, threshold in [
             ("mttd", first_scan.created_at if first_scan else None, finding.created_at, 24),
-            ("mttn", finding.created_at, notification.sent_at if notification else None, 4 if finding.severity == models.Severity.critical else 24),
-            ("mttr", finding.created_at, finding.resolved_at, 168 if finding.severity in {models.Severity.critical, models.Severity.high} else 720),
+            (
+                "mttn",
+                finding.created_at,
+                notification.sent_at if notification else None,
+                4 if finding.severity == models.Severity.critical else 24,
+            ),
+            (
+                "mttr",
+                finding.created_at,
+                finding.resolved_at,
+                168
+                if finding.severity in {models.Severity.critical, models.Severity.high}
+                else 720,
+            ),
         ]:
             duration = _hours_between(start_at, end_at) if start_at and end_at else None
             breached = duration is None or duration > threshold
@@ -456,7 +669,9 @@ def efficiency_timeline_items(db: Session) -> list[dict]:
                     resolved_at=finding.resolved_at,
                     duration_hours=duration,
                     breached=breached,
-                    detail="Timeline evidence is within threshold" if not breached else "Timeline evidence is missing or past threshold",
+                    detail="Timeline evidence is within threshold"
+                    if not breached
+                    else "Timeline evidence is missing or past threshold",
                 ).model_dump(mode="json")
             )
     return items
@@ -541,7 +756,9 @@ def _mean_hours(values: list[float | None]) -> float:
 
 def _latest_scan_by_application(scans: list[models.Scan]) -> dict:
     latest = {}
-    for scan in sorted(scans, key=lambda item: (_sort_datetime(item.created_at), item.id), reverse=True):
+    for scan in sorted(
+        scans, key=lambda item: (_sort_datetime(item.created_at), item.id), reverse=True
+    ):
         latest.setdefault(scan.application_id, scan)
     return latest
 
@@ -579,7 +796,9 @@ def _action_context_rows(db: Session):
 def _sent_notifications_by_finding(db: Session) -> dict[UUID, models.Notification]:
     notifications = {}
     for notification in db.scalars(
-        select(models.Notification).where(models.Notification.status == "sent").order_by(models.Notification.sent_at.asc())
+        select(models.Notification)
+        .where(models.Notification.status == "sent")
+        .order_by(models.Notification.sent_at.asc())
     ):
         finding, _, _ = _notification_context(db, notification)
         if finding:
@@ -589,7 +808,11 @@ def _sent_notifications_by_finding(db: Session) -> dict[UUID, models.Notificatio
 
 def _first_actions_by_finding(db: Session) -> dict[UUID, models.RemediationAction]:
     actions = {}
-    for action in db.scalars(select(models.RemediationAction).order_by(models.RemediationAction.created_at.asc(), models.RemediationAction.id.asc())):
+    for action in db.scalars(
+        select(models.RemediationAction).order_by(
+            models.RemediationAction.created_at.asc(), models.RemediationAction.id.asc()
+        )
+    ):
         actions.setdefault(action.finding_id, action)
     return actions
 
@@ -623,12 +846,17 @@ def _finding_to_resolution_hours(finding: models.Finding) -> float | None:
     return _hours_between(finding.created_at, finding.resolved_at)
 
 
-def _has_successful_action_after(actions: list[models.RemediationAction], finding: models.Finding) -> bool:
+def _has_successful_action_after(
+    actions: list[models.RemediationAction], finding: models.Finding
+) -> bool:
     for action in actions:
         metadata = action.metadata_json or {}
         if action.finding_id != finding.id:
             continue
-        if action.status in {"succeeded", "merged", "closed"} or metadata.get("validation_status") == "succeeded":
+        if (
+            action.status in {"succeeded", "merged", "closed"}
+            or metadata.get("validation_status") == "succeeded"
+        ):
             return True
     return False
 
@@ -636,7 +864,12 @@ def _has_successful_action_after(actions: list[models.RemediationAction], findin
 def _manual_action_reason(audit_log: models.AuditLog) -> str | None:
     metadata = audit_log.metadata_json or {}
     searchable = f"{audit_log.action} {metadata}".lower()
-    if audit_log.action in {"scan.create", "job.create", "repository.scan.enqueue", "finding.github_issue.enqueue"}:
+    if audit_log.action in {
+        "scan.create",
+        "job.create",
+        "repository.scan.enqueue",
+        "finding.github_issue.enqueue",
+    }:
         return "manual_operation"
     if "dependency" in searchable:
         return "manual_dependency_update"

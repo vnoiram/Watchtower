@@ -81,7 +81,9 @@ def audit_action_gap_count(db: Session) -> int:
 
 def audit_review_items(db: Session) -> list[dict]:
     items = []
-    stmt = select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())
+    stmt = select(models.AuditLog).order_by(
+        models.AuditLog.created_at.desc(), models.AuditLog.id.asc()
+    )
     for audit_log in db.scalars(stmt):
         review_reason = _audit_review_reason(audit_log)
         if not review_reason:
@@ -105,64 +107,205 @@ def audit_review_items(db: Session) -> list[dict]:
 def audit_action_coverage_items(db: Session) -> list[dict]:
     audit_logs = _audit_logs_by_resource(db)
     items = []
-    for repository in db.scalars(select(models.Repository).order_by(models.Repository.created_at.desc(), models.Repository.id.asc())):
-        items.extend(_audit_action_gap_for_record(audit_logs, "repository", str(repository.id), "repository.create", "missing_create_audit", repository.created_at))
-    for application in db.scalars(select(models.Application).order_by(models.Application.created_at.desc(), models.Application.id.asc())):
-        items.extend(_audit_action_gap_for_record(audit_logs, "application", str(application.id), "application.create", "missing_create_audit", application.created_at))
-    for scan in db.scalars(select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.asc())):
-        items.extend(_audit_action_gap_for_record(audit_logs, "scan", str(scan.id), "scan.create", "missing_create_audit", scan.created_at))
-    for job in db.scalars(select(models.Job).order_by(models.Job.created_at.desc(), models.Job.id.asc())):
-        items.extend(_audit_action_gap_for_record(audit_logs, "job", str(job.id), "job.create", "missing_create_audit", job.created_at))
+    for repository in db.scalars(
+        select(models.Repository).order_by(
+            models.Repository.created_at.desc(), models.Repository.id.asc()
+        )
+    ):
+        items.extend(
+            _audit_action_gap_for_record(
+                audit_logs,
+                "repository",
+                str(repository.id),
+                "repository.create",
+                "missing_create_audit",
+                repository.created_at,
+            )
+        )
+    for application in db.scalars(
+        select(models.Application).order_by(
+            models.Application.created_at.desc(), models.Application.id.asc()
+        )
+    ):
+        items.extend(
+            _audit_action_gap_for_record(
+                audit_logs,
+                "application",
+                str(application.id),
+                "application.create",
+                "missing_create_audit",
+                application.created_at,
+            )
+        )
+    for scan in db.scalars(
+        select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.asc())
+    ):
+        items.extend(
+            _audit_action_gap_for_record(
+                audit_logs,
+                "scan",
+                str(scan.id),
+                "scan.create",
+                "missing_create_audit",
+                scan.created_at,
+            )
+        )
+    for job in db.scalars(
+        select(models.Job).order_by(models.Job.created_at.desc(), models.Job.id.asc())
+    ):
+        items.extend(
+            _audit_action_gap_for_record(
+                audit_logs, "job", str(job.id), "job.create", "missing_create_audit", job.created_at
+            )
+        )
     for finding in db.scalars(
         select(models.Finding)
-        .where(models.Finding.status.in_([models.FindingStatus.accepted_risk, models.FindingStatus.false_positive, models.FindingStatus.resolved]))
+        .where(
+            models.Finding.status.in_(
+                [
+                    models.FindingStatus.accepted_risk,
+                    models.FindingStatus.false_positive,
+                    models.FindingStatus.resolved,
+                ]
+            )
+        )
         .order_by(models.Finding.updated_at.desc(), models.Finding.id.asc())
     ):
-        items.extend(_audit_action_gap_for_record(audit_logs, "finding", str(finding.id), "finding.review", "missing_review_audit", finding.updated_at))
-    for action in db.scalars(select(models.RemediationAction).order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc())):
-        items.extend(_audit_action_gap_for_record(audit_logs, "remediation_action", str(action.id), "remediation.action", "missing_update_audit", action.created_at))
-    for vex in db.scalars(select(models.VexStatement).order_by(models.VexStatement.created_at.desc(), models.VexStatement.id.asc())):
-        items.extend(_audit_action_gap_for_record(audit_logs, "vex", str(vex.id), "vex.create", "missing_review_audit", vex.created_at))
-    for notification in db.scalars(select(models.Notification).order_by(models.Notification.created_at.desc(), models.Notification.id.asc())):
-        items.extend(_audit_action_gap_for_record(audit_logs, "notification", str(notification.id), "notification.delivery", "missing_delivery_audit", notification.created_at))
+        items.extend(
+            _audit_action_gap_for_record(
+                audit_logs,
+                "finding",
+                str(finding.id),
+                "finding.review",
+                "missing_review_audit",
+                finding.updated_at,
+            )
+        )
+    for action in db.scalars(
+        select(models.RemediationAction).order_by(
+            models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()
+        )
+    ):
+        items.extend(
+            _audit_action_gap_for_record(
+                audit_logs,
+                "remediation_action",
+                str(action.id),
+                "remediation.action",
+                "missing_update_audit",
+                action.created_at,
+            )
+        )
+    for vex in db.scalars(
+        select(models.VexStatement).order_by(
+            models.VexStatement.created_at.desc(), models.VexStatement.id.asc()
+        )
+    ):
+        items.extend(
+            _audit_action_gap_for_record(
+                audit_logs, "vex", str(vex.id), "vex.create", "missing_review_audit", vex.created_at
+            )
+        )
+    for notification in db.scalars(
+        select(models.Notification).order_by(
+            models.Notification.created_at.desc(), models.Notification.id.asc()
+        )
+    ):
+        items.extend(
+            _audit_action_gap_for_record(
+                audit_logs,
+                "notification",
+                str(notification.id),
+                "notification.delivery",
+                "missing_delivery_audit",
+                notification.created_at,
+            )
+        )
     return items
 
 
 def audit_evidence_gap_items(db: Session) -> list[dict]:
     audit_logs = _audit_logs_by_resource(db)
     items = []
-    for vex in db.scalars(select(models.VexStatement).order_by(models.VexStatement.created_at.desc(), models.VexStatement.id.asc())):
-        items.extend(_audit_gap_for_record(audit_logs, "vex", str(vex.id), "vex.create", vex.created_at))
+    for vex in db.scalars(
+        select(models.VexStatement).order_by(
+            models.VexStatement.created_at.desc(), models.VexStatement.id.asc()
+        )
+    ):
+        items.extend(
+            _audit_gap_for_record(audit_logs, "vex", str(vex.id), "vex.create", vex.created_at)
+        )
     for finding in db.scalars(
         select(models.Finding)
-        .where(models.Finding.status.in_([models.FindingStatus.accepted_risk, models.FindingStatus.false_positive]))
+        .where(
+            models.Finding.status.in_(
+                [models.FindingStatus.accepted_risk, models.FindingStatus.false_positive]
+            )
+        )
         .order_by(models.Finding.updated_at.desc(), models.Finding.id.asc())
     ):
-        items.extend(_audit_gap_for_record(audit_logs, "finding", str(finding.id), "finding.review", finding.updated_at))
-    for action in db.scalars(select(models.RemediationAction).order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc())):
-        items.extend(_audit_gap_for_record(audit_logs, "remediation_action", str(action.id), "remediation.action", action.created_at))
+        items.extend(
+            _audit_gap_for_record(
+                audit_logs, "finding", str(finding.id), "finding.review", finding.updated_at
+            )
+        )
+    for action in db.scalars(
+        select(models.RemediationAction).order_by(
+            models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()
+        )
+    ):
+        items.extend(
+            _audit_gap_for_record(
+                audit_logs,
+                "remediation_action",
+                str(action.id),
+                "remediation.action",
+                action.created_at,
+            )
+        )
     for notification in db.scalars(
         select(models.Notification)
         .where(models.Notification.status == "failed")
         .order_by(models.Notification.created_at.desc(), models.Notification.id.asc())
     ):
-        items.extend(_audit_gap_for_record(audit_logs, "notification", str(notification.id), "notification.delivery", notification.created_at))
+        items.extend(
+            _audit_gap_for_record(
+                audit_logs,
+                "notification",
+                str(notification.id),
+                "notification.delivery",
+                notification.created_at,
+            )
+        )
     for scan in db.scalars(
         select(models.Scan)
         .where(models.Scan.trigger_type == models.TriggerType.manual)
         .order_by(models.Scan.created_at.desc(), models.Scan.id.asc())
     ):
-        items.extend(_audit_gap_for_record(audit_logs, "scan", str(scan.id), "scan.create", scan.created_at))
-    for job in db.scalars(select(models.Job).order_by(models.Job.created_at.desc(), models.Job.id.asc())):
+        items.extend(
+            _audit_gap_for_record(audit_logs, "scan", str(scan.id), "scan.create", scan.created_at)
+        )
+    for job in db.scalars(
+        select(models.Job).order_by(models.Job.created_at.desc(), models.Job.id.asc())
+    ):
         payload = job.payload or {}
-        if payload.get("manual") or job.job_type in {models.JobType.repository_sync, models.JobType.scan}:
-            items.extend(_audit_gap_for_record(audit_logs, "job", str(job.id), "job.create", job.created_at))
+        if payload.get("manual") or job.job_type in {
+            models.JobType.repository_sync,
+            models.JobType.scan,
+        }:
+            items.extend(
+                _audit_gap_for_record(audit_logs, "job", str(job.id), "job.create", job.created_at)
+            )
     return items
 
 
 def _audit_logs_by_resource(db: Session) -> dict[tuple[str, str], list[models.AuditLog]]:
     logs: dict[tuple[str, str], list[models.AuditLog]] = {}
-    for audit_log in db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())):
+    for audit_log in db.scalars(
+        select(models.AuditLog).order_by(
+            models.AuditLog.created_at.desc(), models.AuditLog.id.asc()
+        )
+    ):
         if audit_log.resource_id is None:
             continue
         logs.setdefault((audit_log.resource_type, audit_log.resource_id), []).append(audit_log)

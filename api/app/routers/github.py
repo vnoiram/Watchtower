@@ -25,7 +25,11 @@ async def github_webhook(
         raise problem(500, "GitHub webhook secret is not configured")
     if not verify_webhook_signature(settings.github_webhook_secret, body, x_hub_signature_256):
         raise problem(401, "Invalid webhook signature")
-    job = enqueue_job(db, models.JobType.repository_sync, payload={"event": x_github_event, "body": body.decode("utf-8")})
+    job = enqueue_job(
+        db,
+        models.JobType.repository_sync,
+        payload={"event": x_github_event, "body": body.decode("utf-8")},
+    )
     db.commit()
     db.refresh(job)
     return job
@@ -41,4 +45,3 @@ def enqueue_github_sync(
     db.commit()
     db.refresh(job)
     return job
-

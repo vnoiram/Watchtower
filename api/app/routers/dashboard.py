@@ -11,10 +11,20 @@ from api.app.deps import Principal, get_principal
 from api.app.routers.audit import audit_action_gap_count
 from api.app.routers.auto_merge import automation_guardrail_count
 from api.app.routers.artifacts import artifact_provenance_gap_count, container_coverage_count
-from api.app.routers.application_detection import application_input_coverage_count, container_input_coverage_count
+from api.app.routers.application_detection import (
+    application_input_coverage_count,
+    container_input_coverage_count,
+)
 from api.app.routers.components import dependency_relationship_gap_count
-from api.app.routers.governance import exposure_review_count, owner_handoff_gap_count, quarterly_review_count
-from api.app.routers.integrations import github_integration_issue_count, github_permission_issue_count
+from api.app.routers.governance import (
+    exposure_review_count,
+    owner_handoff_gap_count,
+    quarterly_review_count,
+)
+from api.app.routers.integrations import (
+    github_integration_issue_count,
+    github_permission_issue_count,
+)
 from api.app.routers.isolated_lane import (
     count_isolated_applications,
     isolated_safeguard_count,
@@ -22,9 +32,21 @@ from api.app.routers.isolated_lane import (
 )
 from api.app.routers.job_health import job_health_reason
 from api.app.routers.jobs import job_concurrency_risk_count, job_retry_gap_count
-from api.app.routers.kpis import mvp_target_breach_count, notification_failure_count, scan_failure_rate_percent
-from api.app.routers.notifications import notification_retry_gap_count, notification_slo_breach_count
-from api.app.routers.findings import critical_high_triage_gap_count, finding_traceability_gap_count, medium_review_count, risk_score_gap_count
+from api.app.routers.kpis import (
+    mvp_target_breach_count,
+    notification_failure_count,
+    scan_failure_rate_percent,
+)
+from api.app.routers.notifications import (
+    notification_retry_gap_count,
+    notification_slo_breach_count,
+)
+from api.app.routers.findings import (
+    critical_high_triage_gap_count,
+    finding_traceability_gap_count,
+    medium_review_count,
+    risk_score_gap_count,
+)
 from api.app.routers.operations import (
     completion_readiness_gap_count,
     e2e_evidence_gap_count,
@@ -91,7 +113,11 @@ from api.app.routers.scans import (
     scan_freshness_gap_count,
     scan_result_consistency_gap_count,
 )
-from api.app.routers.scanners import scanner_database_freshness_count, scanner_execution_gap_count, scanner_tool_coverage_gap_count
+from api.app.routers.scanners import (
+    scanner_database_freshness_count,
+    scanner_execution_gap_count,
+    scanner_tool_coverage_gap_count,
+)
 from api.app.routers.scheduled_scan_coverage import missing_scheduled_scan_count
 from api.app.routers.security import (
     auth_deployment_gap_count,
@@ -103,7 +129,12 @@ from api.app.routers.security import (
 )
 from api.app.routers.sla import count_sla_breached_findings
 from api.app.routers.sboms import sbom_normalization_quality_count
-from api.app.routers.storage import retention_execution_gap_count, retention_review_count, storage_encryption_count, storage_pressure_count
+from api.app.routers.storage import (
+    retention_execution_gap_count,
+    retention_review_count,
+    storage_encryption_count,
+    storage_pressure_count,
+)
 from api.app.routers.vulnerabilities import (
     vulnerability_enrichment_gap_count,
     vulnerability_provenance_gap_count,
@@ -124,38 +155,88 @@ def dashboard_summary(
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     repositories = db.scalar(select(func.count()).select_from(models.Repository)) or 0
     applications = db.scalar(select(func.count()).select_from(models.Application)) or 0
-    active_applications = db.scalar(
-        select(func.count()).select_from(models.Application).where(models.Application.lifecycle != models.Lifecycle.archived)
-    ) or 0
-    open_critical = db.scalar(select(func.count()).select_from(models.Finding).where(models.Finding.status == models.FindingStatus.open, models.Finding.severity == models.Severity.critical)) or 0
-    open_high = db.scalar(select(func.count()).select_from(models.Finding).where(models.Finding.status == models.FindingStatus.open, models.Finding.severity == models.Severity.high)) or 0
-    failed_jobs = db.scalar(select(func.count()).select_from(models.Job).where(models.Job.status == models.JobStatus.failed)) or 0
-    expired_vex = db.scalar(select(func.count()).select_from(models.VexStatement).where(models.VexStatement.review_date < datetime.now(timezone.utc))) or 0
-    stale_scans = db.scalar(
-        select(func.count()).select_from(models.Application).where(
-            models.Application.lifecycle != models.Lifecycle.archived,
-            ~models.Application.scans.any(models.Scan.created_at >= cutoff),
+    active_applications = (
+        db.scalar(
+            select(func.count())
+            .select_from(models.Application)
+            .where(models.Application.lifecycle != models.Lifecycle.archived)
         )
-    ) or 0
+        or 0
+    )
+    open_critical = (
+        db.scalar(
+            select(func.count())
+            .select_from(models.Finding)
+            .where(
+                models.Finding.status == models.FindingStatus.open,
+                models.Finding.severity == models.Severity.critical,
+            )
+        )
+        or 0
+    )
+    open_high = (
+        db.scalar(
+            select(func.count())
+            .select_from(models.Finding)
+            .where(
+                models.Finding.status == models.FindingStatus.open,
+                models.Finding.severity == models.Severity.high,
+            )
+        )
+        or 0
+    )
+    failed_jobs = (
+        db.scalar(
+            select(func.count())
+            .select_from(models.Job)
+            .where(models.Job.status == models.JobStatus.failed)
+        )
+        or 0
+    )
+    expired_vex = (
+        db.scalar(
+            select(func.count())
+            .select_from(models.VexStatement)
+            .where(models.VexStatement.review_date < datetime.now(timezone.utc))
+        )
+        or 0
+    )
+    stale_scans = (
+        db.scalar(
+            select(func.count())
+            .select_from(models.Application)
+            .where(
+                models.Application.lifecycle != models.Lifecycle.archived,
+                ~models.Application.scans.any(models.Scan.created_at >= cutoff),
+            )
+        )
+        or 0
+    )
     missing_active_sbom = (
         db.scalar(
-            select(func.count()).select_from(models.Application).where(
+            select(func.count())
+            .select_from(models.Application)
+            .where(
                 models.Application.lifecycle != models.Lifecycle.archived,
                 ~models.Application.id.in_(
                     select(models.Sbom.application_id).where(
                         models.Sbom.active.is_(True),
                         models.Sbom.sbom_kind == "source",
                     )
-                )
+                ),
             )
         )
         or 0
     )
     sbom_coverage_percent = (
-        round(((active_applications - missing_active_sbom) / active_applications) * 100, 1) if active_applications else 0.0
+        round(((active_applications - missing_active_sbom) / active_applications) * 100, 1)
+        if active_applications
+        else 0.0
     )
     now = datetime.now(timezone.utc)
-    unhealthy_jobs = sum(1 for job in db.execute(select(models.Job)).scalars() if job_health_reason(job, now))
+    unhealthy_jobs = sum(
+        1 for job in db.execute(select(models.Job)).scalars() if job_health_reason(job, now)
+    )
     sla_breached_findings = count_sla_breached_findings(db, now)
     isolated_applications = count_isolated_applications(db)
     scan_failure_rate = scan_failure_rate_percent(db)

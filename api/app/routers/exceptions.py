@@ -22,7 +22,11 @@ def list_exceptions(
 ):
     now = datetime.now(timezone.utc)
     items = []
-    if exception_type in {None, models.FindingStatus.accepted_risk.value, models.FindingStatus.false_positive.value}:
+    if exception_type in {
+        None,
+        models.FindingStatus.accepted_risk.value,
+        models.FindingStatus.false_positive.value,
+    }:
         items.extend(_finding_exceptions(db, severity, exception_type, expired))
     if exception_type in {None, "vex"}:
         items.extend(_vex_exceptions(db, severity, expired, now))

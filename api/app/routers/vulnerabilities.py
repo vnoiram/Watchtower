@@ -21,7 +21,9 @@ def list_vulnerabilities(
     _: Principal = Depends(get_principal),
 ):
     open_findings = func.count(distinct(models.Finding.id)).label("open_finding_count")
-    affected_apps = func.count(distinct(models.Finding.application_id)).label("affected_application_count")
+    affected_apps = func.count(distinct(models.Finding.application_id)).label(
+        "affected_application_count"
+    )
     stmt = (
         select(models.Vulnerability, open_findings, affected_apps)
         .outerjoin(
@@ -35,7 +37,9 @@ def list_vulnerabilities(
         stmt = stmt.where(models.Vulnerability.external_id.ilike(f"%{external_id}%"))
     if severity:
         stmt = stmt.where(models.Vulnerability.severity == severity)
-    stmt = stmt.order_by(open_findings.desc(), models.Vulnerability.external_id.asc()).limit(min(limit, 100))
+    stmt = stmt.order_by(open_findings.desc(), models.Vulnerability.external_id.asc()).limit(
+        min(limit, 100)
+    )
 
     items = []
     for vulnerability, open_finding_count, affected_application_count in db.execute(stmt):
@@ -65,7 +69,13 @@ def list_vulnerability_impact(
     _: Principal = Depends(get_principal),
 ):
     stmt = (
-        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
@@ -192,20 +202,57 @@ def vulnerability_source_provenance_items(db: Session) -> list[dict]:
     }
     latest_scan_by_vulnerability = _latest_scan_by_vulnerability(db)
     items = []
-    for vulnerability in db.scalars(select(models.Vulnerability).order_by(models.Vulnerability.severity.asc(), models.Vulnerability.external_id.asc())):
+    for vulnerability in db.scalars(
+        select(models.Vulnerability).order_by(
+            models.Vulnerability.severity.asc(), models.Vulnerability.external_id.asc()
+        )
+    ):
         evidence = _vulnerability_evidence_text(vulnerability)
-        common = (vulnerability, int(affected_counts.get(vulnerability.id, 0)), _has_token(evidence, {"raw", "storage", "artifact", "object"}))
+        common = (
+            vulnerability,
+            int(affected_counts.get(vulnerability.id, 0)),
+            _has_token(evidence, {"raw", "storage", "artifact", "object"}),
+        )
         if not vulnerability.references:
-            items.append(_source_provenance_item("missing_reference", *common, "Vulnerability has no reference URLs"))
+            items.append(
+                _source_provenance_item(
+                    "missing_reference", *common, "Vulnerability has no reference URLs"
+                )
+            )
         if not vulnerability.published_at:
-            items.append(_source_provenance_item("missing_published_at", *common, "Vulnerability has no published timestamp"))
+            items.append(
+                _source_provenance_item(
+                    "missing_published_at", *common, "Vulnerability has no published timestamp"
+                )
+            )
         if not vulnerability.modified_at:
-            items.append(_source_provenance_item("missing_modified_at", *common, "Vulnerability has no modified timestamp"))
+            items.append(
+                _source_provenance_item(
+                    "missing_modified_at", *common, "Vulnerability has no modified timestamp"
+                )
+            )
         if not common[2]:
-            items.append(_source_provenance_item("missing_raw_data_location", *common, "Vulnerability has no raw source storage evidence"))
+            items.append(
+                _source_provenance_item(
+                    "missing_raw_data_location",
+                    *common,
+                    "Vulnerability has no raw source storage evidence",
+                )
+            )
         latest_scan = latest_scan_by_vulnerability.get(vulnerability.id)
-        if vulnerability.modified_at and latest_scan and vulnerability.modified_at > _matching_datetime(latest_scan.created_at, vulnerability.modified_at):
-            items.append(_source_provenance_item("stale_reevaluation", *common, "Vulnerability was modified after latest related scan"))
+        if (
+            vulnerability.modified_at
+            and latest_scan
+            and vulnerability.modified_at
+            > _matching_datetime(latest_scan.created_at, vulnerability.modified_at)
+        ):
+            items.append(
+                _source_provenance_item(
+                    "stale_reevaluation",
+                    *common,
+                    "Vulnerability was modified after latest related scan",
+                )
+            )
     return items
 
 
@@ -219,24 +266,48 @@ def vulnerability_enrichment_coverage_items(db: Session) -> list[dict]:
         )
     }
     affected_context = _first_finding_context_by_vulnerability(db)
-    stmt = select(models.Vulnerability).order_by(models.Vulnerability.severity.asc(), models.Vulnerability.external_id.asc())
+    stmt = select(models.Vulnerability).order_by(
+        models.Vulnerability.severity.asc(), models.Vulnerability.external_id.asc()
+    )
     items = []
     for vulnerability in db.scalars(stmt):
         evidence = _vulnerability_evidence_text(vulnerability)
         context = affected_context.get(vulnerability.id)
         common = (vulnerability, int(affected_counts.get(vulnerability.id, 0)), context)
         if vulnerability.cvss_score is None:
-            items.append(_enrichment_item("missing_cvss", *common, "Vulnerability has no CVSS score"))
+            items.append(
+                _enrichment_item("missing_cvss", *common, "Vulnerability has no CVSS score")
+            )
         if not _has_token(evidence, {"epss"}):
-            items.append(_enrichment_item("missing_epss", *common, "Vulnerability has no EPSS evidence"))
+            items.append(
+                _enrichment_item("missing_epss", *common, "Vulnerability has no EPSS evidence")
+            )
         if not _has_token(evidence, {"kev", "cisa"}):
-            items.append(_enrichment_item("missing_kev", *common, "Vulnerability has no CISA KEV evidence"))
+            items.append(
+                _enrichment_item("missing_kev", *common, "Vulnerability has no CISA KEV evidence")
+            )
         if not _has_token(evidence, {"exploit", "poc", "proof-of-concept"}):
-            items.append(_enrichment_item("missing_exploit_availability", *common, "Vulnerability has no exploit availability evidence"))
+            items.append(
+                _enrichment_item(
+                    "missing_exploit_availability",
+                    *common,
+                    "Vulnerability has no exploit availability evidence",
+                )
+            )
         if not _has_token(evidence, {"raw", "storage", "artifact", "object"}):
-            items.append(_enrichment_item("missing_raw_data_location", *common, "Vulnerability has no raw data storage evidence"))
+            items.append(
+                _enrichment_item(
+                    "missing_raw_data_location",
+                    *common,
+                    "Vulnerability has no raw data storage evidence",
+                )
+            )
         if not vulnerability.references:
-            items.append(_enrichment_item("missing_references", *common, "Vulnerability has no reference URLs"))
+            items.append(
+                _enrichment_item(
+                    "missing_references", *common, "Vulnerability has no reference URLs"
+                )
+            )
     return items
 
 
@@ -277,35 +348,94 @@ def _latest_scan_by_vulnerability(db: Session) -> dict[UUID, models.Scan]:
 def vulnerability_reevaluation_coverage_items(db: Session) -> list[dict]:
     stale_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     stmt = (
-        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
         .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
-        .where(models.Finding.status.in_([models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress]))
+        .where(
+            models.Finding.status.in_(
+                [
+                    models.FindingStatus.open,
+                    models.FindingStatus.triaged,
+                    models.FindingStatus.in_progress,
+                ]
+            )
+        )
         .order_by(models.Finding.updated_at.desc(), models.Finding.id.asc())
     )
     rows = list(db.execute(stmt))
     application_ids = [application.id for _, application, _, _, _ in rows]
     latest_scans = _latest_scans_by_application(db, application_ids)
-    scan_ids = {finding.last_seen_scan_id for finding, _, _, _, _ in rows if finding.last_seen_scan_id is not None}
-    last_seen_scans = {scan.id: scan for scan in db.scalars(select(models.Scan).where(models.Scan.id.in_(scan_ids)))} if scan_ids else {}
+    scan_ids = {
+        finding.last_seen_scan_id
+        for finding, _, _, _, _ in rows
+        if finding.last_seen_scan_id is not None
+    }
+    last_seen_scans = (
+        {
+            scan.id: scan
+            for scan in db.scalars(select(models.Scan).where(models.Scan.id.in_(scan_ids)))
+        }
+        if scan_ids
+        else {}
+    )
     items = []
     for finding, application, repository, component, vulnerability in rows:
         latest_scan = latest_scans.get(application.id)
         last_seen_scan = last_seen_scans.get(finding.last_seen_scan_id)
-        context = (finding, application, repository, component, vulnerability, latest_scan, last_seen_scan)
+        context = (
+            finding,
+            application,
+            repository,
+            component,
+            vulnerability,
+            latest_scan,
+            last_seen_scan,
+        )
         if latest_scan is None:
-            items.append(_reevaluation_item("missing_scan_evidence", *context, "Finding has no application scan evidence"))
+            items.append(
+                _reevaluation_item(
+                    "missing_scan_evidence", *context, "Finding has no application scan evidence"
+                )
+            )
             continue
         if finding.last_seen_scan_id is None:
-            items.append(_reevaluation_item("missing_last_seen_scan", *context, "Finding has no last-seen scan evidence"))
+            items.append(
+                _reevaluation_item(
+                    "missing_last_seen_scan", *context, "Finding has no last-seen scan evidence"
+                )
+            )
         elif latest_scan.id != finding.last_seen_scan_id:
-            items.append(_reevaluation_item("stale_last_seen_scan", *context, "Finding was not observed in the latest scan"))
-        if vulnerability.modified_at and last_seen_scan and vulnerability.modified_at > last_seen_scan.created_at:
-            items.append(_reevaluation_item("vulnerability_updated_after_scan", *context, "Vulnerability metadata changed after last finding scan"))
+            items.append(
+                _reevaluation_item(
+                    "stale_last_seen_scan", *context, "Finding was not observed in the latest scan"
+                )
+            )
+        if (
+            vulnerability.modified_at
+            and last_seen_scan
+            and vulnerability.modified_at > last_seen_scan.created_at
+        ):
+            items.append(
+                _reevaluation_item(
+                    "vulnerability_updated_after_scan",
+                    *context,
+                    "Vulnerability metadata changed after last finding scan",
+                )
+            )
         if latest_scan.created_at < _matching_datetime(stale_cutoff, latest_scan.created_at):
-            items.append(_reevaluation_item("stale_vulnerability_scan", *context, "Latest scan is older than 30 days"))
+            items.append(
+                _reevaluation_item(
+                    "stale_vulnerability_scan", *context, "Latest scan is older than 30 days"
+                )
+            )
     return items
 
 
@@ -316,7 +446,11 @@ def _first_finding_context_by_vulnerability(
         select(models.Finding, models.Application, models.Repository)
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
-        .order_by(models.Finding.risk_score.desc(), models.Finding.created_at.asc(), models.Finding.id.asc())
+        .order_by(
+            models.Finding.risk_score.desc(),
+            models.Finding.created_at.asc(),
+            models.Finding.id.asc(),
+        )
     )
     contexts = {}
     for finding, application, repository in db.execute(stmt):
@@ -337,7 +471,9 @@ def _vulnerability_evidence_text(vulnerability: models.Vulnerability) -> str:
 
 def _flatten_text(value) -> str:
     if isinstance(value, dict):
-        return " ".join([str(key).lower() for key in value] + [_flatten_text(item) for item in value.values()])
+        return " ".join(
+            [str(key).lower() for key in value] + [_flatten_text(item) for item in value.values()]
+        )
     if isinstance(value, list | tuple | set):
         return " ".join(_flatten_text(item) for item in value)
     return str(value or "").lower()
@@ -380,13 +516,17 @@ def _enrichment_item(
     ).model_dump(mode="json")
 
 
-def _latest_scans_by_application(db: Session, application_ids: list[UUID]) -> dict[UUID, models.Scan]:
+def _latest_scans_by_application(
+    db: Session, application_ids: list[UUID]
+) -> dict[UUID, models.Scan]:
     if not application_ids:
         return {}
     scans = db.scalars(
         select(models.Scan)
         .where(models.Scan.application_id.in_(application_ids))
-        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+        .order_by(
+            models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc()
+        )
     )
     by_application = {}
     for scan in scans:

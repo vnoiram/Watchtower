@@ -32,7 +32,10 @@ def list_scanner_versions(
 
 def scanner_version_items(db: Session) -> list[dict]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-    groups: dict[tuple[str | None, str | None], list[tuple[models.Scan, models.Application, models.Repository]]] = {}
+    groups: dict[
+        tuple[str | None, str | None],
+        list[tuple[models.Scan, models.Application, models.Repository]],
+    ] = {}
     rows = db.execute(
         select(models.Scan, models.Application, models.Repository)
         .join(models.Application, models.Scan.application_id == models.Application.id)
@@ -44,7 +47,9 @@ def scanner_version_items(db: Session) -> list[dict]:
 
     items = []
     for (tool, tool_version), scans in groups.items():
-        latest_scan, application, repository = max(scans, key=lambda row: (row[0].created_at, str(row[0].id)))
+        latest_scan, application, repository = max(
+            scans, key=lambda row: (row[0].created_at, str(row[0].id))
+        )
         items.append(
             schemas.ScannerVersionOut(
                 tool=tool,
@@ -62,7 +67,9 @@ def scanner_version_items(db: Session) -> list[dict]:
                 stale=_before(latest_scan.created_at, cutoff),
             ).model_dump(mode="json")
         )
-    return sorted(items, key=lambda item: (not item["missing_version"], not item["stale"], item["tool"] or ""))
+    return sorted(
+        items, key=lambda item: (not item["missing_version"], not item["stale"], item["tool"] or "")
+    )
 
 
 def _before(value: datetime, reference: datetime) -> bool:

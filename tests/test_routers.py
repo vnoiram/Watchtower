@@ -45,7 +45,11 @@ from api.app.routers.application_detection import (
 )
 from api.app.routers.applications import list_applications
 from api.app.routers.ai_fix import list_ai_fix_actions, list_ai_fix_candidates
-from api.app.routers.audit import list_audit_action_coverage, list_audit_evidence_gaps, list_audit_review
+from api.app.routers.audit import (
+    list_audit_action_coverage,
+    list_audit_evidence_gaps,
+    list_audit_review,
+)
 from api.app.routers.artifacts import (
     list_artifact_provenance,
     list_artifact_sbom_coverage,
@@ -68,9 +72,19 @@ from api.app.routers.components import (
 )
 from api.app.routers.dashboard import dashboard_summary
 from api.app.routers.exceptions import list_exceptions
-from api.app.routers.findings import list_critical_high_triage, list_finding_evidence_gaps, list_findings, list_finding_lifecycle_review
+from api.app.routers.findings import (
+    list_critical_high_triage,
+    list_finding_evidence_gaps,
+    list_findings,
+    list_finding_lifecycle_review,
+)
 from api.app.routers.findings import enqueue_github_issue as enqueue_github_issue_endpoint
-from api.app.routers.findings import list_finding_traceability, list_medium_review, list_resolution_candidates, list_risk_score_explanations
+from api.app.routers.findings import (
+    list_finding_traceability,
+    list_medium_review,
+    list_resolution_candidates,
+    list_risk_score_explanations,
+)
 from api.app.routers.governance import (
     list_auto_merge_scope,
     list_exposure_review,
@@ -80,10 +94,23 @@ from api.app.routers.governance import (
     list_runtime_eol,
     quarterly_review,
 )
-from api.app.routers.integrations import github_integration_health, list_github_permissions, list_webhook_intake
-from api.app.routers.isolated_lane import list_isolated_lane, list_isolated_safeguards, list_isolated_scan_health
+from api.app.routers.integrations import (
+    github_integration_health,
+    list_github_permissions,
+    list_webhook_intake,
+)
+from api.app.routers.isolated_lane import (
+    list_isolated_lane,
+    list_isolated_safeguards,
+    list_isolated_scan_health,
+)
 from api.app.routers.job_health import list_job_health
-from api.app.routers.jobs import list_job_backlog, list_job_concurrency_risks, list_job_retry_posture, list_retry_candidates
+from api.app.routers.jobs import (
+    list_job_backlog,
+    list_job_concurrency_risks,
+    list_job_retry_posture,
+    list_retry_candidates,
+)
 from api.app.routers.kpis import (
     efficiency_kpis,
     kpi_summary,
@@ -135,7 +162,13 @@ from api.app.routers.operations import (
     worker_posture,
     weekly_review,
 )
-from api.app.routers.quality import list_duplicate_review, list_metadata_completeness, list_orphan_evidence, list_reopen_risk, list_state_consistency
+from api.app.routers.quality import (
+    list_duplicate_review,
+    list_metadata_completeness,
+    list_orphan_evidence,
+    list_reopen_risk,
+    list_state_consistency,
+)
 from api.app.routers.quality import list_false_positive_review
 from api.app.routers.remediation import (
     list_auto_resolution_evidence,
@@ -191,7 +224,12 @@ from api.app.routers.scans import (
     list_scan_format_compliance,
 )
 from api.app.routers.scanner_inventory import list_scanner_inventory
-from api.app.routers.scanners import list_scanner_database_freshness, list_scanner_execution_matrix, list_scanner_failures, list_scanner_tool_coverage
+from api.app.routers.scanners import (
+    list_scanner_database_freshness,
+    list_scanner_execution_matrix,
+    list_scanner_failures,
+    list_scanner_tool_coverage,
+)
 from api.app.routers.scanner_versions import list_scanner_versions
 from api.app.routers.scheduled_scan_coverage import list_scheduled_scan_coverage
 from api.app.routers.security import (
@@ -209,7 +247,13 @@ from api.app.routers.security import (
 from api.app.routers.sbom_coverage import list_sbom_coverage
 from api.app.routers.sboms import list_sbom_normalization_quality, list_sboms
 from api.app.routers.sla import list_sla_findings
-from api.app.routers.storage import list_retention_execution, list_storage_cleanup_candidates, retention_review, storage_encryption_posture, storage_pressure
+from api.app.routers.storage import (
+    list_retention_execution,
+    list_storage_cleanup_candidates,
+    retention_review,
+    storage_encryption_posture,
+    storage_pressure,
+)
 from api.app.routers.technologies import list_technologies
 from api.app.routers.vex import list_vex_invalidation_candidates, list_vex_statements
 from api.app.routers.vulnerabilities import (
@@ -266,8 +310,15 @@ def create_finding(
     risk_score: float = 0.0,
     fixed_version: str | None = "1.0.1",
 ) -> Finding:
-    component = Component(purl=f"pkg:pypi/{severity.value}-{status.value}@1.0.0", ecosystem="pypi", name=f"{severity.value}-pkg", version="1.0.0")
-    vulnerability = Vulnerability(source="osv", external_id=f"{severity.value}-{status.value}", severity=severity)
+    component = Component(
+        purl=f"pkg:pypi/{severity.value}-{status.value}@1.0.0",
+        ecosystem="pypi",
+        name=f"{severity.value}-pkg",
+        version="1.0.0",
+    )
+    vulnerability = Vulnerability(
+        source="osv", external_id=f"{severity.value}-{status.value}", severity=severity
+    )
     db.add_all([component, vulnerability])
     db.flush()
     finding = Finding(
@@ -345,7 +396,9 @@ def test_list_findings_filters_by_status_and_critical_severity() -> None:
         app = create_application(db, repo)
         critical = create_finding(db, app, severity=Severity.critical, risk_score=9.8)
         create_finding(db, app, severity=Severity.high, risk_score=8.1)
-        create_finding(db, app, severity=Severity.critical, status=FindingStatus.resolved, risk_score=9.9)
+        create_finding(
+            db, app, severity=Severity.critical, status=FindingStatus.resolved, risk_score=9.9
+        )
 
         page = list_findings(db=db, _=None, status=FindingStatus.open, severity=Severity.critical)
 
@@ -359,7 +412,9 @@ def test_list_findings_filters_by_status_and_high_severity() -> None:
         app = create_application(db, repo)
         create_finding(db, app, severity=Severity.critical, risk_score=9.8)
         high = create_finding(db, app, severity=Severity.high, risk_score=8.1)
-        create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved, risk_score=8.4)
+        create_finding(
+            db, app, severity=Severity.high, status=FindingStatus.resolved, risk_score=8.4
+        )
 
         page = list_findings(db=db, _=None, status=FindingStatus.open, severity=Severity.high)
 
@@ -373,7 +428,9 @@ def test_list_finding_lifecycle_review_reports_stale_exceptions_and_unclosed_res
         app = create_application(db, repo)
         stale = create_finding(db, app, severity=Severity.high)
         stale.updated_at = now_utc() - timedelta(days=31)
-        accepted = create_finding(db, app, severity=Severity.medium, status=FindingStatus.accepted_risk)
+        accepted = create_finding(
+            db, app, severity=Severity.medium, status=FindingStatus.accepted_risk
+        )
         resolved = create_finding(db, app, severity=Severity.low, status=FindingStatus.resolved)
         resolved.resolved_at = now_utc()
         db.add(
@@ -387,7 +444,9 @@ def test_list_finding_lifecycle_review_reports_stale_exceptions_and_unclosed_res
         db.flush()
 
         page = list_finding_lifecycle_review(db=db, _=None)
-        stale_page = list_finding_lifecycle_review(issue_type="stale_open", severity=Severity.high, db=db, _=None)
+        stale_page = list_finding_lifecycle_review(
+            issue_type="stale_open", severity=Severity.high, db=db, _=None
+        )
 
         issues = {(item["issue_type"], item["finding_id"]) for item in page.items}
         assert ("stale_open", str(stale.id)) in issues
@@ -515,10 +574,14 @@ def test_list_vulnerabilities_filters_and_counts_open_impact() -> None:
         repo = create_repository(db)
         app = create_application(db, repo)
         open_finding = create_finding(db, app, severity=Severity.critical, risk_score=9.8)
-        create_finding(db, app, severity=Severity.critical, status=FindingStatus.resolved, risk_score=9.1)
+        create_finding(
+            db, app, severity=Severity.critical, status=FindingStatus.resolved, risk_score=9.1
+        )
         vulnerability = db.get(Vulnerability, open_finding.vulnerability_id)
 
-        page = list_vulnerabilities(external_id=vulnerability.external_id, severity=Severity.critical, db=db, _=None)
+        page = list_vulnerabilities(
+            external_id=vulnerability.external_id, severity=Severity.critical, db=db, _=None
+        )
 
         assert page.items[0]["external_id"] == vulnerability.external_id
         assert page.items[0]["open_finding_count"] == 1
@@ -617,10 +680,17 @@ def test_list_vex_invalidation_candidates_reports_expired_reseen_and_approval_ga
         db.flush()
 
         page = list_vex_invalidation_candidates(db=db, _=None)
-        expired_page = list_vex_invalidation_candidates(reason="expired_review", expired=True, db=db, _=None)
+        expired_page = list_vex_invalidation_candidates(
+            reason="expired_review", expired=True, db=db, _=None
+        )
 
         reasons = {item["reason"] for item in page.items}
-        assert {"expired_review", "missing_approval", "finding_seen_after_vex", "component_version_drift"} <= reasons
+        assert {
+            "expired_review",
+            "missing_approval",
+            "finding_seen_after_vex",
+            "component_version_drift",
+        } <= reasons
         assert [item["vex_id"] for item in expired_page.items] == [str(vex.id)]
 
 
@@ -651,7 +721,9 @@ def test_list_scan_health_returns_failed_partial_and_stale_applications() -> Non
                     status=ScanStatus.succeeded,
                     created_at=now_utc() - timedelta(days=31),
                 ),
-                Scan(application_id=healthy_app.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Scan(
+                    application_id=healthy_app.id, status=ScanStatus.succeeded, created_at=now_utc()
+                ),
             ]
         )
         db.flush()
@@ -682,7 +754,9 @@ def test_list_sbom_coverage_reports_missing_and_component_count() -> None:
             active=True,
             sbom_kind="source",
         )
-        component = Component(purl="pkg:pypi/coverage@1", ecosystem="pypi", name="coverage", version="1")
+        component = Component(
+            purl="pkg:pypi/coverage@1", ecosystem="pypi", name="coverage", version="1"
+        )
         db.add_all([sbom, component])
         db.flush()
         db.add(SbomComponent(sbom_id=sbom.id, component_id=component.id))
@@ -756,9 +830,17 @@ def test_list_application_maintenance_candidates_reports_reasons() -> None:
         healthy.owner = "team"
         db.add_all(
             [
-                Scan(application_id=missing_owner.id, status=ScanStatus.succeeded, created_at=now_utc()),
-                Scan(application_id=unsupported.id, status=ScanStatus.succeeded, created_at=now_utc()),
-                Scan(application_id=deprecated.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Scan(
+                    application_id=missing_owner.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=unsupported.id, status=ScanStatus.succeeded, created_at=now_utc()
+                ),
+                Scan(
+                    application_id=deprecated.id, status=ScanStatus.succeeded, created_at=now_utc()
+                ),
                 Scan(
                     application_id=stale.id,
                     status=ScanStatus.succeeded,
@@ -894,9 +976,13 @@ def test_list_issue_closures_reports_close_states() -> None:
     with SessionLocal() as db:
         repo = create_repository(db)
         app = create_application(db, repo)
-        not_requested = create_finding(db, app, severity=Severity.critical, status=FindingStatus.resolved)
+        not_requested = create_finding(
+            db, app, severity=Severity.critical, status=FindingStatus.resolved
+        )
         pending = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
-        close_failed = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
+        close_failed = create_finding(
+            db, app, severity=Severity.medium, status=FindingStatus.resolved
+        )
         closed = create_finding(db, app, severity=Severity.low, status=FindingStatus.resolved)
         db.add_all(
             [
@@ -1043,8 +1129,12 @@ def test_list_exceptions_returns_finding_and_vex_review_context() -> None:
     with SessionLocal() as db:
         repo = create_repository(db)
         app = create_application(db, repo)
-        accepted = create_finding(db, app, severity=Severity.high, status=FindingStatus.accepted_risk)
-        false_positive = create_finding(db, app, severity=Severity.medium, status=FindingStatus.false_positive)
+        accepted = create_finding(
+            db, app, severity=Severity.high, status=FindingStatus.accepted_risk
+        )
+        false_positive = create_finding(
+            db, app, severity=Severity.medium, status=FindingStatus.false_positive
+        )
         vex_finding = create_finding(db, app, severity=Severity.low)
         vex = VexStatement(
             finding_id=vex_finding.id,
@@ -1082,7 +1172,9 @@ def test_list_storage_cleanup_candidates_reports_inactive_old_and_failed_artifac
             application_id=app.id,
             status=ScanStatus.succeeded,
             created_at=now_utc() - timedelta(days=91),
-            result_summary={"artifacts": {"osv": {"storage_key": "old-osv.json", "digest": "old-digest"}}},
+            result_summary={
+                "artifacts": {"osv": {"storage_key": "old-osv.json", "digest": "old-digest"}}
+            },
         )
         failed_scan = Scan(
             application_id=app.id,
@@ -1120,7 +1212,11 @@ def test_operational_workload_reports_manual_queues_and_dashboard_total() -> Non
         finding = create_finding(db, app, severity=Severity.critical)
         db.add_all(
             [
-                Scan(application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.succeeded),
+                Scan(
+                    application_id=app.id,
+                    trigger_type=TriggerType.manual,
+                    status=ScanStatus.succeeded,
+                ),
                 AuditLog(
                     actor="api-token",
                     role="operator",
@@ -1210,13 +1306,20 @@ def test_list_application_detection_reports_missing_unknown_and_technology_gaps(
         db.flush()
 
         page = list_application_detection(db=db, _=None)
-        missing_technology_page = list_application_detection(issue_type="missing_technology", db=db, _=None)
+        missing_technology_page = list_application_detection(
+            issue_type="missing_technology", db=db, _=None
+        )
 
-        issues = {(item["issue_type"], item["repository_name"], item["application_name"]) for item in page.items}
+        issues = {
+            (item["issue_type"], item["repository_name"], item["application_name"])
+            for item in page.items
+        }
         assert ("missing_application", empty_repo.name, None) in issues
         assert ("unknown_application_type", app_repo.name, unknown_app.name) in issues
         assert ("missing_technology", app_repo.name, unknown_app.name) in issues
-        assert [item["application_name"] for item in missing_technology_page.items] == [unknown_app.name]
+        assert [item["application_name"] for item in missing_technology_page.items] == [
+            unknown_app.name
+        ]
 
 
 def test_list_scheduled_scan_coverage_reports_missing_and_dashboard_count() -> None:
@@ -1266,13 +1369,19 @@ def test_list_resolution_candidates_reports_findings_missing_from_latest_success
     with SessionLocal() as db:
         repo = create_repository(db)
         app = create_application(db, repo)
-        older_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=2))
+        older_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=2),
+        )
         latest_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
         db.add_all([older_scan, latest_scan])
         db.flush()
         candidate = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
         candidate.last_seen_scan_id = older_scan.id
-        still_present = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
+        still_present = create_finding(
+            db, app, severity=Severity.critical, status=FindingStatus.open
+        )
         still_present.last_seen_scan_id = latest_scan.id
         resolved = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
         resolved.last_seen_scan_id = older_scan.id
@@ -1319,7 +1428,9 @@ def test_backup_readiness_reports_storage_artifact_and_cleanup_state() -> None:
         )
         db.add_all([active, inactive])
         db.flush()
-        settings = Settings(minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket="")
+        settings = Settings(
+            minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket=""
+        )
 
         rows = backup_readiness(db=db, settings=settings, _=None)
 
@@ -1363,9 +1474,13 @@ def test_list_backup_evidence_reports_recent_audit_storage_gaps_and_filters() ->
         )
         db.flush()
 
-        settings = Settings(minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket="")
+        settings = Settings(
+            minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket=""
+        )
         page = list_backup_evidence(db=db, settings=settings, _=None)
-        audit_page = list_backup_evidence(evidence_type="backup_audit", status="ok", db=db, settings=settings, _=None)
+        audit_page = list_backup_evidence(
+            evidence_type="backup_audit", status="ok", db=db, settings=settings, _=None
+        )
         summary = dashboard_summary(db=db, settings=settings, _=None)
         by_type = {item["evidence_type"]: item for item in page.items}
 
@@ -1408,7 +1523,9 @@ def test_list_notification_slo_reports_breaches_and_dashboard_count() -> None:
         assert summary.notification_slo_breaches == 1
 
 
-def test_list_notification_digest_readiness_reports_digest_failures_and_missing_important_notifications() -> None:
+def test_list_notification_digest_readiness_reports_digest_failures_and_missing_important_notifications() -> (
+    None
+):
     SessionLocal = session_factory()
     with SessionLocal() as db:
         repo = create_repository(db, "digest")
@@ -1430,7 +1547,9 @@ def test_list_notification_digest_readiness_reports_digest_failures_and_missing_
         db.flush()
 
         page = list_notification_digest_readiness(db=db, _=None)
-        failed_page = list_notification_digest_readiness(issue_type="failed_notification", severity=Severity.low, db=db, _=None)
+        failed_page = list_notification_digest_readiness(
+            issue_type="failed_notification", severity=Severity.low, db=db, _=None
+        )
 
         issues = {(item["issue_type"], item["finding_id"]) for item in page.items}
         assert ("digest_candidate", str(medium.id)) in issues
@@ -1452,7 +1571,10 @@ def test_list_remediation_prs_reports_ci_and_pr_context() -> None:
             status="created",
             provider="watchtower",
             branch="fix/high",
-            metadata_json={"pull_request_url": "https://github.com/local/demo/pull/7", "ci_passed": False},
+            metadata_json={
+                "pull_request_url": "https://github.com/local/demo/pull/7",
+                "ci_passed": False,
+            },
         )
         skipped = RemediationAction(
             finding_id=finding.id,
@@ -1538,7 +1660,10 @@ def test_list_remediation_rescans_reports_validation_and_missing_rescans() -> No
             action_type="ai_fix",
             status="created",
             provider="watchtower",
-            metadata_json={"validation_status": "succeeded", "validation_scan_id": str(validation_scan.id)},
+            metadata_json={
+                "validation_status": "succeeded",
+                "validation_scan_id": str(validation_scan.id),
+            },
             created_at=now_utc() - timedelta(hours=1),
         )
         missing_action = RemediationAction(
@@ -1615,7 +1740,11 @@ def test_efficiency_kpis_reports_detection_notification_and_remediation_metrics(
     with SessionLocal() as db:
         repo = create_repository(db)
         app = create_application(db, repo)
-        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(hours=10))
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(hours=10),
+        )
         db.add(scan)
         db.flush()
         resolved = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
@@ -2006,11 +2135,28 @@ def test_list_license_review_reports_missing_unknown_and_copyleft_components() -
         scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
         db.add(scan)
         db.flush()
-        sbom = Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="license-sbom", storage_key="license.json")
-        missing = Component(purl="pkg:pypi/missing@1", ecosystem="pypi", name="missing", version="1")
-        unknown = Component(purl="pkg:pypi/unknown@1", ecosystem="pypi", name="unknown", version="1", license="unknown")
-        copyleft = Component(purl="pkg:npm/gpl@1", ecosystem="npm", name="gpl", version="1", license="GPL-3.0")
-        permissive = Component(purl="pkg:pypi/mit@1", ecosystem="pypi", name="mit", version="1", license="MIT")
+        sbom = Sbom(
+            application_id=app.id,
+            scan_id=scan.id,
+            sbom_digest="license-sbom",
+            storage_key="license.json",
+        )
+        missing = Component(
+            purl="pkg:pypi/missing@1", ecosystem="pypi", name="missing", version="1"
+        )
+        unknown = Component(
+            purl="pkg:pypi/unknown@1",
+            ecosystem="pypi",
+            name="unknown",
+            version="1",
+            license="unknown",
+        )
+        copyleft = Component(
+            purl="pkg:npm/gpl@1", ecosystem="npm", name="gpl", version="1", license="GPL-3.0"
+        )
+        permissive = Component(
+            purl="pkg:pypi/mit@1", ecosystem="pypi", name="mit", version="1", license="MIT"
+        )
         db.add_all([sbom, missing, unknown, copyleft, permissive])
         db.flush()
         db.add_all(
@@ -2024,7 +2170,9 @@ def test_list_license_review_reports_missing_unknown_and_copyleft_components() -
         db.flush()
 
         page = list_license_review(db=db, _=None)
-        npm_page = list_license_review(issue_type="copyleft_license", ecosystem="npm", db=db, _=None)
+        npm_page = list_license_review(
+            issue_type="copyleft_license", ecosystem="npm", db=db, _=None
+        )
 
         issues = {(item["component_name"], item["issue_type"]) for item in page.items}
         assert issues == {
@@ -2046,7 +2194,9 @@ def test_list_security_findings_extracts_scan_summary_findings() -> None:
             status=ScanStatus.succeeded,
             result_summary={
                 "secrets": [{"severity": "critical", "title": "AWS key", "path": ".env"}],
-                "sast": [{"severity": "high", "rule_id": "sql-injection", "message": "unsafe query"}],
+                "sast": [
+                    {"severity": "high", "rule_id": "sql-injection", "message": "unsafe query"}
+                ],
                 "license_findings": [{"severity": "medium", "title": "GPL dependency"}],
                 "security_findings": [{"severity": "low", "title": "generic hardening"}],
             },
@@ -2307,7 +2457,9 @@ def test_list_runtime_eol_reports_missing_old_major_and_component_context() -> N
             storage_key="runtime-eol.json",
             active=True,
         )
-        old_ruby = Component(purl="pkg:generic/ruby@2.7", ecosystem="runtime", name="ruby", version="2.7")
+        old_ruby = Component(
+            purl="pkg:generic/ruby@2.7", ecosystem="runtime", name="ruby", version="2.7"
+        )
         current_java = Technology(
             application_id=app.id,
             category="language-or-platform",
@@ -2391,7 +2543,9 @@ def test_list_audit_review_reports_manual_config_privileged_and_failure_events()
         db.flush()
 
         page = list_audit_review(db=db, _=None)
-        manual_page = list_audit_review(reason="privileged_non_admin", role="operator", db=db, _=None)
+        manual_page = list_audit_review(
+            reason="privileged_non_admin", role="operator", db=db, _=None
+        )
 
         by_id = {item["id"]: item for item in page.items}
         assert set(by_id) == {str(manual.id), str(config.id), str(failure.id)}
@@ -2481,7 +2635,9 @@ def test_restore_readiness_reports_storage_artifacts_and_restore_exercise() -> N
             ]
         )
         db.flush()
-        settings = Settings(minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket="")
+        settings = Settings(
+            minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket=""
+        )
 
         rows = restore_readiness(db=db, settings=settings, _=None)
 
@@ -2536,9 +2692,13 @@ def test_list_restore_evidence_reports_recent_audit_stale_gap_and_filters() -> N
         )
         db.flush()
 
-        settings = Settings(minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket="")
+        settings = Settings(
+            minio_endpoint="", minio_access_key="", minio_secret_key="", minio_bucket=""
+        )
         page = list_restore_evidence(db=db, settings=settings, _=None)
-        audit_page = list_restore_evidence(evidence_type="restore_audit", status="ok", db=db, settings=settings, _=None)
+        audit_page = list_restore_evidence(
+            evidence_type="restore_audit", status="ok", db=db, settings=settings, _=None
+        )
         summary = dashboard_summary(db=db, settings=settings, _=None)
         by_type = {item["evidence_type"]: item for item in page.items}
 
@@ -2554,7 +2714,9 @@ def test_list_risk_acceptance_review_reports_accepted_risk_and_vex_filters() -> 
     with SessionLocal() as db:
         repo = create_repository(db)
         app = create_application(db, repo)
-        accepted = create_finding(db, app, severity=Severity.high, status=FindingStatus.accepted_risk)
+        accepted = create_finding(
+            db, app, severity=Severity.high, status=FindingStatus.accepted_risk
+        )
         vex_finding = create_finding(db, app, severity=Severity.medium)
         db.add(
             VexStatement(
@@ -2569,7 +2731,9 @@ def test_list_risk_acceptance_review_reports_accepted_risk_and_vex_filters() -> 
 
         page = list_risk_acceptance_review(db=db, _=None)
         expired_page = list_risk_acceptance_review(expired=True, source="vex", db=db, _=None)
-        severity_page = list_risk_acceptance_review(severity=Severity.high, source="finding", db=db, _=None)
+        severity_page = list_risk_acceptance_review(
+            severity=Severity.high, source="finding", db=db, _=None
+        )
 
         sources = {(item["source"], item["finding_id"]) for item in page.items}
         assert sources == {("finding", str(accepted.id)), ("vex", str(vex_finding.id))}
@@ -2602,7 +2766,10 @@ def test_list_rollout_gaps_reports_deployment_blockers_and_dashboard_count() -> 
             _=None,
         )
 
-        issues = {(item["issue_type"], item["repository_name"], item["application_name"]) for item in page.items}
+        issues = {
+            (item["issue_type"], item["repository_name"], item["application_name"])
+            for item in page.items
+        }
         assert ("missing_application", empty_repo.name, None) in issues
         assert ("missing_owner", repo.name, app.name) in issues
         assert ("missing_active_source_sbom", repo.name, app.name) in issues
@@ -2622,15 +2789,29 @@ def test_list_repository_drift_reports_sync_push_archive_and_metadata_gaps() -> 
         repo.pushed_at = now_utc()
         repo.archived = True
         app = create_application(db, repo)
-        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=1))
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=1),
+        )
         db.add(scan)
         db.flush()
 
         page = list_repository_drift(db=db, _=None)
-        archived_page = list_repository_drift(issue_type="archived_or_fork_active_app", provider=RepositoryProvider.github, db=db, _=None)
+        archived_page = list_repository_drift(
+            issue_type="archived_or_fork_active_app",
+            provider=RepositoryProvider.github,
+            db=db,
+            _=None,
+        )
 
         issues = {item["issue_type"] for item in page.items}
-        assert {"stale_sync", "missing_visibility", "pushed_after_scan", "archived_or_fork_active_app"} <= issues
+        assert {
+            "stale_sync",
+            "missing_visibility",
+            "pushed_after_scan",
+            "archived_or_fork_active_app",
+        } <= issues
         assert [item["application_name"] for item in archived_page.items] == [app.name]
 
 
@@ -2674,7 +2855,12 @@ def test_list_application_readiness_reports_active_application_gaps() -> None:
         summary = dashboard_summary(db=db, _=None)
 
         issues = {item["issue_type"] for item in page.items}
-        assert issues == {"missing_owner", "unknown_criticality", "missing_active_source_sbom", "stale_scan"}
+        assert issues == {
+            "missing_owner",
+            "unknown_criticality",
+            "missing_active_source_sbom",
+            "stale_scan",
+        }
         assert all(item["application_name"] == app.name for item in page.items)
         assert [item["application_name"] for item in owner_page.items] == [app.name]
         assert archived.name not in {item["application_name"] for item in page.items}
@@ -2691,7 +2877,11 @@ def test_scan_targets_reports_success_rate_failures_partials_and_stale_apps() ->
             [
                 Scan(application_id=covered.id, status=ScanStatus.succeeded, created_at=now_utc()),
                 Scan(application_id=covered.id, status=ScanStatus.failed, created_at=now_utc()),
-                Scan(application_id=covered.id, status=ScanStatus.partially_succeeded, created_at=now_utc()),
+                Scan(
+                    application_id=covered.id,
+                    status=ScanStatus.partially_succeeded,
+                    created_at=now_utc(),
+                ),
                 Scan(
                     application_id=stale.id,
                     status=ScanStatus.succeeded,
@@ -2746,7 +2936,9 @@ def test_monthly_review_reports_monthly_operations_and_dashboard_count() -> None
     with SessionLocal() as db:
         repo = create_repository(db, "monthly")
         app = create_application(db, repo)
-        accepted = create_finding(db, app, severity=Severity.high, status=FindingStatus.accepted_risk)
+        accepted = create_finding(
+            db, app, severity=Severity.high, status=FindingStatus.accepted_risk
+        )
         vex_finding = create_finding(db, app, severity=Severity.medium)
         db.add_all(
             [
@@ -2757,7 +2949,12 @@ def test_monthly_review_reports_monthly_operations_and_dashboard_count() -> None
                     approved_by="security",
                     review_date=now_utc() - timedelta(days=1),
                 ),
-                Scan(application_id=app.id, status=ScanStatus.failed, tool="trivy", created_at=now_utc()),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.failed,
+                    tool="trivy",
+                    created_at=now_utc(),
+                ),
                 Technology(
                     application_id=app.id,
                     category="runtime",
@@ -2789,7 +2986,12 @@ def test_toolchain_posture_reports_scanner_and_runtime_issues() -> None:
         app = create_application(db, repo)
         db.add_all(
             [
-                Scan(application_id=app.id, status=ScanStatus.failed, tool="syft", created_at=now_utc()),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.failed,
+                    tool="syft",
+                    created_at=now_utc(),
+                ),
                 Scan(
                     application_id=app.id,
                     status=ScanStatus.succeeded,
@@ -2837,7 +3039,12 @@ def test_github_integration_health_reports_configuration_and_failure_classes() -
         )
         db.add_all([failed_sync, issue_action])
         db.flush()
-        settings = Settings(github_token=None, github_app_id=None, github_private_key=None, github_webhook_secret=None)
+        settings = Settings(
+            github_token=None,
+            github_app_id=None,
+            github_private_key=None,
+            github_webhook_secret=None,
+        )
 
         rows = github_integration_health(db=db, settings=settings, _=None)
         summary = dashboard_summary(db=db, settings=settings, _=None)
@@ -2891,7 +3098,9 @@ def test_list_scanner_failures_reports_summary_errors_and_filters() -> None:
             application_id=app.id,
             status=ScanStatus.partially_succeeded,
             tool="trivy",
-            result_summary={"scanner_failures": [{"tool": "trivy", "error": "trivy db update failed"}]},
+            result_summary={
+                "scanner_failures": [{"tool": "trivy", "error": "trivy db update failed"}]
+            },
         )
         failed = Scan(
             application_id=app.id,
@@ -2904,7 +3113,9 @@ def test_list_scanner_failures_reports_summary_errors_and_filters() -> None:
         db.flush()
 
         page = list_scanner_failures(db=db, _=None)
-        trivy_page = list_scanner_failures(tool="trivy", status=ScanStatus.partially_succeeded, db=db, _=None)
+        trivy_page = list_scanner_failures(
+            tool="trivy", status=ScanStatus.partially_succeeded, db=db, _=None
+        )
 
         by_tool = {item["tool"]: item for item in page.items}
         assert set(by_tool) == {"syft", "trivy"}
@@ -2927,7 +3138,10 @@ def test_list_dependency_updates_reports_renovate_dependabot_and_ci_filters() ->
             status="created",
             provider="renovate",
             branch="renovate/pkg-1",
-            metadata_json={"pull_request_url": "https://github.com/local/demo/pull/1", "ci_passed": False},
+            metadata_json={
+                "pull_request_url": "https://github.com/local/demo/pull/1",
+                "ci_passed": False,
+            },
         )
         dependabot = RemediationAction(
             finding_id=dependabot_finding.id,
@@ -2969,7 +3183,9 @@ def test_list_remediation_coverage_reports_missing_actions_and_dashboard_count()
         db.flush()
 
         page = list_remediation_coverage(db=db, _=None)
-        missing_page = list_remediation_coverage(missing_action=True, severity=Severity.high, db=db, _=None)
+        missing_page = list_remediation_coverage(
+            missing_action=True, severity=Severity.high, db=db, _=None
+        )
         summary = dashboard_summary(db=db, _=None)
 
         by_finding = {item["finding_id"]: item for item in page.items}
@@ -3051,7 +3267,9 @@ def test_list_remediation_aging_reports_stale_buckets_and_filters() -> None:
         db.flush()
 
         page = list_remediation_aging(db=db, _=None)
-        critical_page = list_remediation_aging(age_bucket="long_stale", severity=Severity.critical, db=db, _=None)
+        critical_page = list_remediation_aging(
+            age_bucket="long_stale", severity=Severity.critical, db=db, _=None
+        )
 
         buckets = {item["action_id"]: item["age_bucket"] for item in page.items}
         assert buckets[str(stale.id)] == "stale"
@@ -3068,7 +3286,9 @@ def test_list_resolution_verification_reports_rescan_validation_and_close_gaps()
         close_app = create_application(db, repo, "missing-close-app")
         missing_rescan = create_finding(db, missing_app, severity=Severity.critical)
         failed_validation = create_finding(db, failed_app, severity=Severity.high)
-        missing_close = create_finding(db, close_app, severity=Severity.medium, status=FindingStatus.resolved)
+        missing_close = create_finding(
+            db, close_app, severity=Severity.medium, status=FindingStatus.resolved
+        )
         missing_close.resolved_at = now_utc()
         missing_rescan_action = RemediationAction(
             finding_id=missing_rescan.id,
@@ -3077,8 +3297,12 @@ def test_list_resolution_verification_reports_rescan_validation_and_close_gaps()
             provider="watchtower",
             created_at=now_utc() - timedelta(days=2),
         )
-        failed_scan = Scan(application_id=failed_app.id, status=ScanStatus.failed, created_at=now_utc())
-        close_scan = Scan(application_id=close_app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        failed_scan = Scan(
+            application_id=failed_app.id, status=ScanStatus.failed, created_at=now_utc()
+        )
+        close_scan = Scan(
+            application_id=close_app.id, status=ScanStatus.succeeded, created_at=now_utc()
+        )
         db.add_all([missing_rescan_action, failed_scan, close_scan])
         db.flush()
         failed_validation_action = RemediationAction(
@@ -3086,7 +3310,10 @@ def test_list_resolution_verification_reports_rescan_validation_and_close_gaps()
             action_type="ai_fix",
             status="failed",
             provider="watchtower",
-            metadata_json={"validation_status": "failed", "validation_scan_id": str(failed_scan.id)},
+            metadata_json={
+                "validation_status": "failed",
+                "validation_scan_id": str(failed_scan.id),
+            },
         )
         missing_close_action = RemediationAction(
             finding_id=missing_close.id,
@@ -3094,7 +3321,10 @@ def test_list_resolution_verification_reports_rescan_validation_and_close_gaps()
             status="created",
             provider="github",
             created_at=now_utc() - timedelta(days=1),
-            metadata_json={"validation_status": "succeeded", "validation_scan_id": str(close_scan.id)},
+            metadata_json={
+                "validation_status": "succeeded",
+                "validation_scan_id": str(close_scan.id),
+            },
         )
         db.add_all([failed_validation_action, missing_close_action])
         db.flush()
@@ -3151,12 +3381,19 @@ def test_list_failure_signals_reports_classified_operations_and_dashboard_count(
         duplicate_page = list_failure_signals(signal_type="duplicate_suppression", db=db, _=None)
         summary = dashboard_summary(
             db=db,
-            settings=Settings(github_token="token", github_webhook_secret="secret", api_token="custom"),
+            settings=Settings(
+                github_token="token", github_webhook_secret="secret", api_token="custom"
+            ),
             _=None,
         )
 
         signal_types = {item["signal_type"] for item in page.items}
-        assert {"duplicate_suppression", "github_rate_limit", "scanner_failure", "worker_failure"} <= signal_types
+        assert {
+            "duplicate_suppression",
+            "github_rate_limit",
+            "scanner_failure",
+            "worker_failure",
+        } <= signal_types
         assert [item["source"] for item in duplicate_page.items] == ["remediation_action"]
         assert duplicate_page.items[0]["application_name"] == app.name
         assert summary.failure_signal_items == 4
@@ -3330,7 +3567,9 @@ def test_list_auto_merge_pilot_readiness_reports_allowed_and_blocked_reasons() -
         db.flush()
 
         page = list_auto_merge_pilot_readiness(db=db, _=None)
-        blocked_page = list_auto_merge_pilot_readiness(allowed=False, reason="production_or_high_criticality", db=db, _=None)
+        blocked_page = list_auto_merge_pilot_readiness(
+            allowed=False, reason="production_or_high_criticality", db=db, _=None
+        )
 
         by_action = {item["action_id"]: item for item in page.items}
         assert by_action[str(allowed.id)]["allowed"] is True
@@ -3462,20 +3701,26 @@ def test_list_secret_scan_coverage_reports_missing_findings_failures_and_dashboa
                     application_id=finding_app.id,
                     status=ScanStatus.succeeded,
                     tool="gitleaks",
-                    result_summary={"secrets": [{"severity": "critical", "title": "token", "path": ".env"}]},
+                    result_summary={
+                        "secrets": [{"severity": "critical", "title": "token", "path": ".env"}]
+                    },
                 ),
                 Scan(
                     application_id=failed.id,
                     status=ScanStatus.partially_succeeded,
                     tool="gitleaks",
-                    result_summary={"scanner_failures": [{"scanner": "gitleaks", "error": "timeout"}]},
+                    result_summary={
+                        "scanner_failures": [{"scanner": "gitleaks", "error": "timeout"}]
+                    },
                 ),
             ]
         )
         db.flush()
 
         page = list_secret_scan_coverage(db=db, _=None)
-        filtered = list_secret_scan_coverage(gap_type="secret_findings_present", severity="critical", db=db, _=None)
+        filtered = list_secret_scan_coverage(
+            gap_type="secret_findings_present", severity="critical", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["application_name"], item["gap_type"]) for item in page.items}
 
@@ -3506,14 +3751,20 @@ def test_list_sast_coverage_reports_missing_findings_failures_and_dashboard_coun
                     application_id=failed.id,
                     status=ScanStatus.partially_succeeded,
                     tool="semgrep",
-                    result_summary={"scanner_failures": [{"scanner": "semgrep", "error": "ruleset fetch failed"}]},
+                    result_summary={
+                        "scanner_failures": [
+                            {"scanner": "semgrep", "error": "ruleset fetch failed"}
+                        ]
+                    },
                 ),
             ]
         )
         db.flush()
 
         page = list_sast_coverage(db=db, _=None)
-        filtered = list_sast_coverage(gap_type="sast_findings_present", severity="high", db=db, _=None)
+        filtered = list_sast_coverage(
+            gap_type="sast_findings_present", severity="high", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["application_name"], item["gap_type"]) for item in page.items}
 
@@ -3715,7 +3966,11 @@ def test_daily_operations_reports_failures_and_24h_jobs() -> None:
             [
                 Job(job_type=JobType.repository_sync, status=JobStatus.succeeded),
                 Job(job_type=JobType.scan, status=JobStatus.succeeded),
-                Job(job_type=JobType.notification, status=JobStatus.failed, last_error="webhook failed"),
+                Job(
+                    job_type=JobType.notification,
+                    status=JobStatus.failed,
+                    last_error="webhook failed",
+                ),
                 Notification(
                     channel="slack",
                     severity=Severity.critical,
@@ -3782,7 +4037,9 @@ def test_kpi_summary_reports_core_operational_metrics() -> None:
                 "touches_forbidden_path": False,
             },
         )
-        sent = Notification(channel="slack", severity=Severity.high, subject="sent", body="body", status="sent")
+        sent = Notification(
+            channel="slack", severity=Severity.high, subject="sent", body="body", status="sent"
+        )
         failed = Notification(
             channel="slack",
             severity=Severity.high,
@@ -3840,7 +4097,9 @@ def test_repository_rollout_filters_and_reports_coverage() -> None:
         create_finding(db, app_owned, severity=Severity.high)
         db.flush()
 
-        page = list_repository_rollout(provider=RepositoryProvider.github, archived=False, db=db, _=None)
+        page = list_repository_rollout(
+            provider=RepositoryProvider.github, archived=False, db=db, _=None
+        )
 
         assert [item["repository_name"] for item in page.items] == [github_repo.name]
         item = page.items[0]
@@ -3888,12 +4147,29 @@ def test_control_evidence_reports_operational_evidence_gaps_and_dashboard_count(
         scan = Scan(application_id=app.id, status=ScanStatus.succeeded, result_summary={})
         db.add(scan)
         db.flush()
-        db.add(Sbom(application_id=app.id, scan_id=scan.id, sbom_kind="source", sbom_digest="control", storage_key="sbom.json", active=True))
-        open_finding = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
+        db.add(
+            Sbom(
+                application_id=app.id,
+                scan_id=scan.id,
+                sbom_kind="source",
+                sbom_digest="control",
+                storage_key="sbom.json",
+                active=True,
+            )
+        )
+        open_finding = create_finding(
+            db, app, severity=Severity.critical, status=FindingStatus.open
+        )
         resolved = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
         db.add_all(
             [
-                RemediationAction(finding_id=open_finding.id, action_type="github_issue", status="created", provider="github", metadata_json={}),
+                RemediationAction(
+                    finding_id=open_finding.id,
+                    action_type="github_issue",
+                    status="created",
+                    provider="github",
+                    metadata_json={},
+                ),
                 VexStatement(
                     finding_id=resolved.id,
                     status=VexStatus.not_affected,
@@ -3923,15 +4199,33 @@ def test_list_finding_evidence_gaps_reports_filters_and_context() -> None:
     with SessionLocal() as db:
         repo = create_repository(db, "finding-evidence")
         app = create_application(db, repo)
-        open_critical = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
+        open_critical = create_finding(
+            db, app, severity=Severity.critical, status=FindingStatus.open
+        )
         open_high = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
         resolved = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
-        accepted = create_finding(db, app, severity=Severity.low, status=FindingStatus.accepted_risk)
-        db.add(RemediationAction(finding_id=open_high.id, action_type="github_issue", status="created", provider="github", metadata_json={}))
+        accepted = create_finding(
+            db, app, severity=Severity.low, status=FindingStatus.accepted_risk
+        )
+        db.add(
+            RemediationAction(
+                finding_id=open_high.id,
+                action_type="github_issue",
+                status="created",
+                provider="github",
+                metadata_json={},
+            )
+        )
         db.flush()
 
         page = list_finding_evidence_gaps(db=db, _=None)
-        filtered = list_finding_evidence_gaps(gap_type="missing_notification", severity=Severity.critical, status=FindingStatus.open, db=db, _=None)
+        filtered = list_finding_evidence_gaps(
+            gap_type="missing_notification",
+            severity=Severity.critical,
+            status=FindingStatus.open,
+            db=db,
+            _=None,
+        )
         gaps = {(item["gap_type"], item["finding_id"]) for item in page.items}
 
         assert ("missing_notification", str(open_critical.id)) in gaps
@@ -3979,7 +4273,9 @@ def test_list_job_backlog_reports_stale_failed_and_retry_exhausted() -> None:
         db.flush()
 
         page = list_job_backlog(db=db, _=None)
-        filtered = list_job_backlog(reason="retry_exhausted", status=JobStatus.failed, db=db, _=None)
+        filtered = list_job_backlog(
+            reason="retry_exhausted", status=JobStatus.failed, db=db, _=None
+        )
         reasons = {item["reason"] for item in page.items}
 
         assert {"stale_queued", "stale_running", "retry_exhausted"} <= reasons
@@ -3993,15 +4289,39 @@ def test_list_audit_evidence_gaps_reports_missing_and_incomplete_audit() -> None
         repo = create_repository(db, "audit-evidence")
         app = create_application(db, repo)
         finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
-        action = RemediationAction(finding_id=finding.id, action_type="github_issue", status="created", provider="github", metadata_json={})
-        notification = Notification(channel="slack", severity=Severity.high, subject="failed", body="failed", status="failed", metadata_json={"finding_id": str(finding.id)})
+        action = RemediationAction(
+            finding_id=finding.id,
+            action_type="github_issue",
+            status="created",
+            provider="github",
+            metadata_json={},
+        )
+        notification = Notification(
+            channel="slack",
+            severity=Severity.high,
+            subject="failed",
+            body="failed",
+            status="failed",
+            metadata_json={"finding_id": str(finding.id)},
+        )
         db.add_all([action, notification])
         db.flush()
-        db.add(AuditLog(actor="operator", role="operator", action="remediation.action", resource_type="remediation_action", resource_id=str(action.id), metadata_json={}))
+        db.add(
+            AuditLog(
+                actor="operator",
+                role="operator",
+                action="remediation.action",
+                resource_type="remediation_action",
+                resource_id=str(action.id),
+                metadata_json={},
+            )
+        )
         db.flush()
 
         page = list_audit_evidence_gaps(db=db, _=None)
-        incomplete = list_audit_evidence_gaps(resource_type="remediation_action", gap_type="incomplete_audit_log", db=db, _=None)
+        incomplete = list_audit_evidence_gaps(
+            resource_type="remediation_action", gap_type="incomplete_audit_log", db=db, _=None
+        )
         gaps = {(item["gap_type"], item["resource_type"]) for item in page.items}
 
         assert ("incomplete_audit_log", "remediation_action") in gaps
@@ -4027,7 +4347,13 @@ def test_list_scan_evidence_quality_reports_scan_evidence_gaps() -> None:
         db.flush()
 
         page = list_scan_evidence_quality(db=db, _=None)
-        filtered = list_scan_evidence_quality(gap_type="scanner_failures", status=ScanStatus.partially_succeeded, tool="trivy", db=db, _=None)
+        filtered = list_scan_evidence_quality(
+            gap_type="scanner_failures",
+            status=ScanStatus.partially_succeeded,
+            tool="trivy",
+            db=db,
+            _=None,
+        )
         gaps = {(item["gap_type"], item["scan_id"]) for item in page.items}
 
         assert ("missing_tool", str(empty_success.id)) in gaps
@@ -4156,10 +4482,16 @@ def test_rollback_readiness_reports_missing_and_present_rollback_evidence() -> N
         app = create_application(db, repo)
         missing = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
         covered = create_finding(db, app, severity=Severity.medium, status=FindingStatus.resolved)
-        validation_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(hours=1))
+        validation_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(hours=1),
+        )
         db.add(validation_scan)
         db.flush()
-        missing_action = RemediationAction(finding_id=missing.id, action_type="ai_fix", status="merged", metadata_json={})
+        missing_action = RemediationAction(
+            finding_id=missing.id, action_type="ai_fix", status="merged", metadata_json={}
+        )
         covered_action = RemediationAction(
             finding_id=covered.id,
             action_type="ai_fix",
@@ -4185,7 +4517,13 @@ def test_rollback_readiness_reports_missing_and_present_rollback_evidence() -> N
                 metadata_json={"status": "merged"},
             )
         )
-        db.add(Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() + timedelta(minutes=1)))
+        db.add(
+            Scan(
+                application_id=app.id,
+                status=ScanStatus.succeeded,
+                created_at=now_utc() + timedelta(minutes=1),
+            )
+        )
         db.flush()
 
         rows = rollback_readiness(db=db, _=None)
@@ -4206,8 +4544,12 @@ def test_list_automation_suppressions_reports_skip_block_and_policy_reasons() ->
     with SessionLocal() as db:
         repo = create_repository(db, "automation-suppressions")
         app = create_application(db, repo)
-        duplicate_finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
-        blocked_finding = create_finding(db, app, severity=Severity.medium, status=FindingStatus.open)
+        duplicate_finding = create_finding(
+            db, app, severity=Severity.high, status=FindingStatus.open
+        )
+        blocked_finding = create_finding(
+            db, app, severity=Severity.medium, status=FindingStatus.open
+        )
         policy_finding = create_finding(db, app, severity=Severity.low, status=FindingStatus.open)
         db.add_all(
             [
@@ -4234,7 +4576,9 @@ def test_list_automation_suppressions_reports_skip_block_and_policy_reasons() ->
         db.flush()
 
         page = list_automation_suppressions(db=db, _=None)
-        filtered = list_automation_suppressions(reason="duplicate", action_type="github_issue", severity=Severity.high, db=db, _=None)
+        filtered = list_automation_suppressions(
+            reason="duplicate", action_type="github_issue", severity=Severity.high, db=db, _=None
+        )
         reasons = {item["reason"] for item in page.items}
 
         assert {"duplicate", "blocked", "policy"} <= reasons
@@ -4252,7 +4596,16 @@ def test_rollout_waves_reports_explicit_and_fallback_progress() -> None:
         scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
         db.add(scan)
         db.flush()
-        db.add(Sbom(application_id=app.id, scan_id=scan.id, sbom_kind="source", sbom_digest="wave", storage_key="wave.json", active=True))
+        db.add(
+            Sbom(
+                application_id=app.id,
+                scan_id=scan.id,
+                sbom_kind="source",
+                sbom_digest="wave",
+                storage_key="wave.json",
+                active=True,
+            )
+        )
         create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
         db.flush()
 
@@ -4276,10 +4629,21 @@ def test_list_mvp_target_readiness_prefers_topics_and_filters_issues() -> None:
         ready_repo.topics = ["mvp-target"]
         ready_app = create_application(db, ready_repo, "ready")
         ready_app.owner = "team"
-        ready_scan = Scan(application_id=ready_app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        ready_scan = Scan(
+            application_id=ready_app.id, status=ScanStatus.succeeded, created_at=now_utc()
+        )
         db.add(ready_scan)
         db.flush()
-        db.add(Sbom(application_id=ready_app.id, scan_id=ready_scan.id, sbom_kind="source", sbom_digest="ready", storage_key="ready.json", active=True))
+        db.add(
+            Sbom(
+                application_id=ready_app.id,
+                scan_id=ready_scan.id,
+                sbom_kind="source",
+                sbom_digest="ready",
+                storage_key="ready.json",
+                active=True,
+            )
+        )
 
         missing_repo = create_repository(db, "mvp-missing")
         missing_repo.visibility = None
@@ -4287,7 +4651,9 @@ def test_list_mvp_target_readiness_prefers_topics_and_filters_issues() -> None:
         db.flush()
 
         page = list_mvp_target_readiness(db=db, _=None)
-        filtered = list_mvp_target_readiness(ready=False, issue_type="missing_visibility", db=db, _=None)
+        filtered = list_mvp_target_readiness(
+            ready=False, issue_type="missing_visibility", db=db, _=None
+        )
         by_name = {item["repository_name"]: item for item in page.items}
 
         assert by_name["mvp-ready"]["ready"] is True
@@ -4303,21 +4669,51 @@ def test_list_kpi_evidence_reports_metric_records_and_filters() -> None:
         scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
         db.add(scan)
         db.flush()
-        db.add(Sbom(application_id=app.id, scan_id=scan.id, sbom_kind="source", sbom_digest="kpi", storage_key="kpi.json", active=True))
+        db.add(
+            Sbom(
+                application_id=app.id,
+                scan_id=scan.id,
+                sbom_kind="source",
+                sbom_digest="kpi",
+                storage_key="kpi.json",
+                active=True,
+            )
+        )
         finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
         db.add_all(
             [
-                Notification(channel="slack", severity=Severity.high, subject="sent", body="sent", status="sent", sent_at=now_utc(), metadata_json={"finding_id": str(finding.id)}),
-                RemediationAction(finding_id=finding.id, action_type="ai_fix", status="succeeded", metadata_json={"ci_passed": True, "validation_status": "succeeded"}),
+                Notification(
+                    channel="slack",
+                    severity=Severity.high,
+                    subject="sent",
+                    body="sent",
+                    status="sent",
+                    sent_at=now_utc(),
+                    metadata_json={"finding_id": str(finding.id)},
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="ai_fix",
+                    status="succeeded",
+                    metadata_json={"ci_passed": True, "validation_status": "succeeded"},
+                ),
             ]
         )
         db.flush()
 
         page = list_kpi_evidence(db=db, _=None)
-        filtered = list_kpi_evidence(metric="pr_ci_success", included=True, status="passed", db=db, _=None)
+        filtered = list_kpi_evidence(
+            metric="pr_ci_success", included=True, status="passed", db=db, _=None
+        )
         metrics = {item["metric"] for item in page.items}
 
-        assert {"sbom_coverage", "daily_scan_coverage", "notification_success", "ai_fix_success", "pr_ci_success"} <= metrics
+        assert {
+            "sbom_coverage",
+            "daily_scan_coverage",
+            "notification_success",
+            "ai_fix_success",
+            "pr_ci_success",
+        } <= metrics
         assert filtered.items[0]["application_name"] == app.name
 
 
@@ -4326,19 +4722,37 @@ def test_list_efficiency_timeline_reports_durations_and_breaches() -> None:
     with SessionLocal() as db:
         repo = create_repository(db, "efficiency-timeline")
         app = create_application(db, repo)
-        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(hours=3))
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(hours=3),
+        )
         db.add(scan)
         db.flush()
         finding = create_finding(db, app, severity=Severity.critical, status=FindingStatus.resolved)
         finding.first_seen_scan_id = scan.id
         finding.created_at = now_utc() - timedelta(hours=2)
         finding.resolved_at = now_utc()
-        db.add(Notification(channel="slack", severity=Severity.critical, subject="sent", body="sent", status="sent", sent_at=now_utc() - timedelta(hours=1), metadata_json={"finding_id": str(finding.id)}))
-        db.add(RemediationAction(finding_id=finding.id, action_type="github_issue", status="created"))
+        db.add(
+            Notification(
+                channel="slack",
+                severity=Severity.critical,
+                subject="sent",
+                body="sent",
+                status="sent",
+                sent_at=now_utc() - timedelta(hours=1),
+                metadata_json={"finding_id": str(finding.id)},
+            )
+        )
+        db.add(
+            RemediationAction(finding_id=finding.id, action_type="github_issue", status="created")
+        )
         db.flush()
 
         page = list_efficiency_timeline(db=db, _=None)
-        filtered = list_efficiency_timeline(metric="mttn", severity=Severity.critical, breached=False, db=db, _=None)
+        filtered = list_efficiency_timeline(
+            metric="mttn", severity=Severity.critical, breached=False, db=db, _=None
+        )
         by_metric = {item["metric"]: item for item in page.items}
 
         assert by_metric["mttd"]["duration_hours"] == 1.0
@@ -4357,15 +4771,35 @@ def test_list_state_consistency_reports_status_timestamp_gaps() -> None:
         open_finding.resolved_at = now_utc()
         db.add_all(
             [
-                Job(job_type=JobType.scan, status=JobStatus.failed, application_id=app.id, repository_id=repo.id),
-                Notification(channel="slack", severity=Severity.high, subject="sent", body="sent", status="sent", metadata_json={"finding_id": str(open_finding.id)}),
-                RemediationAction(finding_id=resolved.id, action_type="github_issue", status="closed", provider="github", metadata_json={}),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.failed,
+                    application_id=app.id,
+                    repository_id=repo.id,
+                ),
+                Notification(
+                    channel="slack",
+                    severity=Severity.high,
+                    subject="sent",
+                    body="sent",
+                    status="sent",
+                    metadata_json={"finding_id": str(open_finding.id)},
+                ),
+                RemediationAction(
+                    finding_id=resolved.id,
+                    action_type="github_issue",
+                    status="closed",
+                    provider="github",
+                    metadata_json={},
+                ),
             ]
         )
         db.flush()
 
         page = list_state_consistency(db=db, _=None)
-        filtered = list_state_consistency(gap_type="sent_without_sent_at", resource_type="notification", db=db, _=None)
+        filtered = list_state_consistency(
+            gap_type="sent_without_sent_at", resource_type="notification", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["gap_type"], item["resource_type"]) for item in page.items}
 
@@ -4386,16 +4820,36 @@ def test_list_metadata_completeness_reports_context_gaps() -> None:
         finding = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
         db.add_all(
             [
-                Scan(application_id=app.id, trigger_type=TriggerType.push, status=ScanStatus.failed, result_summary={}),
+                Scan(
+                    application_id=app.id,
+                    trigger_type=TriggerType.push,
+                    status=ScanStatus.failed,
+                    result_summary={},
+                ),
                 Job(job_type=JobType.scan, status=JobStatus.failed, payload={}),
-                Notification(channel="slack", severity=Severity.critical, subject="missing", body="missing", status="queued", metadata_json={}),
-                RemediationAction(finding_id=finding.id, action_type="github_issue", status="created", provider="github", metadata_json={}),
+                Notification(
+                    channel="slack",
+                    severity=Severity.critical,
+                    subject="missing",
+                    body="missing",
+                    status="queued",
+                    metadata_json={},
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="github_issue",
+                    status="created",
+                    provider="github",
+                    metadata_json={},
+                ),
             ]
         )
         db.flush()
 
         page = list_metadata_completeness(db=db, _=None)
-        filtered = list_metadata_completeness(gap_type="missing_commit_context", resource_type="scan", db=db, _=None)
+        filtered = list_metadata_completeness(
+            gap_type="missing_commit_context", resource_type="scan", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["gap_type"], item["resource_type"]) for item in page.items}
 
@@ -4415,8 +4869,12 @@ def test_list_orphan_evidence_reports_unlinked_records() -> None:
         repo = create_repository(db, "orphan-evidence")
         app = create_application(db, repo)
         resolved = create_finding(db, app, severity=Severity.low, status=FindingStatus.resolved)
-        component = Component(purl="pkg:pypi/orphan@1.0.0", ecosystem="pypi", name="orphan", version="1.0.0")
-        vulnerability = Vulnerability(source="osv", external_id="ORPHAN-1", severity=Severity.medium)
+        component = Component(
+            purl="pkg:pypi/orphan@1.0.0", ecosystem="pypi", name="orphan", version="1.0.0"
+        )
+        vulnerability = Vulnerability(
+            source="osv", external_id="ORPHAN-1", severity=Severity.medium
+        )
         db.add_all(
             [
                 component,
@@ -4429,7 +4887,13 @@ def test_list_orphan_evidence_reports_unlinked_records() -> None:
                     status="queued",
                     metadata_json={"finding_id": "00000000-0000-0000-0000-000000000001"},
                 ),
-                RemediationAction(finding_id=resolved.id, action_type="github_issue", status="created", provider="github", metadata_json={}),
+                RemediationAction(
+                    finding_id=resolved.id,
+                    action_type="github_issue",
+                    status="created",
+                    provider="github",
+                    metadata_json={},
+                ),
                 AuditLog(
                     actor="operator",
                     role="operator",
@@ -4443,7 +4907,9 @@ def test_list_orphan_evidence_reports_unlinked_records() -> None:
         db.flush()
 
         page = list_orphan_evidence(db=db, _=None)
-        filtered = list_orphan_evidence(gap_type="audit_without_resource", resource_type="audit_log", db=db, _=None)
+        filtered = list_orphan_evidence(
+            gap_type="audit_without_resource", resource_type="audit_log", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["gap_type"], item["resource_type"]) for item in page.items}
 
@@ -4461,17 +4927,43 @@ def test_list_scan_result_consistency_reports_scan_result_gaps() -> None:
     with SessionLocal() as db:
         repo = create_repository(db, "scan-result-consistency")
         app = create_application(db, repo)
-        empty_success = Scan(application_id=app.id, status=ScanStatus.succeeded, tool="osv", result_summary={})
-        failed = Scan(application_id=app.id, status=ScanStatus.failed, tool="trivy", result_summary={})
-        partial = Scan(application_id=app.id, status=ScanStatus.partially_succeeded, tool="grype", result_summary={})
-        failed_with_sbom = Scan(application_id=app.id, status=ScanStatus.failed, tool="syft", result_summary={})
+        empty_success = Scan(
+            application_id=app.id, status=ScanStatus.succeeded, tool="osv", result_summary={}
+        )
+        failed = Scan(
+            application_id=app.id, status=ScanStatus.failed, tool="trivy", result_summary={}
+        )
+        partial = Scan(
+            application_id=app.id,
+            status=ScanStatus.partially_succeeded,
+            tool="grype",
+            result_summary={},
+        )
+        failed_with_sbom = Scan(
+            application_id=app.id, status=ScanStatus.failed, tool="syft", result_summary={}
+        )
         db.add_all([empty_success, failed, partial, failed_with_sbom])
         db.flush()
-        db.add(Sbom(application_id=app.id, scan_id=failed_with_sbom.id, sbom_kind="source", sbom_digest="failed-sbom", storage_key="failed-sbom.json", active=True))
+        db.add(
+            Sbom(
+                application_id=app.id,
+                scan_id=failed_with_sbom.id,
+                sbom_kind="source",
+                sbom_digest="failed-sbom",
+                storage_key="failed-sbom.json",
+                active=True,
+            )
+        )
         db.flush()
 
         page = list_scan_result_consistency(db=db, _=None)
-        filtered = list_scan_result_consistency(gap_type="partial_without_scanner_failures", status=ScanStatus.partially_succeeded, tool="grype", db=db, _=None)
+        filtered = list_scan_result_consistency(
+            gap_type="partial_without_scanner_failures",
+            status=ScanStatus.partially_succeeded,
+            tool="grype",
+            db=db,
+            _=None,
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["gap_type"], item["scan_id"]) for item in page.items}
 
@@ -4501,7 +4993,12 @@ def test_list_application_mapping_quality_reports_mapping_gaps() -> None:
         db.flush()
 
         page = list_application_mapping_quality(db=db, _=None)
-        filtered = list_application_mapping_quality(gap_type="archived_repo_active_application", provider=RepositoryProvider.github, db=db, _=None)
+        filtered = list_application_mapping_quality(
+            gap_type="archived_repo_active_application",
+            provider=RepositoryProvider.github,
+            db=db,
+            _=None,
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["gap_type"], item["repository_name"]) for item in page.items}
 
@@ -4527,26 +5024,69 @@ def test_list_operational_action_queue_reports_cross_cutting_actions() -> None:
         covered.owner = "team"
         db.add_all(
             [
-                Scan(application_id=stale.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=45)),
-                Scan(application_id=missing_sbom.id, status=ScanStatus.succeeded, created_at=now_utc()),
-                Job(job_type=JobType.scan, status=JobStatus.failed, repository_id=repo.id, application_id=covered.id, last_error="scanner failed"),
+                Scan(
+                    application_id=stale.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc() - timedelta(days=45),
+                ),
+                Scan(
+                    application_id=missing_sbom.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc(),
+                ),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.failed,
+                    repository_id=repo.id,
+                    application_id=covered.id,
+                    last_error="scanner failed",
+                ),
             ]
         )
         db.flush()
-        covered_scan = Scan(application_id=covered.id, status=ScanStatus.succeeded, created_at=now_utc())
+        covered_scan = Scan(
+            application_id=covered.id, status=ScanStatus.succeeded, created_at=now_utc()
+        )
         db.add(covered_scan)
         db.flush()
-        db.add(Sbom(application_id=covered.id, scan_id=covered_scan.id, sbom_kind="source", sbom_digest="action-covered", storage_key="action-covered.json", active=True))
+        db.add(
+            Sbom(
+                application_id=covered.id,
+                scan_id=covered_scan.id,
+                sbom_kind="source",
+                sbom_digest="action-covered",
+                storage_key="action-covered.json",
+                active=True,
+            )
+        )
         finding = create_finding(db, covered, severity=Severity.critical, status=FindingStatus.open)
-        db.add(Notification(channel="slack", severity=Severity.high, subject="failed", body="failed", status="failed", metadata_json={"finding_id": str(finding.id)}))
+        db.add(
+            Notification(
+                channel="slack",
+                severity=Severity.high,
+                subject="failed",
+                body="failed",
+                status="failed",
+                metadata_json={"finding_id": str(finding.id)},
+            )
+        )
         db.flush()
 
         page = list_operational_action_queue(db=db, _=None)
-        filtered = list_operational_action_queue(action_type="critical_high_without_action", priority="critical", db=db, _=None)
+        filtered = list_operational_action_queue(
+            action_type="critical_high_without_action", priority="critical", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         actions = {item["action_type"] for item in page.items}
 
-        assert {"stale_scan", "missing_owner", "missing_sbom", "failed_job", "failed_notification", "critical_high_without_action"} <= actions
+        assert {
+            "stale_scan",
+            "missing_owner",
+            "missing_sbom",
+            "failed_job",
+            "failed_notification",
+            "critical_high_without_action",
+        } <= actions
         assert filtered.items[0]["resource_id"] == str(finding.id)
         assert filtered.items[0]["application_name"] == covered.name
         assert summary.operational_action_items >= 6
@@ -4559,10 +5099,36 @@ def test_list_evidence_freshness_reports_stale_operational_evidence() -> None:
         app = create_application(db, repo)
         db.add_all(
             [
-                Job(job_type=JobType.repository_sync, status=JobStatus.succeeded, repository_id=repo.id, completed_at=now_utc()),
-                Job(job_type=JobType.scan, status=JobStatus.succeeded, repository_id=repo.id, application_id=app.id, completed_at=now_utc()),
-                AuditLog(actor="operator", role="operator", action="backup.verify", resource_type="backup", resource_id="backup-1", metadata_json={}),
-                AuditLog(actor="operator", role="operator", action="vex.review", resource_type="vex", resource_id="vex-old", metadata_json={}, created_at=now_utc() - timedelta(days=45)),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.succeeded,
+                    repository_id=repo.id,
+                    completed_at=now_utc(),
+                ),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.succeeded,
+                    repository_id=repo.id,
+                    application_id=app.id,
+                    completed_at=now_utc(),
+                ),
+                AuditLog(
+                    actor="operator",
+                    role="operator",
+                    action="backup.verify",
+                    resource_type="backup",
+                    resource_id="backup-1",
+                    metadata_json={},
+                ),
+                AuditLog(
+                    actor="operator",
+                    role="operator",
+                    action="vex.review",
+                    resource_type="vex",
+                    resource_id="vex-old",
+                    metadata_json={},
+                    created_at=now_utc() - timedelta(days=45),
+                ),
             ]
         )
         db.flush()
@@ -4588,28 +5154,53 @@ def test_list_mvp_readiness_drilldown_reports_repository_gaps() -> None:
         ready_repo.visibility = "private"
         ready_app = create_application(db, ready_repo, "ready-app")
         ready_app.owner = "team"
-        ready_scan = Scan(application_id=ready_app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        ready_scan = Scan(
+            application_id=ready_app.id, status=ScanStatus.succeeded, created_at=now_utc()
+        )
         db.add(ready_scan)
         db.flush()
-        db.add(Sbom(application_id=ready_app.id, scan_id=ready_scan.id, sbom_kind="source", sbom_digest="mvp-ready", storage_key="mvp-ready.json", active=True))
+        db.add(
+            Sbom(
+                application_id=ready_app.id,
+                scan_id=ready_scan.id,
+                sbom_kind="source",
+                sbom_digest="mvp-ready",
+                storage_key="mvp-ready.json",
+                active=True,
+            )
+        )
 
         gap_repo = create_repository(db, "mvp-drilldown-gap")
         gap_repo.topics = ["mvp"]
         gap_repo.visibility = None
         gap_app = create_application(db, gap_repo, "gap-app")
         gap_app.owner = None
-        db.add(Scan(application_id=gap_app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=45)))
+        db.add(
+            Scan(
+                application_id=gap_app.id,
+                status=ScanStatus.succeeded,
+                created_at=now_utc() - timedelta(days=45),
+            )
+        )
         create_finding(db, gap_app, severity=Severity.critical, status=FindingStatus.open)
         db.flush()
 
         page = list_mvp_readiness_drilldown(db=db, _=None)
-        filtered = list_mvp_readiness_drilldown(ready=False, check="critical_high_triage", db=db, _=None)
+        filtered = list_mvp_readiness_drilldown(
+            ready=False, check="critical_high_triage", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         by_name = {item["repository_name"]: item for item in page.items}
 
         assert by_name[ready_repo.name]["ready"] is True
         assert by_name[gap_repo.name]["ready"] is False
-        assert {"repository_classification", "owners", "active_source_sbom", "fresh_scan", "critical_high_triage"} <= set(by_name[gap_repo.name]["failing_checks"])
+        assert {
+            "repository_classification",
+            "owners",
+            "active_source_sbom",
+            "fresh_scan",
+            "critical_high_triage",
+        } <= set(by_name[gap_repo.name]["failing_checks"])
         assert filtered.items[0]["repository_name"] == gap_repo.name
         assert summary.mvp_readiness_gap_items >= 1
 
@@ -4621,31 +5212,53 @@ def test_list_remediation_evidence_chain_reports_missing_stages() -> None:
         app = create_application(db, repo)
         complete = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
         missing = create_finding(db, app, severity=Severity.critical, status=FindingStatus.open)
-        validation_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
+        validation_scan = Scan(
+            application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc()
+        )
         db.add(validation_scan)
         db.flush()
         db.add_all(
             [
-                Notification(channel="slack", severity=Severity.high, subject="sent", body="sent", status="sent", sent_at=now_utc(), metadata_json={"finding_id": str(complete.id)}),
+                Notification(
+                    channel="slack",
+                    severity=Severity.high,
+                    subject="sent",
+                    body="sent",
+                    status="sent",
+                    sent_at=now_utc(),
+                    metadata_json={"finding_id": str(complete.id)},
+                ),
                 RemediationAction(
                     finding_id=complete.id,
                     action_type="github_issue",
                     status="closed",
                     provider="github",
                     url="https://github.com/local/demo/issues/1",
-                    metadata_json={"validation_status": "succeeded", "validation_scan_id": str(validation_scan.id), "github_issue_closed_at": now_utc().isoformat()},
+                    metadata_json={
+                        "validation_status": "succeeded",
+                        "validation_scan_id": str(validation_scan.id),
+                        "github_issue_closed_at": now_utc().isoformat(),
+                    },
                 ),
             ]
         )
         db.flush()
 
         page = list_remediation_evidence_chain(db=db, _=None)
-        filtered = list_remediation_evidence_chain(severity=Severity.critical, status=FindingStatus.open, missing_stage="issue_or_pr", db=db, _=None)
+        filtered = list_remediation_evidence_chain(
+            severity=Severity.critical,
+            status=FindingStatus.open,
+            missing_stage="issue_or_pr",
+            db=db,
+            _=None,
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         by_id = {item["finding_id"]: item for item in page.items}
 
         assert by_id[str(complete.id)]["missing_stages"] == []
-        assert {"notification", "issue_or_pr", "validation"} <= set(by_id[str(missing.id)]["missing_stages"])
+        assert {"notification", "issue_or_pr", "validation"} <= set(
+            by_id[str(missing.id)]["missing_stages"]
+        )
         assert filtered.items[0]["finding_id"] == str(missing.id)
         assert summary.remediation_evidence_gap_items >= 1
 
@@ -4656,7 +5269,9 @@ def test_list_owner_handoff_readiness_reports_handoff_gaps() -> None:
         repo = create_repository(db, "owner-handoff")
         ready = create_application(db, repo, "handoff-ready")
         ready.owner = "team-a"
-        ready_scan = Scan(application_id=ready.id, status=ScanStatus.succeeded, created_at=now_utc())
+        ready_scan = Scan(
+            application_id=ready.id, status=ScanStatus.succeeded, created_at=now_utc()
+        )
         missing_owner = create_application(db, repo, "handoff-missing-owner")
         missing_owner.owner = None
         stale = create_application(db, repo, "handoff-stale")
@@ -4667,17 +5282,36 @@ def test_list_owner_handoff_readiness_reports_handoff_gaps() -> None:
         db.add_all(
             [
                 ready_scan,
-                Scan(application_id=missing_owner.id, status=ScanStatus.succeeded, created_at=now_utc()),
-                Scan(application_id=stale.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=45)),
-                Scan(application_id=deprecated.id, status=ScanStatus.succeeded, created_at=now_utc()),
-                AuditLog(actor="operator", role="operator", action="owner.handoff", resource_type="application", resource_id=str(ready.id), metadata_json={}),
+                Scan(
+                    application_id=missing_owner.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=stale.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc() - timedelta(days=45),
+                ),
+                Scan(
+                    application_id=deprecated.id, status=ScanStatus.succeeded, created_at=now_utc()
+                ),
+                AuditLog(
+                    actor="operator",
+                    role="operator",
+                    action="owner.handoff",
+                    resource_type="application",
+                    resource_id=str(ready.id),
+                    metadata_json={},
+                ),
             ]
         )
         create_finding(db, stale, severity=Severity.high, status=FindingStatus.open)
         db.flush()
 
         page = list_owner_handoff_readiness(db=db, _=None)
-        stale_page = list_owner_handoff_readiness(issue_type="stale_scan", owner="team-b", db=db, _=None)
+        stale_page = list_owner_handoff_readiness(
+            issue_type="stale_scan", owner="team-b", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         issues = {(item["application_name"], item["issue_type"]) for item in page.items}
 
@@ -4707,7 +5341,9 @@ def test_list_repository_inventory_assurance_reports_inventory_gaps() -> None:
         db.flush()
 
         page = list_repository_inventory_assurance(db=db, _=None)
-        filtered = list_repository_inventory_assurance(gap_type="missing_provider_id", provider=RepositoryProvider.github, db=db, _=None)
+        filtered = list_repository_inventory_assurance(
+            gap_type="missing_provider_id", provider=RepositoryProvider.github, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["gap_type"], item["repository_name"]) for item in page.items}
 
@@ -4716,7 +5352,10 @@ def test_list_repository_inventory_assurance_reports_inventory_gaps() -> None:
         assert ("missing_primary_language", stale_repo.name) in gaps
         assert ("stale_sync", stale_repo.name) in gaps
         assert ("missing_provider_id", missing_provider.name) in gaps
-        assert any(item["gap_type"] == "repository_count_below_target" and item["target"] == 54 for item in page.items)
+        assert any(
+            item["gap_type"] == "repository_count_below_target" and item["target"] == 54
+            for item in page.items
+        )
         assert filtered.items[0]["repository_name"] == missing_provider.name
         assert summary.repository_inventory_assurance_gap_items >= 6
 
@@ -4732,19 +5371,45 @@ def test_list_daily_scan_execution_evidence_reports_missing_daily_execution() ->
         db.add_all(
             [
                 Scan(application_id=complete.id, status=ScanStatus.succeeded, created_at=now_utc()),
-                Job(job_type=JobType.scan, status=JobStatus.succeeded, application_id=complete.id, repository_id=repo.id, completed_at=now_utc()),
-                Scan(application_id=stale.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=2)),
-                Job(job_type=JobType.scan, status=JobStatus.succeeded, application_id=stale.id, repository_id=repo.id, completed_at=now_utc() - timedelta(days=2)),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.succeeded,
+                    application_id=complete.id,
+                    repository_id=repo.id,
+                    completed_at=now_utc(),
+                ),
+                Scan(
+                    application_id=stale.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc() - timedelta(days=2),
+                ),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.succeeded,
+                    application_id=stale.id,
+                    repository_id=repo.id,
+                    completed_at=now_utc() - timedelta(days=2),
+                ),
                 Scan(application_id=failed.id, status=ScanStatus.failed, created_at=now_utc()),
-                Job(job_type=JobType.scan, status=JobStatus.failed, application_id=failed.id, repository_id=repo.id, completed_at=now_utc()),
-                Scan(application_id=missing_job.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.failed,
+                    application_id=failed.id,
+                    repository_id=repo.id,
+                    completed_at=now_utc(),
+                ),
+                Scan(
+                    application_id=missing_job.id, status=ScanStatus.succeeded, created_at=now_utc()
+                ),
             ]
         )
         db.flush()
 
         page = list_daily_scan_execution_evidence(db=db, _=None)
         missing = list_daily_scan_execution_evidence(evidence_present=False, db=db, _=None)
-        filtered = list_daily_scan_execution_evidence(issue_type="missing_scan_job", evidence_present=False, db=db, _=None)
+        filtered = list_daily_scan_execution_evidence(
+            issue_type="missing_scan_job", evidence_present=False, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         by_app = {item["application_name"]: item for item in page.items}
 
@@ -4752,7 +5417,11 @@ def test_list_daily_scan_execution_evidence_reports_missing_daily_execution() ->
         assert by_app["daily-stale"]["issue_type"] == "stale_scan"
         assert by_app["daily-failed"]["issue_type"] == "scan_not_succeeded"
         assert by_app["daily-missing-job"]["issue_type"] == "missing_scan_job"
-        assert {item["application_name"] for item in missing.items} >= {"daily-stale", "daily-failed", "daily-missing-job"}
+        assert {item["application_name"] for item in missing.items} >= {
+            "daily-stale",
+            "daily-failed",
+            "daily-missing-job",
+        }
         assert filtered.items[0]["application_name"] == "daily-missing-job"
         assert summary.daily_scan_execution_gap_items >= 3
 
@@ -4765,25 +5434,58 @@ def test_list_critical_high_triage_reports_missing_triage_evidence() -> None:
         complete_app.owner = "team"
         missing_app = create_application(db, repo, "triage-missing")
         missing_app.owner = None
-        complete = create_finding(db, complete_app, severity=Severity.high, status=FindingStatus.open)
-        missing = create_finding(db, missing_app, severity=Severity.critical, status=FindingStatus.open)
+        complete = create_finding(
+            db, complete_app, severity=Severity.high, status=FindingStatus.open
+        )
+        missing = create_finding(
+            db, missing_app, severity=Severity.critical, status=FindingStatus.open
+        )
         missing.created_at = now_utc() - timedelta(days=10)
         db.add_all(
             [
-                Notification(channel="slack", severity=Severity.high, subject="sent", body="sent", status="sent", sent_at=now_utc(), metadata_json={"finding_id": str(complete.id)}),
-                RemediationAction(finding_id=complete.id, action_type="github_issue", status="created", provider="github", url="https://github.com/local/demo/issues/1", metadata_json={}),
-                VexStatement(finding_id=complete.id, status=VexStatus.under_investigation, justification="triage", approved_by="security", review_date=now_utc() + timedelta(days=7)),
+                Notification(
+                    channel="slack",
+                    severity=Severity.high,
+                    subject="sent",
+                    body="sent",
+                    status="sent",
+                    sent_at=now_utc(),
+                    metadata_json={"finding_id": str(complete.id)},
+                ),
+                RemediationAction(
+                    finding_id=complete.id,
+                    action_type="github_issue",
+                    status="created",
+                    provider="github",
+                    url="https://github.com/local/demo/issues/1",
+                    metadata_json={},
+                ),
+                VexStatement(
+                    finding_id=complete.id,
+                    status=VexStatus.under_investigation,
+                    justification="triage",
+                    approved_by="security",
+                    review_date=now_utc() + timedelta(days=7),
+                ),
             ]
         )
         db.flush()
 
         page = list_critical_high_triage(db=db, _=None)
-        filtered = list_critical_high_triage(severity=Severity.critical, status=FindingStatus.open, missing="issue_or_pr", db=db, _=None)
+        filtered = list_critical_high_triage(
+            severity=Severity.critical,
+            status=FindingStatus.open,
+            missing="issue_or_pr",
+            db=db,
+            _=None,
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         by_id = {item["finding_id"]: item for item in page.items}
 
         assert by_id[str(complete.id)]["missing"] == []
-        assert {"owner", "notification", "issue_or_pr", "vex_or_exception", "sla"} <= set(by_id[str(missing.id)]["missing"])
+        assert {"owner", "notification", "issue_or_pr", "vex_or_exception", "sla"} <= set(
+            by_id[str(missing.id)]["missing"]
+        )
         assert filtered.items[0]["finding_id"] == str(missing.id)
         assert summary.critical_high_triage_gap_items >= 1
 
@@ -4796,17 +5498,37 @@ def test_list_initial_inventory_reports_completion_and_filters() -> None:
         missing_app = create_application(db, repo, "inventory-missing")
         db.add_all(
             [
-                Scan(application_id=complete_app.id, status=ScanStatus.succeeded, created_at=now_utc()),
-                Scan(application_id=missing_app.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Scan(
+                    application_id=complete_app.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=missing_app.id, status=ScanStatus.succeeded, created_at=now_utc()
+                ),
             ]
         )
-        complete_finding = create_finding(db, complete_app, severity=Severity.critical, status=FindingStatus.open)
+        complete_finding = create_finding(
+            db, complete_app, severity=Severity.critical, status=FindingStatus.open
+        )
         create_finding(db, missing_app, severity=Severity.high, status=FindingStatus.open)
-        db.add(Notification(channel="slack", severity=Severity.critical, subject="sent", body="sent", status="sent", sent_at=now_utc(), metadata_json={"finding_id": str(complete_finding.id)}))
+        db.add(
+            Notification(
+                channel="slack",
+                severity=Severity.critical,
+                subject="sent",
+                body="sent",
+                status="sent",
+                sent_at=now_utc(),
+                metadata_json={"finding_id": str(complete_finding.id)},
+            )
+        )
         db.flush()
 
         page = list_initial_inventory(db=db, _=None)
-        filtered = list_initial_inventory(complete=False, issue_type="missing_triage_evidence", db=db, _=None)
+        filtered = list_initial_inventory(
+            complete=False, issue_type="missing_triage_evidence", db=db, _=None
+        )
         by_app = {item["application_name"]: item for item in page.items}
 
         assert by_app["inventory-complete"]["complete"] is True
@@ -4843,9 +5565,17 @@ def test_queue_pressure_reports_stale_overdue_and_retry_exhausted() -> None:
         db.flush()
 
         rows = queue_pressure(db=db, _=None)
-        scan_queued = next(row for row in rows if row.job_type == JobType.scan and row.status == JobStatus.queued)
-        scan_running = next(row for row in rows if row.job_type == JobType.scan and row.status == JobStatus.running)
-        notification_failed = next(row for row in rows if row.job_type == JobType.notification and row.status == JobStatus.failed)
+        scan_queued = next(
+            row for row in rows if row.job_type == JobType.scan and row.status == JobStatus.queued
+        )
+        scan_running = next(
+            row for row in rows if row.job_type == JobType.scan and row.status == JobStatus.running
+        )
+        notification_failed = next(
+            row
+            for row in rows
+            if row.job_type == JobType.notification and row.status == JobStatus.failed
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
         assert scan_queued.overdue_count == 1
@@ -4871,7 +5601,9 @@ def test_list_scheduler_drift_reports_missing_jobs_schedules_and_overdue_queue()
         db.flush()
 
         page = list_scheduler_drift(db=db, _=None)
-        filtered = list_scheduler_drift(drift_type="overdue_queued_job", job_type=JobType.scan, db=db, _=None)
+        filtered = list_scheduler_drift(
+            drift_type="overdue_queued_job", job_type=JobType.scan, db=db, _=None
+        )
         drift_types = {item["drift_type"] for item in page.items}
 
         assert "missing_recent_job" in drift_types
@@ -4891,13 +5623,27 @@ def test_storage_pressure_reports_missing_inactive_old_and_failed_artifacts() ->
             created_at=now_utc() - timedelta(days=100),
             result_summary={"artifacts": {"osv": {"storage_key": "old.json", "size_bytes": 123}}},
         )
-        failed_scan = Scan(application_id=app.id, status=ScanStatus.failed, result_summary={"sbom_stored": False})
+        failed_scan = Scan(
+            application_id=app.id, status=ScanStatus.failed, result_summary={"sbom_stored": False}
+        )
         db.add_all([old_scan, failed_scan])
         db.flush()
         db.add_all(
             [
-                Sbom(application_id=app.id, scan_id=old_scan.id, sbom_digest="missing-key", storage_key="", active=True),
-                Sbom(application_id=app.id, scan_id=old_scan.id, sbom_digest="inactive-pressure", storage_key="inactive.json", active=False),
+                Sbom(
+                    application_id=app.id,
+                    scan_id=old_scan.id,
+                    sbom_digest="missing-key",
+                    storage_key="",
+                    active=True,
+                ),
+                Sbom(
+                    application_id=app.id,
+                    scan_id=old_scan.id,
+                    sbom_digest="inactive-pressure",
+                    storage_key="inactive.json",
+                    active=False,
+                ),
             ]
         )
         db.flush()
@@ -4922,15 +5668,29 @@ def test_list_repository_sync_lag_reports_sync_and_scan_lag_filters() -> None:
         repo.last_synced_at = now_utc() - timedelta(days=40)
         repo.pushed_at = now_utc()
         app = create_application(db, repo)
-        scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=1))
+        scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=1),
+        )
         db.add(scan)
         db.flush()
 
         page = list_repository_sync_lag(db=db, _=None)
-        filtered = list_repository_sync_lag(lag_type="missing_provider_repository_id", provider=RepositoryProvider.github, db=db, _=None)
+        filtered = list_repository_sync_lag(
+            lag_type="missing_provider_repository_id",
+            provider=RepositoryProvider.github,
+            db=db,
+            _=None,
+        )
         lag_types = {item["lag_type"] for item in page.items}
 
-        assert {"stale_sync", "pushed_after_sync", "pushed_after_scan", "missing_provider_repository_id"} <= lag_types
+        assert {
+            "stale_sync",
+            "pushed_after_sync",
+            "pushed_after_scan",
+            "missing_provider_repository_id",
+        } <= lag_types
         assert filtered.items[0]["repository_name"] == repo.name
 
 
@@ -4942,17 +5702,42 @@ def test_list_credential_failures_reports_sources_and_filters() -> None:
         finding = create_finding(db, app, severity=Severity.high, status=FindingStatus.open)
         db.add_all(
             [
-                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, last_error="GitHub token 403"),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.failed,
+                    repository_id=repo.id,
+                    last_error="GitHub token 403",
+                ),
                 Scan(application_id=app.id, status=ScanStatus.failed, error_message="auth failed"),
-                RemediationAction(finding_id=finding.id, action_type="github_issue", status="failed", metadata_json={"error": "permission denied"}),
-                Notification(channel="slack", severity=Severity.high, subject="failed", body="rate limit 403", status="failed"),
-                AuditLog(actor="worker", role="operator", action="github.sync", resource_type="repository", resource_id=str(repo.id), metadata_json={"error": "credential expired"}),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="github_issue",
+                    status="failed",
+                    metadata_json={"error": "permission denied"},
+                ),
+                Notification(
+                    channel="slack",
+                    severity=Severity.high,
+                    subject="failed",
+                    body="rate limit 403",
+                    status="failed",
+                ),
+                AuditLog(
+                    actor="worker",
+                    role="operator",
+                    action="github.sync",
+                    resource_type="repository",
+                    resource_id=str(repo.id),
+                    metadata_json={"error": "credential expired"},
+                ),
             ]
         )
         db.flush()
 
         page = list_credential_failures(db=db, _=None)
-        filtered = list_credential_failures(source="job", failure_type="private_auth_failure", db=db, _=None)
+        filtered = list_credential_failures(
+            source="job", failure_type="private_auth_failure", db=db, _=None
+        )
         sources = {item["source"] for item in page.items}
 
         assert {"job", "scan", "remediation_action", "notification", "audit_log"} <= sources
@@ -4965,7 +5750,9 @@ def test_list_component_usage_reports_active_sbom_application_context_and_filter
         repo = create_repository(db, "component-usage")
         app = create_application(db, repo)
         scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
-        component = Component(purl="pkg:npm/react@18.2.0", ecosystem="npm", name="react", version="18.2.0")
+        component = Component(
+            purl="pkg:npm/react@18.2.0", ecosystem="npm", name="react", version="18.2.0"
+        )
         db.add_all([scan, component])
         db.flush()
         sbom = Sbom(
@@ -4994,11 +5781,17 @@ def test_list_vulnerability_impact_reports_finding_context_and_filters() -> None
     with SessionLocal() as db:
         repo = create_repository(db, "vulnerability-impact")
         app = create_application(db, repo)
-        finding = create_finding(db, app, severity=Severity.critical, risk_score=9.9, fixed_version="2.0.0")
+        finding = create_finding(
+            db, app, severity=Severity.critical, risk_score=9.9, fixed_version="2.0.0"
+        )
         vulnerability = db.get(Vulnerability, finding.vulnerability_id)
 
-        page = list_vulnerability_impact(external_id=vulnerability.external_id, severity=Severity.critical, db=db, _=None)
-        filtered = list_vulnerability_impact(status=FindingStatus.open, application_id=app.id, db=db, _=None)
+        page = list_vulnerability_impact(
+            external_id=vulnerability.external_id, severity=Severity.critical, db=db, _=None
+        )
+        filtered = list_vulnerability_impact(
+            status=FindingStatus.open, application_id=app.id, db=db, _=None
+        )
 
         assert page.items[0]["finding_id"] == str(finding.id)
         assert page.items[0]["application_name"] == app.name
@@ -5041,7 +5834,9 @@ def test_list_fixable_gaps_reports_missing_failed_and_stale_actions() -> None:
         db.flush()
 
         page = list_fixable_gaps(db=db, _=None)
-        filtered = list_fixable_gaps(gap_type="missing_issue_or_pr", severity=Severity.critical, db=db, _=None)
+        filtered = list_fixable_gaps(
+            gap_type="missing_issue_or_pr", severity=Severity.critical, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gap_types = {item["gap_type"] for item in page.items}
 
@@ -5063,7 +5858,11 @@ def test_list_pr_ci_failures_reports_metadata_failures_and_filters() -> None:
                 provider="github",
                 status="opened",
                 branch="fix/pr-ci-failures",
-                metadata_json={"pull_request_url": "https://github.com/local/pr-ci-failures/pull/1", "ci_passed": False, "ci_error": "unit tests failed"},
+                metadata_json={
+                    "pull_request_url": "https://github.com/local/pr-ci-failures/pull/1",
+                    "ci_passed": False,
+                    "ci_error": "unit tests failed",
+                },
             )
         )
         db.flush()
@@ -5099,11 +5898,19 @@ def test_list_isolated_scan_health_reports_scan_sbom_and_artifact_gaps() -> None
         db.flush()
 
         page = list_isolated_scan_health(db=db, _=None)
-        failed_filter = list_isolated_scan_health(health_type="unhealthy_scan", scan_status=ScanStatus.failed, db=db, _=None)
+        failed_filter = list_isolated_scan_health(
+            health_type="unhealthy_scan", scan_status=ScanStatus.failed, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         health_types = {item["health_type"] for item in page.items}
 
-        assert {"missing_scan", "stale_scan", "unhealthy_scan", "missing_active_source_sbom", "missing_artifact_storage"} <= health_types
+        assert {
+            "missing_scan",
+            "stale_scan",
+            "unhealthy_scan",
+            "missing_active_source_sbom",
+            "missing_artifact_storage",
+        } <= health_types
         assert failed_filter.items[0]["application_id"] == str(failed_app.id)
         assert any(item["application_id"] == str(missing_app.id) for item in page.items)
         assert summary.isolated_scan_health_items >= 5
@@ -5142,11 +5949,18 @@ def test_list_repository_inventory_gaps_reports_missing_inventory_fields_and_fil
         db.flush()
 
         page = list_repository_inventory_gaps(db=db, _=None)
-        filtered = list_repository_inventory_gaps(gap_type="missing_visibility", provider=RepositoryProvider.github, db=db, _=None)
+        filtered = list_repository_inventory_gaps(
+            gap_type="missing_visibility", provider=RepositoryProvider.github, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gap_types = {item["gap_type"] for item in page.items}
 
-        assert {"repository_registration", "missing_visibility", "missing_default_branch", "missing_primary_language"} <= gap_types
+        assert {
+            "repository_registration",
+            "missing_visibility",
+            "missing_default_branch",
+            "missing_primary_language",
+        } <= gap_types
         assert filtered.items[0]["repository_name"] == repo.name
         assert summary.repository_inventory_gap_items >= 4
 
@@ -5222,7 +6036,9 @@ def test_list_auto_resolution_evidence_reports_complete_and_gap_records() -> Non
     with SessionLocal() as db:
         repo = create_repository(db, "auto-resolution")
         app = create_application(db, repo)
-        complete = create_finding(db, app, severity=Severity.critical, status=FindingStatus.resolved)
+        complete = create_finding(
+            db, app, severity=Severity.critical, status=FindingStatus.resolved
+        )
         complete.resolved_at = now_utc()
         gap = create_finding(db, app, severity=Severity.high, status=FindingStatus.resolved)
         db.get(Component, gap.component_id).purl = "pkg:pypi/high-auto-resolution@1.0.0"
@@ -5242,13 +6058,18 @@ def test_list_auto_resolution_evidence_reports_complete_and_gap_records() -> Non
                 action_type="github_issue",
                 provider="github",
                 status="closed",
-                metadata_json={"validation_scan_id": str(validation_scan.id), "validation_status": "succeeded"},
+                metadata_json={
+                    "validation_scan_id": str(validation_scan.id),
+                    "validation_status": "succeeded",
+                },
             )
         )
         db.flush()
 
         page = list_auto_resolution_evidence(db=db, _=None)
-        filtered = list_auto_resolution_evidence(complete=False, severity=Severity.high, db=db, _=None)
+        filtered = list_auto_resolution_evidence(
+            complete=False, severity=Severity.high, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         by_finding = {item["finding_id"]: item for item in page.items}
 
@@ -5264,8 +6085,12 @@ def test_list_job_concurrency_risks_reports_duplicates_stale_locks_and_retry_exh
         repo = create_repository(db, "job-concurrency")
         app = create_application(db, repo)
         payload = {"repository_id": str(repo.id)}
-        duplicate_a = Job(job_type=JobType.scan, status=JobStatus.queued, repository_id=repo.id, payload=payload)
-        duplicate_b = Job(job_type=JobType.scan, status=JobStatus.running, repository_id=repo.id, payload=payload)
+        duplicate_a = Job(
+            job_type=JobType.scan, status=JobStatus.queued, repository_id=repo.id, payload=payload
+        )
+        duplicate_b = Job(
+            job_type=JobType.scan, status=JobStatus.running, repository_id=repo.id, payload=payload
+        )
         stale = Job(
             job_type=JobType.notification,
             status=JobStatus.running,
@@ -5274,12 +6099,20 @@ def test_list_job_concurrency_risks_reports_duplicates_stale_locks_and_retry_exh
             locked_at=now_utc() - timedelta(hours=2),
             started_at=now_utc() - timedelta(hours=2),
         )
-        exhausted = Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, attempts=3, max_attempts=3)
+        exhausted = Job(
+            job_type=JobType.repository_sync,
+            status=JobStatus.failed,
+            repository_id=repo.id,
+            attempts=3,
+            max_attempts=3,
+        )
         db.add_all([duplicate_a, duplicate_b, stale, exhausted])
         db.flush()
 
         page = list_job_concurrency_risks(db=db, _=None)
-        filtered = list_job_concurrency_risks(risk_type="duplicate_active_job", job_type=JobType.scan, db=db, _=None)
+        filtered = list_job_concurrency_risks(
+            risk_type="duplicate_active_job", job_type=JobType.scan, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         risks = {(item["risk_type"], item["job_id"]) for item in page.items}
 
@@ -5301,16 +6134,38 @@ def test_list_import_failures_classifies_clone_auth_timeout_and_rate_limit() -> 
         app = create_application(db, repo)
         db.add_all(
             [
-                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, last_error="git clone failed"),
-                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=private_repo.id, last_error="401 credential rejected"),
-                Job(job_type=JobType.scan, status=JobStatus.timed_out, application_id=app.id, last_error="clone timed out"),
-                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, last_error="GitHub rate limit exceeded"),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.failed,
+                    repository_id=repo.id,
+                    last_error="git clone failed",
+                ),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.failed,
+                    repository_id=private_repo.id,
+                    last_error="401 credential rejected",
+                ),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.timed_out,
+                    application_id=app.id,
+                    last_error="clone timed out",
+                ),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.failed,
+                    repository_id=repo.id,
+                    last_error="GitHub rate limit exceeded",
+                ),
             ]
         )
         db.flush()
 
         page = list_import_failures(db=db, _=None)
-        private_page = list_import_failures(source_classification=SourceClassification.private, db=db, _=None)
+        private_page = list_import_failures(
+            source_classification=SourceClassification.private, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         failure_types = {item["failure_type"] for item in page.items}
 
@@ -5324,7 +6179,9 @@ def test_list_scanner_database_freshness_reports_missing_stale_and_update_failur
     with SessionLocal() as db:
         repo = create_repository(db, "scanner-db")
         app = create_application(db, repo)
-        missing = Scan(application_id=app.id, status=ScanStatus.succeeded, tool="trivy", result_summary={})
+        missing = Scan(
+            application_id=app.id, status=ScanStatus.succeeded, tool="trivy", result_summary={}
+        )
         stale = Scan(
             application_id=app.id,
             status=ScanStatus.succeeded,
@@ -5370,7 +6227,9 @@ def test_list_repository_classification_review_reports_mismatches_and_dashboard_
         db.flush()
 
         page = list_repository_classification_review(db=db, _=None)
-        filtered = list_repository_classification_review(gap_type="classification_mismatch", db=db, _=None)
+        filtered = list_repository_classification_review(
+            gap_type="classification_mismatch", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["repository_name"], item["gap_type"]) for item in page.items}
 
@@ -5382,13 +6241,20 @@ def test_list_repository_classification_review_reports_mismatches_and_dashboard_
         assert summary.repository_classification_gap_items == 4
 
 
-def test_list_github_permissions_reports_configuration_audit_and_auth_failures_without_secret_values() -> None:
+def test_list_github_permissions_reports_configuration_audit_and_auth_failures_without_secret_values() -> (
+    None
+):
     SessionLocal = session_factory()
     with SessionLocal() as db:
         repo = create_repository(db, "github-permissions")
         db.add_all(
             [
-                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, last_error="403 permission denied"),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.failed,
+                    repository_id=repo.id,
+                    last_error="403 permission denied",
+                ),
                 AuditLog(
                     actor="admin",
                     role="admin",
@@ -5400,10 +6266,14 @@ def test_list_github_permissions_reports_configuration_audit_and_auth_failures_w
             ]
         )
         db.flush()
-        settings = Settings(api_token="change-me", github_token="secret-pat", github_webhook_secret=None)
+        settings = Settings(
+            api_token="change-me", github_token="secret-pat", github_webhook_secret=None
+        )
 
         page = list_github_permissions(db=db, settings=settings, _=None)
-        filtered = list_github_permissions(check="github_pat_configured", status="warn", db=db, settings=settings, _=None)
+        filtered = list_github_permissions(
+            check="github_pat_configured", status="warn", db=db, settings=settings, _=None
+        )
         summary = dashboard_summary(db=db, settings=settings, _=None)
         by_check = {item["check"]: item for item in page.items}
 
@@ -5440,7 +6310,9 @@ def test_list_pr_staleness_reports_stale_ci_and_review_waiting_items() -> None:
         db.flush()
 
         page = list_pr_staleness(db=db, _=None)
-        filtered = list_pr_staleness(staleness_type="stale_pr", severity=Severity.high, db=db, _=None)
+        filtered = list_pr_staleness(
+            staleness_type="stale_pr", severity=Severity.high, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         types = {item["staleness_type"] for item in page.items}
 
@@ -5458,11 +6330,22 @@ def test_list_medium_review_reports_evidence_state_and_dashboard_count() -> None
         tracked = create_finding(db, app, severity=Severity.medium, status=FindingStatus.triaged)
         db.get(Component, tracked.component_id).purl = "pkg:pypi/medium-tracked@1.0.0"
         db.get(Vulnerability, tracked.vulnerability_id).external_id = "medium-tracked"
-        db.add(Notification(channel="slack", severity=Severity.medium, subject="medium", body="body", status="sent", metadata_json={"finding_id": str(tracked.id)}))
+        db.add(
+            Notification(
+                channel="slack",
+                severity=Severity.medium,
+                subject="medium",
+                body="body",
+                status="sent",
+                metadata_json={"finding_id": str(tracked.id)},
+            )
+        )
         db.flush()
 
         page = list_medium_review(db=db, _=None)
-        filtered = list_medium_review(review_type="missing_triage_evidence", status=FindingStatus.open, db=db, _=None)
+        filtered = list_medium_review(
+            review_type="missing_triage_evidence", status=FindingStatus.open, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         by_finding = {item["finding_id"]: item for item in page.items}
 
@@ -5477,7 +6360,9 @@ def test_list_false_positive_review_reports_findings_vex_expiry_and_dashboard_co
     with SessionLocal() as db:
         repo = create_repository(db, "false-positive-review")
         app = create_application(db, repo)
-        false_positive = create_finding(db, app, severity=Severity.low, status=FindingStatus.false_positive)
+        false_positive = create_finding(
+            db, app, severity=Severity.low, status=FindingStatus.false_positive
+        )
         vex_finding = create_finding(db, app, severity=Severity.medium, status=FindingStatus.open)
         db.add(
             VexStatement(
@@ -5491,7 +6376,9 @@ def test_list_false_positive_review_reports_findings_vex_expiry_and_dashboard_co
         db.flush()
 
         page = list_false_positive_review(db=db, _=None)
-        expired = list_false_positive_review(expired=True, review_type="expired_not_affected_vex", db=db, _=None)
+        expired = list_false_positive_review(
+            expired=True, review_type="expired_not_affected_vex", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         sources = {(item["source"], item["finding_id"]) for item in page.items}
 
@@ -5563,7 +6450,9 @@ def test_secret_management_reports_configuration_gaps_without_secret_values() ->
         )
 
         page = list_secret_management(db=db, settings=settings, _=None)
-        filtered = list_secret_management(check="github_pat_configured", status="warn", db=db, settings=settings, _=None)
+        filtered = list_secret_management(
+            check="github_pat_configured", status="warn", db=db, settings=settings, _=None
+        )
         summary = dashboard_summary(db=db, settings=settings, _=None)
         rendered = str(page.items)
 
@@ -5622,7 +6511,9 @@ def test_credential_exposure_reports_sources_without_secret_values() -> None:
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         rendered = str(page.items)
 
-        assert {"audit", "job", "remediation", "notification"}.issubset({item["source"] for item in page.items})
+        assert {"audit", "job", "remediation", "notification"}.issubset(
+            {item["source"] for item in page.items}
+        )
         assert filtered.items[0]["source"] == "audit"
         assert any(item["exposure_type"] == "private_key" for item in page.items)
         assert "SUPER_SECRET_TOKEN" not in rendered
@@ -5636,16 +6527,36 @@ def test_auth_deployment_reports_default_role_and_auth_evidence() -> None:
     with SessionLocal() as db:
         db.add_all(
             [
-                AuditLog(actor="viewer", role="viewer", action="application.read", resource_type="application", metadata_json={}),
-                AuditLog(actor="operator", role="operator", action="scan.create", resource_type="scan", metadata_json={}),
-                AuditLog(actor="admin", role="admin", action="auth.proxy", resource_type="auth", metadata_json={"reverse_proxy": True}),
+                AuditLog(
+                    actor="viewer",
+                    role="viewer",
+                    action="application.read",
+                    resource_type="application",
+                    metadata_json={},
+                ),
+                AuditLog(
+                    actor="operator",
+                    role="operator",
+                    action="scan.create",
+                    resource_type="scan",
+                    metadata_json={},
+                ),
+                AuditLog(
+                    actor="admin",
+                    role="admin",
+                    action="auth.proxy",
+                    resource_type="auth",
+                    metadata_json={"reverse_proxy": True},
+                ),
             ]
         )
         db.commit()
         settings = Settings(api_default_role="admin", api_token="change-me")
 
         page = list_auth_deployment(db=db, settings=settings, _=None)
-        filtered = list_auth_deployment(check="default_role_admin", status="warn", db=db, settings=settings, _=None)
+        filtered = list_auth_deployment(
+            check="default_role_admin", status="warn", db=db, settings=settings, _=None
+        )
         summary = dashboard_summary(db=db, settings=settings, _=None)
 
         by_check = {item["check"]: item for item in page.items}
@@ -5668,9 +6579,17 @@ def test_observability_reports_logging_metrics_dashboard_and_correlation_evidenc
                     role="admin",
                     action="observability.configure",
                     resource_type="operations",
-                    metadata_json={"structured": True, "prometheus": True, "correlation_id": "req-1"},
+                    metadata_json={
+                        "structured": True,
+                        "prometheus": True,
+                        "correlation_id": "req-1",
+                    },
                 ),
-                Job(job_type=JobType.scan, status=JobStatus.failed, last_error="worker failed with stack trace"),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.failed,
+                    last_error="worker failed with stack trace",
+                ),
             ]
         )
         db.commit()
@@ -5701,8 +6620,18 @@ def test_incident_readiness_reports_unhandled_and_handled_incidents() -> None:
                     repository_id=repo.id,
                     last_error="GitHub API rate limit 429",
                 ),
-                Job(job_type=JobType.scan, status=JobStatus.failed, application_id=app.id, last_error="worker crash"),
-                Job(job_type=JobType.scan, status=JobStatus.failed, application_id=app.id, last_error="S3 storage object failure"),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.failed,
+                    application_id=app.id,
+                    last_error="worker crash",
+                ),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.failed,
+                    application_id=app.id,
+                    last_error="S3 storage object failure",
+                ),
                 Scan(
                     application_id=app.id,
                     status=ScanStatus.failed,
@@ -5714,7 +6643,10 @@ def test_incident_readiness_reports_unhandled_and_handled_incidents() -> None:
                     role="admin",
                     action="incident.response",
                     resource_type="runbook",
-                    metadata_json={"incident_type": "github_rate_limit", "response": "retry after backoff"},
+                    metadata_json={
+                        "incident_type": "github_rate_limit",
+                        "response": "retry after backoff",
+                    },
                 ),
                 AuditLog(
                     actor="ops",
@@ -5728,7 +6660,9 @@ def test_incident_readiness_reports_unhandled_and_handled_incidents() -> None:
         db.commit()
 
         page = list_incident_readiness(db=db, _=None)
-        rate_limit = list_incident_readiness(incident_type="github_rate_limit", status="ok", db=db, _=None)
+        rate_limit = list_incident_readiness(
+            incident_type="github_rate_limit", status="ok", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
         incident_types = {item["incident_type"] for item in page.items}
@@ -5758,15 +6692,35 @@ def test_completion_readiness_reports_project_completion_gaps() -> None:
         db.flush()
         db.add_all(
             [
-                Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="completion", storage_key="completion.json", active=True, sbom_kind="source"),
-                AuditLog(actor="ops", role="admin", action="restore.verify", resource_type="backup", metadata_json={"restore": True}),
+                Sbom(
+                    application_id=app.id,
+                    scan_id=scan.id,
+                    sbom_digest="completion",
+                    storage_key="completion.json",
+                    active=True,
+                    sbom_kind="source",
+                ),
+                AuditLog(
+                    actor="ops",
+                    role="admin",
+                    action="restore.verify",
+                    resource_type="backup",
+                    metadata_json={"restore": True},
+                ),
             ]
         )
         db.commit()
-        settings = Settings(minio_endpoint="http://minio", minio_access_key="access", minio_secret_key="secret", minio_bucket="watchtower")
+        settings = Settings(
+            minio_endpoint="http://minio",
+            minio_access_key="access",
+            minio_secret_key="secret",
+            minio_bucket="watchtower",
+        )
 
         page = list_completion_readiness(db=db, settings=settings, _=None)
-        filtered = list_completion_readiness(check="repository_inventory_54", status="warn", db=db, settings=settings, _=None)
+        filtered = list_completion_readiness(
+            check="repository_inventory_54", status="warn", db=db, settings=settings, _=None
+        )
         summary = dashboard_summary(db=db, settings=settings, _=None)
 
         by_check = {item["check"]: item for item in page.items}
@@ -5782,12 +6736,20 @@ def test_operational_exit_criteria_reports_review_gaps() -> None:
     with SessionLocal() as db:
         repo = create_repository(db, "exit-criteria")
         app = create_application(db, repo)
-        db.add(Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=2)))
+        db.add(
+            Scan(
+                application_id=app.id,
+                status=ScanStatus.succeeded,
+                created_at=now_utc() - timedelta(days=2),
+            )
+        )
         db.flush()
         settings = Settings()
 
         page = list_operational_exit_criteria(db=db, settings=settings, _=None)
-        filtered = list_operational_exit_criteria(check="active_owner", status="warn", db=db, settings=settings, _=None)
+        filtered = list_operational_exit_criteria(
+            check="active_owner", status="warn", db=db, settings=settings, _=None
+        )
         summary = dashboard_summary(db=db, settings=settings, _=None)
         by_check = {item["check"]: item for item in page.items}
 
@@ -5809,7 +6771,9 @@ def test_completion_readiness_ignores_archived_sbom_and_scan_for_active_criteria
         archived = create_application(db, repo, "archived-with-evidence")
         archived.lifecycle = Lifecycle.archived
         archived.owner = "team"
-        archived_scan = Scan(application_id=archived.id, status=ScanStatus.succeeded, created_at=now_utc())
+        archived_scan = Scan(
+            application_id=archived.id, status=ScanStatus.succeeded, created_at=now_utc()
+        )
         db.add(archived_scan)
         db.flush()
         db.add(
@@ -5846,10 +6810,18 @@ def test_completion_readiness_requires_all_remediation_and_closure_evidence() ->
         rescanned = create_application(db, repo, "rescanned")
         missing_rescan = create_application(db, repo, "missing-rescan")
         old_time = now_utc() - timedelta(days=2)
-        rescanned_finding = create_finding(db, rescanned, severity=Severity.high, status=FindingStatus.open)
-        missing_rescan_finding = create_finding(db, missing_rescan, severity=Severity.critical, status=FindingStatus.open)
-        closed_finding = create_finding(db, rescanned, severity=Severity.high, status=FindingStatus.resolved)
-        create_finding(db, missing_rescan, severity=Severity.critical, status=FindingStatus.resolved)
+        rescanned_finding = create_finding(
+            db, rescanned, severity=Severity.high, status=FindingStatus.open
+        )
+        missing_rescan_finding = create_finding(
+            db, missing_rescan, severity=Severity.critical, status=FindingStatus.open
+        )
+        closed_finding = create_finding(
+            db, rescanned, severity=Severity.high, status=FindingStatus.resolved
+        )
+        create_finding(
+            db, missing_rescan, severity=Severity.critical, status=FindingStatus.resolved
+        )
         db.add_all(
             [
                 RemediationAction(
@@ -5880,7 +6852,9 @@ def test_completion_readiness_requires_all_remediation_and_closure_evidence() ->
                     url="https://github.com/local/demo/issues/3",
                     metadata_json={},
                 ),
-                Scan(application_id=rescanned.id, status=ScanStatus.succeeded, created_at=now_utc()),
+                Scan(
+                    application_id=rescanned.id, status=ScanStatus.succeeded, created_at=now_utc()
+                ),
             ]
         )
         db.flush()
@@ -5900,11 +6874,19 @@ def test_e2e_evidence_reports_stage_gaps_and_filters() -> None:
         repo = create_repository(db, "e2e")
         app = create_application(db, repo)
         finding = create_finding(db, app, severity=Severity.critical)
-        db.add(Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(hours=1)))
+        db.add(
+            Scan(
+                application_id=app.id,
+                status=ScanStatus.succeeded,
+                created_at=now_utc() - timedelta(hours=1),
+            )
+        )
         db.commit()
 
         page = list_e2e_evidence(db=db, _=None)
-        filtered = list_e2e_evidence(stage="notification", status="gap", severity=Severity.critical, db=db, _=None)
+        filtered = list_e2e_evidence(
+            stage="notification", status="gap", severity=Severity.critical, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
         assert any(item["stage"] == "scan" and item["status"] == "ok" for item in page.items)
@@ -5918,8 +6900,18 @@ def test_failure_drills_reports_observed_and_missing_drills() -> None:
     with SessionLocal() as db:
         db.add_all(
             [
-                Job(job_type=JobType.repository_sync, status=JobStatus.failed, last_error="GitHub API rate limit 429"),
-                AuditLog(actor="ops", role="admin", action="failure.drill", resource_type="runbook", metadata_json={"drill": "duplicate webhook"}),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.failed,
+                    last_error="GitHub API rate limit 429",
+                ),
+                AuditLog(
+                    actor="ops",
+                    role="admin",
+                    action="failure.drill",
+                    resource_type="runbook",
+                    metadata_json={"drill": "duplicate webhook"},
+                ),
             ]
         )
         db.commit()
@@ -5949,11 +6941,22 @@ def test_repository_onboarding_proof_reports_ready_and_gap_repositories() -> Non
         create_repository(db, "gap-onboarding")
         db.add(ready_scan)
         db.flush()
-        db.add(Sbom(application_id=ready_app.id, scan_id=ready_scan.id, sbom_digest="ready", storage_key="ready.json", active=True, sbom_kind="source"))
+        db.add(
+            Sbom(
+                application_id=ready_app.id,
+                scan_id=ready_scan.id,
+                sbom_digest="ready",
+                storage_key="ready.json",
+                active=True,
+                sbom_kind="source",
+            )
+        )
         db.commit()
 
         page = list_repository_onboarding_proof(db=db, _=None)
-        gaps = list_repository_onboarding_proof(ready=False, provider=RepositoryProvider.github, db=db, _=None)
+        gaps = list_repository_onboarding_proof(
+            ready=False, provider=RepositoryProvider.github, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
         by_name = {item["repository_name"]: item for item in page.items}
@@ -5969,9 +6972,20 @@ def test_runbook_evidence_reports_cadence_gaps_and_filters() -> None:
     with SessionLocal() as db:
         db.add_all(
             [
-                Job(job_type=JobType.repository_sync, status=JobStatus.succeeded, created_at=now_utc()),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.succeeded,
+                    created_at=now_utc(),
+                ),
                 Job(job_type=JobType.scan, status=JobStatus.succeeded, created_at=now_utc()),
-                AuditLog(actor="ops", role="admin", action="runbook.weekly_review.completed", resource_type="medium review", metadata_json={"cadence": "weekly"}, created_at=now_utc()),
+                AuditLog(
+                    actor="ops",
+                    role="admin",
+                    action="runbook.weekly_review.completed",
+                    resource_type="medium review",
+                    metadata_json={"cadence": "weekly"},
+                    created_at=now_utc(),
+                ),
             ]
         )
         db.commit()
@@ -6029,11 +7043,22 @@ def test_artifact_provenance_reports_storage_digest_and_path_gaps() -> None:
         )
         db.add(scan)
         db.flush()
-        db.add(Sbom(application_id=app.id, scan_id=scan.id, sbom_kind="", sbom_digest="", storage_key="", active=True))
+        db.add(
+            Sbom(
+                application_id=app.id,
+                scan_id=scan.id,
+                sbom_kind="",
+                sbom_digest="",
+                storage_key="",
+                active=True,
+            )
+        )
         db.commit()
 
         page = list_artifact_provenance(db=db, _=None)
-        filtered = list_artifact_provenance(gap_type="unexpected_storage_path", source="scan_artifact", db=db, _=None)
+        filtered = list_artifact_provenance(
+            gap_type="unexpected_storage_path", source="scan_artifact", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
         gaps = {(item["source"], item["gap_type"]) for item in page.items}
@@ -6065,17 +7090,30 @@ def test_scan_format_compliance_reports_format_shape_and_version_gaps() -> None:
                     tool_version="1.0",
                     result_summary={"scanner_failures": "bad-shape"},
                 ),
-                Scan(application_id=app.id, status=ScanStatus.succeeded, tool="syft", tool_version="1.0", result_summary={}),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    tool="syft",
+                    tool_version="1.0",
+                    result_summary={},
+                ),
             ]
         )
         db.commit()
 
         page = list_scan_format_compliance(db=db, _=None)
-        filtered = list_scan_format_compliance(gap_type="unknown_artifact_format", tool="trivy", db=db, _=None)
+        filtered = list_scan_format_compliance(
+            gap_type="unknown_artifact_format", tool="trivy", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
         gap_types = {item["gap_type"] for item in page.items}
-        assert {"missing_tool_version", "unknown_artifact_format", "scanner_failure_shape", "missing_result_summary"} <= gap_types
+        assert {
+            "missing_tool_version",
+            "unknown_artifact_format",
+            "scanner_failure_shape",
+            "missing_result_summary",
+        } <= gap_types
         assert filtered.items[0]["tool"] == "trivy"
         assert summary.scan_format_gap_items >= 4
 
@@ -6096,12 +7134,16 @@ def test_worker_cleanup_reports_job_cleanup_evidence_gaps() -> None:
                 "credential_ttl": 3600,
             },
         )
-        gap_job = Job(job_type=JobType.scan, status=JobStatus.succeeded, application_id=app.id, payload={})
+        gap_job = Job(
+            job_type=JobType.scan, status=JobStatus.succeeded, application_id=app.id, payload={}
+        )
         db.add_all([clean_job, gap_job])
         db.commit()
 
         page = list_worker_cleanup(db=db, _=None)
-        filtered = list_worker_cleanup(gap_type="missing_cleanup", job_type=JobType.scan, status="gap", db=db, _=None)
+        filtered = list_worker_cleanup(
+            gap_type="missing_cleanup", job_type=JobType.scan, status="gap", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
         assert {item["gap_type"] for item in page.items} >= {
@@ -6122,24 +7164,66 @@ def test_idempotency_safety_reports_duplicate_jobs_webhooks_remediation_and_scan
         finding = create_finding(db, app, severity=Severity.high)
         db.add_all(
             [
-                Job(job_type=JobType.scan, status=JobStatus.queued, application_id=app.id, payload={"commit_sha": "abc"}),
-                Job(job_type=JobType.scan, status=JobStatus.running, application_id=app.id, payload={"commit_sha": "abc"}),
-                Job(job_type=JobType.repository_sync, status=JobStatus.succeeded, repository_id=repo.id, payload={"event": "push", "delivery_id": "d1"}),
-                Job(job_type=JobType.repository_sync, status=JobStatus.failed, repository_id=repo.id, payload={"event": "push", "delivery_id": "d1"}),
-                RemediationAction(finding_id=finding.id, action_type="github_issue", status="skipped_duplicate", metadata_json={"duplicate_of": "issue-1"}),
-                Scan(application_id=app.id, status=ScanStatus.succeeded, trigger_type=TriggerType.push, commit_sha="abc", tool="osv"),
-                Scan(application_id=app.id, status=ScanStatus.succeeded, trigger_type=TriggerType.push, commit_sha="abc", tool="osv"),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.queued,
+                    application_id=app.id,
+                    payload={"commit_sha": "abc"},
+                ),
+                Job(
+                    job_type=JobType.scan,
+                    status=JobStatus.running,
+                    application_id=app.id,
+                    payload={"commit_sha": "abc"},
+                ),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.succeeded,
+                    repository_id=repo.id,
+                    payload={"event": "push", "delivery_id": "d1"},
+                ),
+                Job(
+                    job_type=JobType.repository_sync,
+                    status=JobStatus.failed,
+                    repository_id=repo.id,
+                    payload={"event": "push", "delivery_id": "d1"},
+                ),
+                RemediationAction(
+                    finding_id=finding.id,
+                    action_type="github_issue",
+                    status="skipped_duplicate",
+                    metadata_json={"duplicate_of": "issue-1"},
+                ),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    trigger_type=TriggerType.push,
+                    commit_sha="abc",
+                    tool="osv",
+                ),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    trigger_type=TriggerType.push,
+                    commit_sha="abc",
+                    tool="osv",
+                ),
             ]
         )
         db.commit()
 
         page = list_idempotency_safety(db=db, _=None)
-        filtered = list_idempotency_safety(issue_type="duplicate_webhook", source="job", db=db, _=None)
+        filtered = list_idempotency_safety(
+            issue_type="duplicate_webhook", source="job", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
-        assert {"duplicate_active_job", "duplicate_webhook", "duplicate_remediation", "duplicate_scan"} <= {
-            item["issue_type"] for item in page.items
-        }
+        assert {
+            "duplicate_active_job",
+            "duplicate_webhook",
+            "duplicate_remediation",
+            "duplicate_scan",
+        } <= {item["issue_type"] for item in page.items}
         assert filtered.items[0]["issue_type"] == "duplicate_webhook"
         assert summary.idempotency_gap_items == len(page.items)
 
@@ -6150,7 +7234,11 @@ def test_vulnerability_source_provenance_reports_source_metadata_gaps() -> None:
         repo = create_repository(db, "vuln-provenance")
         app = create_application(db, repo)
         component = Component(purl="pkg:pypi/demo@1", ecosystem="pypi", name="demo", version="1")
-        stale_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=2))
+        stale_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=2),
+        )
         vuln = Vulnerability(
             source="osv",
             external_id="OSV-2026-1",
@@ -6172,12 +7260,17 @@ def test_vulnerability_source_provenance_reports_source_metadata_gaps() -> None:
         db.commit()
 
         page = list_vulnerability_source_provenance(db=db, _=None)
-        filtered = list_vulnerability_source_provenance(gap_type="stale_reevaluation", source="osv", severity=Severity.high, db=db, _=None)
+        filtered = list_vulnerability_source_provenance(
+            gap_type="stale_reevaluation", source="osv", severity=Severity.high, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
-        assert {"missing_reference", "missing_published_at", "missing_raw_data_location", "stale_reevaluation"} <= {
-            item["gap_type"] for item in page.items
-        }
+        assert {
+            "missing_reference",
+            "missing_published_at",
+            "missing_raw_data_location",
+            "stale_reevaluation",
+        } <= {item["gap_type"] for item in page.items}
         assert filtered.items[0]["external_id"] == "OSV-2026-1"
         assert summary.vulnerability_provenance_gap_items == len(page.items)
 
@@ -6190,14 +7283,30 @@ def test_storage_encryption_posture_reports_tls_metadata_and_backup_audit() -> N
         scan = Scan(
             application_id=app.id,
             status=ScanStatus.succeeded,
-            result_summary={"artifacts": {"source_sbom": {"storage_key": "source.json", "encrypted": True}}},
+            result_summary={
+                "artifacts": {"source_sbom": {"storage_key": "source.json", "encrypted": True}}
+            },
         )
         db.add(scan)
         db.flush()
         db.add_all(
             [
-                Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="encrypted-digest", storage_key="encrypted/sbom.json", active=True, sbom_kind="source"),
-                AuditLog(actor="ops", role="admin", action="backup.encryption.verify", resource_type="backup", resource_id="backup-1", metadata_json={"encryption": "kms"}),
+                Sbom(
+                    application_id=app.id,
+                    scan_id=scan.id,
+                    sbom_digest="encrypted-digest",
+                    storage_key="encrypted/sbom.json",
+                    active=True,
+                    sbom_kind="source",
+                ),
+                AuditLog(
+                    actor="ops",
+                    role="admin",
+                    action="backup.encryption.verify",
+                    resource_type="backup",
+                    resource_id="backup-1",
+                    metadata_json={"encryption": "kms"},
+                ),
             ]
         )
         db.flush()
@@ -6214,7 +7323,9 @@ def test_storage_encryption_posture_reports_tls_metadata_and_backup_audit() -> N
         assert summary.storage_encryption_items == 0
 
 
-def test_list_application_input_coverage_reports_manifest_lockfile_and_package_manager_gaps() -> None:
+def test_list_application_input_coverage_reports_manifest_lockfile_and_package_manager_gaps() -> (
+    None
+):
     SessionLocal = session_factory()
     with SessionLocal() as db:
         repo = create_repository(db, "input-coverage")
@@ -6231,7 +7342,9 @@ def test_list_application_input_coverage_reports_manifest_lockfile_and_package_m
         db.flush()
 
         page = list_application_input_coverage(db=db, _=None)
-        lockfile_page = list_application_input_coverage(gap_type="missing_lockfile", ecosystem="npm", db=db, _=None)
+        lockfile_page = list_application_input_coverage(
+            gap_type="missing_lockfile", ecosystem="npm", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["application_name"], item["gap_type"]) for item in page.items}
 
@@ -6251,7 +7364,12 @@ def test_list_container_input_coverage_reports_type_and_scan_artifact_gaps() -> 
         container_app.application_type = ApplicationType.container
         db.add_all(
             [
-                Technology(application_id=docker_app.id, category="runtime", name="docker", detection_source="Dockerfile"),
+                Technology(
+                    application_id=docker_app.id,
+                    category="runtime",
+                    name="docker",
+                    detection_source="Dockerfile",
+                ),
                 Scan(
                     application_id=docker_app.id,
                     status=ScanStatus.succeeded,
@@ -6262,7 +7380,9 @@ def test_list_container_input_coverage_reports_type_and_scan_artifact_gaps() -> 
         db.flush()
 
         page = list_container_input_coverage(db=db, _=None)
-        scan_gap_page = list_container_input_coverage(gap_type="container_input_without_container_scan", db=db, _=None)
+        scan_gap_page = list_container_input_coverage(
+            gap_type="container_input_without_container_scan", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["application_name"], item["gap_type"]) for item in page.items}
 
@@ -6281,7 +7401,13 @@ def test_list_sbom_normalization_quality_reports_component_metadata_gaps_and_dup
         scan = Scan(application_id=app.id, status=ScanStatus.succeeded)
         db.add(scan)
         db.flush()
-        sbom = Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="norm", storage_key="norm.json", active=True)
+        sbom = Sbom(
+            application_id=app.id,
+            scan_id=scan.id,
+            sbom_digest="norm",
+            storage_key="norm.json",
+            active=True,
+        )
         invalid = Component(purl="invalid", ecosystem=None, name="invalid", version=None)
         duplicate_a = Component(purl="pkg:pypi/dup-a@1", ecosystem="pypi", name="dup", version="1")
         duplicate_b = Component(purl="pkg:pypi/dup-b@1", ecosystem="pypi", name="dup", version="1")
@@ -6326,7 +7452,11 @@ def test_list_raw_scan_artifacts_reports_missing_storage_digest_and_filters() ->
                     status=ScanStatus.succeeded,
                     result_summary={
                         "artifacts": {
-                            "source_sbom": {"storage_key": "encrypted/source.json", "digest": "sha", "encrypted": True}
+                            "source_sbom": {
+                                "storage_key": "encrypted/source.json",
+                                "digest": "sha",
+                                "encrypted": True,
+                            }
                         }
                     },
                 ),
@@ -6346,14 +7476,22 @@ def test_list_raw_scan_artifacts_reports_missing_storage_digest_and_filters() ->
         assert summary.raw_artifact_gap_items == 2
 
 
-def test_list_vulnerability_reevaluation_coverage_reports_stale_and_modified_vulnerability_gaps() -> None:
+def test_list_vulnerability_reevaluation_coverage_reports_stale_and_modified_vulnerability_gaps() -> (
+    None
+):
     SessionLocal = session_factory()
     with SessionLocal() as db:
         repo = create_repository(db, "reevaluation")
         app = create_application(db, repo)
-        old_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=10))
+        old_scan = Scan(
+            application_id=app.id,
+            status=ScanStatus.succeeded,
+            created_at=now_utc() - timedelta(days=10),
+        )
         latest_scan = Scan(application_id=app.id, status=ScanStatus.succeeded, created_at=now_utc())
-        component = Component(purl="pkg:pypi/reeval@1", ecosystem="pypi", name="reeval", version="1")
+        component = Component(
+            purl="pkg:pypi/reeval@1", ecosystem="pypi", name="reeval", version="1"
+        )
         vulnerability = Vulnerability(
             source="osv",
             external_id="OSV-REEVAL",
@@ -6389,7 +7527,9 @@ def test_list_vulnerability_enrichment_coverage_reports_missing_intel_and_filter
     with SessionLocal() as db:
         repo = create_repository(db, "vuln-enrichment")
         app = create_application(db, repo)
-        component = Component(purl="pkg:pypi/enrich@1", ecosystem="pypi", name="enrich", version="1")
+        component = Component(
+            purl="pkg:pypi/enrich@1", ecosystem="pypi", name="enrich", version="1"
+        )
         vulnerability = Vulnerability(
             source="osv",
             external_id="OSV-ENRICH",
@@ -6410,11 +7550,18 @@ def test_list_vulnerability_enrichment_coverage_reports_missing_intel_and_filter
         db.flush()
 
         page = list_vulnerability_enrichment_coverage(db=db, _=None)
-        source_page = list_vulnerability_enrichment_coverage(source="osv", gap_type="missing_epss", db=db, _=None)
+        source_page = list_vulnerability_enrichment_coverage(
+            source="osv", gap_type="missing_epss", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {item["gap_type"] for item in page.items}
 
-        assert {"missing_cvss", "missing_epss", "missing_kev", "missing_exploit_availability"} <= gaps
+        assert {
+            "missing_cvss",
+            "missing_epss",
+            "missing_kev",
+            "missing_exploit_availability",
+        } <= gaps
         assert "missing_raw_data_location" not in gaps
         assert source_page.items[0]["external_id"] == "OSV-ENRICH"
         assert summary.vulnerability_enrichment_gap_items == len(page.items)
@@ -6450,7 +7597,9 @@ def test_list_risk_score_explanations_reports_missing_score_and_priority_factors
         db.flush()
 
         page = list_risk_score_explanations(db=db, _=None)
-        critical_page = list_risk_score_explanations(gap_type="missing_risk_score", severity=Severity.critical, db=db, _=None)
+        critical_page = list_risk_score_explanations(
+            gap_type="missing_risk_score", severity=Severity.critical, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
         assert page.items[0]["finding_id"] == str(finding.id)
@@ -6480,19 +7629,33 @@ def test_list_dependency_relationships_reports_missing_relationship_metadata() -
         )
         db.add(scan)
         db.flush()
-        sbom = Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="relationship", storage_key="relationship.json", active=True)
-        component = Component(purl="pkg:npm/relationship@1.0.0", ecosystem="npm", name="relationship", version="1.0.0")
+        sbom = Sbom(
+            application_id=app.id,
+            scan_id=scan.id,
+            sbom_digest="relationship",
+            storage_key="relationship.json",
+            active=True,
+        )
+        component = Component(
+            purl="pkg:npm/relationship@1.0.0", ecosystem="npm", name="relationship", version="1.0.0"
+        )
         db.add_all([sbom, component])
         db.flush()
         db.add(SbomComponent(sbom_id=sbom.id, component_id=component.id))
         db.flush()
 
         page = list_dependency_relationships(db=db, _=None)
-        npm_page = list_dependency_relationships(ecosystem="npm", gap_type="missing_dependency_path", db=db, _=None)
+        npm_page = list_dependency_relationships(
+            ecosystem="npm", gap_type="missing_dependency_path", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {item["gap_type"] for item in page.items}
 
-        assert gaps == {"missing_dependency_path", "missing_development_flag", "missing_optional_flag"}
+        assert gaps == {
+            "missing_dependency_path",
+            "missing_development_flag",
+            "missing_optional_flag",
+        }
         assert npm_page.items[0]["component_id"] == str(component.id)
         assert summary.dependency_relationship_gap_items == len(page.items)
 
@@ -6517,7 +7680,9 @@ def test_list_dependency_update_coverage_reports_missing_failed_and_validation_g
         db.flush()
 
         page = list_dependency_update_coverage(db=db, _=None)
-        provider_page = list_dependency_update_coverage(provider="renovate", gap_type="failed_update_action", db=db, _=None)
+        provider_page = list_dependency_update_coverage(
+            provider="renovate", gap_type="failed_update_action", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["finding_id"], item["gap_type"]) for item in page.items}
 
@@ -6536,14 +7701,23 @@ def test_list_remediation_priority_queue_orders_sla_exposed_fixable_findings() -
         exposed.production = True
         exposed.internet_exposed = True
         internal = create_application(db, repo, "internal")
-        critical = create_finding(db, exposed, severity=Severity.critical, risk_score=8.5, fixed_version="9.9.9")
-        high = create_finding(db, internal, severity=Severity.high, risk_score=8.0, fixed_version=None)
+        critical = create_finding(
+            db, exposed, severity=Severity.critical, risk_score=8.5, fixed_version="9.9.9"
+        )
+        high = create_finding(
+            db, internal, severity=Severity.high, risk_score=8.0, fixed_version=None
+        )
         critical.created_at = now_utc() - timedelta(days=10)
-        db.get(Vulnerability, critical.vulnerability_id).references = ["https://example.test/cisa-kev", "https://example.test/exploit"]
+        db.get(Vulnerability, critical.vulnerability_id).references = [
+            "https://example.test/cisa-kev",
+            "https://example.test/exploit",
+        ]
         db.flush()
 
         page = list_remediation_priority_queue(db=db, _=None)
-        breached_page = list_remediation_priority_queue(sla_breached=True, fix_available=True, db=db, _=None)
+        breached_page = list_remediation_priority_queue(
+            sla_breached=True, fix_available=True, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
 
         assert page.items[0]["finding_id"] == str(critical.id)
@@ -6590,11 +7764,18 @@ def test_list_job_retry_posture_reports_retry_and_lock_gaps() -> None:
         db.flush()
 
         page = list_job_retry_posture(db=db, _=None)
-        scan_page = list_job_retry_posture(job_type=JobType.scan, gap_type="retry_exhausted", db=db, _=None)
+        scan_page = list_job_retry_posture(
+            job_type=JobType.scan, gap_type="retry_exhausted", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {item["gap_type"] for item in page.items}
 
-        assert gaps == {"retry_exhausted", "retryable_failure", "overdue_retry", "stale_running_lock"}
+        assert gaps == {
+            "retry_exhausted",
+            "retryable_failure",
+            "overdue_retry",
+            "stale_running_lock",
+        }
         assert scan_page.items[0]["job_id"] == str(exhausted.id)
         assert summary.job_retry_gap_items == len(page.items)
 
@@ -6610,8 +7791,16 @@ def test_list_scan_freshness_buckets_reports_stale_and_never_scanned_apps() -> N
         archived.lifecycle = Lifecycle.archived
         db.add_all(
             [
-                Scan(application_id=stale.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(days=31)),
-                Scan(application_id=fresh.id, status=ScanStatus.succeeded, created_at=now_utc() - timedelta(hours=1)),
+                Scan(
+                    application_id=stale.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc() - timedelta(days=31),
+                ),
+                Scan(
+                    application_id=fresh.id,
+                    status=ScanStatus.succeeded,
+                    created_at=now_utc() - timedelta(hours=1),
+                ),
             ]
         )
         db.flush()
@@ -6658,11 +7847,20 @@ def test_list_provider_sync_evidence_reports_missing_external_sync_fields() -> N
         db.flush()
 
         page = list_provider_sync_evidence(db=db, _=None)
-        ci_page = list_provider_sync_evidence(gap_type="missing_ci_metadata", provider="github", db=db, _=None)
+        ci_page = list_provider_sync_evidence(
+            gap_type="missing_ci_metadata", provider="github", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
-        issue_gaps = {item["gap_type"] for item in page.items if item["action_id"] == str(issue_action.id)}
+        issue_gaps = {
+            item["gap_type"] for item in page.items if item["action_id"] == str(issue_action.id)
+        }
 
-        assert {"missing_provider_id", "missing_url", "missing_status_sync", "missing_close_evidence"} <= issue_gaps
+        assert {
+            "missing_provider_id",
+            "missing_url",
+            "missing_status_sync",
+            "missing_close_evidence",
+        } <= issue_gaps
         assert ci_page.items[0]["action_id"] == str(pr_action.id)
         assert summary.provider_sync_gap_items == len(page.items)
 
@@ -6672,7 +7870,9 @@ def test_list_audit_action_coverage_reports_missing_expected_actions() -> None:
     with SessionLocal() as db:
         repo = create_repository(db, "audit-action")
         app = create_application(db, repo)
-        finding = create_finding(db, app, severity=Severity.medium, status=FindingStatus.false_positive)
+        finding = create_finding(
+            db, app, severity=Severity.medium, status=FindingStatus.false_positive
+        )
         db.add(
             AuditLog(
                 actor="system",
@@ -6686,9 +7886,13 @@ def test_list_audit_action_coverage_reports_missing_expected_actions() -> None:
         db.flush()
 
         page = list_audit_action_coverage(db=db, _=None)
-        finding_page = list_audit_action_coverage(resource_type="finding", gap_type="missing_review_audit", db=db, _=None)
+        finding_page = list_audit_action_coverage(
+            resource_type="finding", gap_type="missing_review_audit", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
-        gaps = {(item["resource_type"], item["resource_id"], item["gap_type"]) for item in page.items}
+        gaps = {
+            (item["resource_type"], item["resource_id"], item["gap_type"]) for item in page.items
+        }
 
         assert ("repository", str(repo.id), "missing_create_audit") not in gaps
         assert ("application", str(app.id), "missing_create_audit") in gaps
@@ -6703,7 +7907,9 @@ def test_list_review_calendar_reports_overdue_due_soon_and_filters_review_type()
         app = create_application(db, repo)
         vex_finding = create_finding(db, app, severity=Severity.high)
         medium = create_finding(db, app, severity=Severity.medium)
-        accepted = create_finding(db, app, severity=Severity.low, status=FindingStatus.accepted_risk)
+        accepted = create_finding(
+            db, app, severity=Severity.low, status=FindingStatus.accepted_risk
+        )
         accepted.updated_at = now_utc() - timedelta(days=31)
         db.add(
             VexStatement(
@@ -6717,7 +7923,9 @@ def test_list_review_calendar_reports_overdue_due_soon_and_filters_review_type()
         db.flush()
 
         page = list_review_calendar(db=db, _=None)
-        medium_page = list_review_calendar(review_type="medium_finding_review", status="due_soon", db=db, _=None)
+        medium_page = list_review_calendar(
+            review_type="medium_finding_review", status="due_soon", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         statuses = {(item["review_type"], item["status"]) for item in page.items}
 
@@ -6725,7 +7933,9 @@ def test_list_review_calendar_reports_overdue_due_soon_and_filters_review_type()
         assert ("risk_acceptance_review", "overdue") in statuses
         assert ("medium_finding_review", "due_soon") in statuses
         assert medium_page.items[0]["source_id"] == str(medium.id)
-        assert summary.review_calendar_due_items == len([item for item in page.items if item["status"] in {"overdue", "due_soon"}])
+        assert summary.review_calendar_due_items == len(
+            [item for item in page.items if item["status"] in {"overdue", "due_soon"}]
+        )
 
 
 def test_list_finding_traceability_reports_missing_workflow_evidence() -> None:
@@ -6749,7 +7959,9 @@ def test_list_finding_traceability_reports_missing_workflow_evidence() -> None:
         db.flush()
 
         page = list_finding_traceability(db=db, _=None)
-        critical_page = list_finding_traceability(gap_type="missing_notification", severity=Severity.critical, db=db, _=None)
+        critical_page = list_finding_traceability(
+            gap_type="missing_notification", severity=Severity.critical, db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["finding_id"], item["gap_type"]) for item in page.items}
 
@@ -6777,20 +7989,58 @@ def test_list_notification_retry_posture_reports_retry_context_and_duplicate_gap
             metadata_json={"finding_id": str(finding.id)},
             created_at=now_utc() - timedelta(hours=25),
         )
-        failed = Notification(channel="email", severity=Severity.critical, subject="failed", body="failed", status="failed", metadata_json={"finding_id": str(finding.id)})
-        missing_context = Notification(channel="slack", severity=Severity.medium, subject="orphan", body="orphan", status="queued", metadata_json={})
-        duplicate_a = Notification(channel="slack", severity=Severity.high, subject="dup", body="dup", status="queued", metadata_json={"finding_id": str(finding.id)})
-        duplicate_b = Notification(channel="slack", severity=Severity.high, subject="dup", body="dup", status="queued", metadata_json={"finding_id": str(finding.id)})
+        failed = Notification(
+            channel="email",
+            severity=Severity.critical,
+            subject="failed",
+            body="failed",
+            status="failed",
+            metadata_json={"finding_id": str(finding.id)},
+        )
+        missing_context = Notification(
+            channel="slack",
+            severity=Severity.medium,
+            subject="orphan",
+            body="orphan",
+            status="queued",
+            metadata_json={},
+        )
+        duplicate_a = Notification(
+            channel="slack",
+            severity=Severity.high,
+            subject="dup",
+            body="dup",
+            status="queued",
+            metadata_json={"finding_id": str(finding.id)},
+        )
+        duplicate_b = Notification(
+            channel="slack",
+            severity=Severity.high,
+            subject="dup",
+            body="dup",
+            status="queued",
+            metadata_json={"finding_id": str(finding.id)},
+        )
         db.add_all([stale, failed, missing_context, duplicate_a, duplicate_b])
         db.flush()
 
         page = list_notification_retry_posture(db=db, _=None)
-        slack_page = list_notification_retry_posture(gap_type="duplicate_notification", channel="slack", db=db, _=None)
+        slack_page = list_notification_retry_posture(
+            gap_type="duplicate_notification", channel="slack", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {item["gap_type"] for item in page.items}
 
-        assert {"stale_queued_notification", "failed_without_retry_job", "missing_finding_context", "duplicate_notification"} <= gaps
-        assert {item["notification_id"] for item in slack_page.items} == {str(duplicate_a.id), str(duplicate_b.id)}
+        assert {
+            "stale_queued_notification",
+            "failed_without_retry_job",
+            "missing_finding_context",
+            "duplicate_notification",
+        } <= gaps
+        assert {item["notification_id"] for item in slack_page.items} == {
+            str(duplicate_a.id),
+            str(duplicate_b.id),
+        }
         assert summary.notification_retry_gap_items == len(page.items)
 
 
@@ -6801,15 +8051,35 @@ def test_list_scanner_execution_matrix_reports_missing_stale_failed_and_version_
         app = create_application(db, repo)
         db.add_all(
             [
-                Scan(application_id=app.id, status=ScanStatus.succeeded, tool="osv", tool_version="1.0.0", created_at=now_utc() - timedelta(days=31)),
-                Scan(application_id=app.id, status=ScanStatus.failed, tool="trivy", tool_version="0.1.0", error_message="failed", created_at=now_utc()),
-                Scan(application_id=app.id, status=ScanStatus.succeeded, tool="grype", created_at=now_utc()),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    tool="osv",
+                    tool_version="1.0.0",
+                    created_at=now_utc() - timedelta(days=31),
+                ),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.failed,
+                    tool="trivy",
+                    tool_version="0.1.0",
+                    error_message="failed",
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=app.id,
+                    status=ScanStatus.succeeded,
+                    tool="grype",
+                    created_at=now_utc(),
+                ),
             ]
         )
         db.flush()
 
         page = list_scanner_execution_matrix(db=db, _=None)
-        grype_page = list_scanner_execution_matrix(tool="grype", gap_type="missing_tool_version", db=db, _=None)
+        grype_page = list_scanner_execution_matrix(
+            tool="grype", gap_type="missing_tool_version", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["tool"], item["gap_type"]) for item in page.items}
 
@@ -6832,18 +8102,50 @@ def test_list_scanner_tool_coverage_reports_mvp_tool_gaps() -> None:
         archived.lifecycle = Lifecycle.archived
         db.add_all(
             [
-                Scan(application_id=covered.id, status=ScanStatus.succeeded, tool="osv", created_at=now_utc()),
-                Scan(application_id=covered.id, status=ScanStatus.succeeded, tool="trivy", created_at=now_utc()),
-                Scan(application_id=covered.id, status=ScanStatus.succeeded, tool="syft", created_at=now_utc()),
-                Scan(application_id=gaps.id, status=ScanStatus.partially_succeeded, tool="osv", created_at=now_utc()),
-                Scan(application_id=gaps.id, status=ScanStatus.failed, tool="trivy", created_at=now_utc()),
-                Scan(application_id=archived.id, status=ScanStatus.failed, tool="osv", created_at=now_utc()),
+                Scan(
+                    application_id=covered.id,
+                    status=ScanStatus.succeeded,
+                    tool="osv",
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=covered.id,
+                    status=ScanStatus.succeeded,
+                    tool="trivy",
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=covered.id,
+                    status=ScanStatus.succeeded,
+                    tool="syft",
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=gaps.id,
+                    status=ScanStatus.partially_succeeded,
+                    tool="osv",
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=gaps.id,
+                    status=ScanStatus.failed,
+                    tool="trivy",
+                    created_at=now_utc(),
+                ),
+                Scan(
+                    application_id=archived.id,
+                    status=ScanStatus.failed,
+                    tool="osv",
+                    created_at=now_utc(),
+                ),
             ]
         )
         db.flush()
 
         page = list_scanner_tool_coverage(db=db, _=None)
-        trivy_page = list_scanner_tool_coverage(tool="trivy", gap_type="unhealthy_latest_scan", db=db, _=None)
+        trivy_page = list_scanner_tool_coverage(
+            tool="trivy", gap_type="unhealthy_latest_scan", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         issues = {(item["application_name"], item["tool"], item["gap_type"]) for item in page.items}
 
@@ -6869,12 +8171,21 @@ def test_list_retention_execution_reports_cleanup_audit_and_retained_candidates(
         )
         db.add(scan)
         db.flush()
-        inactive = Sbom(application_id=app.id, scan_id=scan.id, sbom_digest="inactive", storage_key="inactive.json", active=False, generated_at=now_utc() - timedelta(days=2))
+        inactive = Sbom(
+            application_id=app.id,
+            scan_id=scan.id,
+            sbom_digest="inactive",
+            storage_key="inactive.json",
+            active=False,
+            generated_at=now_utc() - timedelta(days=2),
+        )
         db.add(inactive)
         db.flush()
 
         page = list_retention_execution(db=db, _=None)
-        inactive_page = list_retention_execution(reason="inactive_sbom", gap_type="inactive_sbom_retained", db=db, _=None)
+        inactive_page = list_retention_execution(
+            reason="inactive_sbom", gap_type="inactive_sbom_retained", db=db, _=None
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["reason"], item["gap_type"]) for item in page.items}
 
@@ -6895,7 +8206,12 @@ def test_list_repository_workflow_trace_reports_repository_flow_gaps() -> None:
         db.flush()
 
         page = list_repository_workflow_trace(db=db, _=None)
-        provider_page = list_repository_workflow_trace(provider=RepositoryProvider.github, gap_type="missing_application_detection", db=db, _=None)
+        provider_page = list_repository_workflow_trace(
+            provider=RepositoryProvider.github,
+            gap_type="missing_application_detection",
+            db=db,
+            _=None,
+        )
         summary = dashboard_summary(db=db, settings=Settings(), _=None)
         gaps = {(item["repository_id"], item["gap_type"]) for item in page.items}
 

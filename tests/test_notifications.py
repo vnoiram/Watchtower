@@ -137,7 +137,9 @@ def test_enqueue_finding_notifications_creates_discord_notification(tmp_path: Pa
 
         assert len(notifications) == 1
         assert notifications[0].channel == "discord"
-        assert webhook_payload(notifications[0])["content"].startswith("High vulnerability detected")
+        assert webhook_payload(notifications[0])["content"].startswith(
+            "High vulnerability detected"
+        )
 
 
 def test_enqueue_finding_notifications_creates_both_channels(tmp_path: Path) -> None:
@@ -175,12 +177,15 @@ def test_enqueue_finding_notifications_skips_unconfigured_and_low_risk(
             == []
         )
         finding.severity = Severity.high
-        assert enqueue_finding_notifications(
-            db,
-            finding_ids=[finding.id],
-            scan_id=scan.id,
-            settings=settings(),
-        ) == []
+        assert (
+            enqueue_finding_notifications(
+                db,
+                finding_ids=[finding.id],
+                scan_id=scan.id,
+                settings=settings(),
+            )
+            == []
+        )
 
 
 def test_enqueue_finding_notifications_skips_non_open_status(tmp_path: Path) -> None:

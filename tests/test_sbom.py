@@ -127,4 +127,11 @@ def test_upsert_source_sbom_creates_components_and_deactivates_old_sbom() -> Non
         assert not db.get(Sbom, first_sbom.id).active
         assert db.get(Sbom, second_sbom.id).active
         assert db.scalar(select(Component).where(Component.purl == "pkg:pypi/fastapi@0.111.0"))
-        assert len(db.scalars(select(SbomComponent).where(SbomComponent.sbom_id == second_sbom.id)).all()) == 2
+        assert (
+            len(
+                db.scalars(
+                    select(SbomComponent).where(SbomComponent.sbom_id == second_sbom.id)
+                ).all()
+            )
+            == 2
+        )

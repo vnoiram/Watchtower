@@ -34,4 +34,3 @@ def test_auto_merge_policy_rejects_major_update() -> None:
         touches_forbidden_path=False,
     )
     assert not decision.allowed
-

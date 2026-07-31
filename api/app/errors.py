@@ -18,6 +18,7 @@ def install_exception_handlers(app: FastAPI) -> None:
                 detail=exc.detail.get("detail"),
             )
         else:
-            payload = ProblemDetails(title="HTTP error", status=exc.status_code, detail=str(exc.detail))
+            payload = ProblemDetails(
+                title="HTTP error", status=exc.status_code, detail=str(exc.detail)
+            )
         return JSONResponse(status_code=exc.status_code, content=payload.model_dump())
-

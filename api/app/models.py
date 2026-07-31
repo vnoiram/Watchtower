@@ -143,11 +143,15 @@ class Repository(Base):
     fork: Mapped[bool] = mapped_column(Boolean, default=False)
     topics: Mapped[list[str]] = mapped_column(JSON, default=list)
     primary_language: Mapped[str | None] = mapped_column(String(100))
-    source_classification: Mapped[SourceClassification] = mapped_column(Enum(SourceClassification), index=True)
+    source_classification: Mapped[SourceClassification] = mapped_column(
+        Enum(SourceClassification), index=True
+    )
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
 
     applications: Mapped[list["Application"]] = relationship(back_populates="repository")
 
@@ -161,10 +165,14 @@ class Application(Base):
     __tablename__ = "applications"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    repository_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("repositories.id"), index=True)
+    repository_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("repositories.id"), index=True
+    )
     name: Mapped[str] = mapped_column(String(255), index=True)
     path: Mapped[str] = mapped_column(String(1024), default=".")
-    application_type: Mapped[ApplicationType] = mapped_column(Enum(ApplicationType), default=ApplicationType.unknown)
+    application_type: Mapped[ApplicationType] = mapped_column(
+        Enum(ApplicationType), default=ApplicationType.unknown
+    )
     lifecycle: Mapped[Lifecycle] = mapped_column(Enum(Lifecycle), default=Lifecycle.experimental)
     criticality: Mapped[str] = mapped_column(String(50), default="medium")
     internet_exposed: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -174,20 +182,26 @@ class Application(Base):
     owner: Mapped[str | None] = mapped_column(String(255))
     support_status: Mapped[str] = mapped_column(String(50), default="supported")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
 
     repository: Mapped[Repository] = relationship(back_populates="applications")
     scans: Mapped[list["Scan"]] = relationship(back_populates="application")
     findings: Mapped[list["Finding"]] = relationship(back_populates="application")
 
-    __table_args__ = (UniqueConstraint("repository_id", "path", name="uq_application_repository_path"),)
+    __table_args__ = (
+        UniqueConstraint("repository_id", "path", name="uq_application_repository_path"),
+    )
 
 
 class Technology(Base):
     __tablename__ = "technologies"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    application_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("applications.id"), index=True)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("applications.id"), index=True
+    )
     category: Mapped[str] = mapped_column(String(100), index=True)
     name: Mapped[str] = mapped_column(String(255), index=True)
     version: Mapped[str | None] = mapped_column(String(255))
@@ -202,19 +216,29 @@ class Job(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     job_type: Mapped[JobType] = mapped_column(Enum(JobType), index=True)
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.queued, index=True)
-    repository_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("repositories.id"), index=True)
-    application_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("applications.id"), index=True)
+    repository_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("repositories.id"), index=True
+    )
+    application_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("applications.id"), index=True
+    )
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     locked_by: Mapped[str | None] = mapped_column(String(255))
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    run_after: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, index=True
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
 
     __table_args__ = (Index("ix_jobs_queue", "status", "run_after", "created_at"),)
 
@@ -223,10 +247,14 @@ class Scan(Base):
     __tablename__ = "scans"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    application_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("applications.id"), index=True)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("applications.id"), index=True
+    )
     scan_type: Mapped[str] = mapped_column(String(100), default="source")
     trigger_type: Mapped[TriggerType] = mapped_column(Enum(TriggerType), default=TriggerType.manual)
-    status: Mapped[ScanStatus] = mapped_column(Enum(ScanStatus), default=ScanStatus.queued, index=True)
+    status: Mapped[ScanStatus] = mapped_column(
+        Enum(ScanStatus), default=ScanStatus.queued, index=True
+    )
     commit_sha: Mapped[str | None] = mapped_column(String(64), index=True)
     branch: Mapped[str | None] = mapped_column(String(255))
     tool: Mapped[str | None] = mapped_column(String(100))
@@ -236,7 +264,9 @@ class Scan(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, index=True
+    )
 
     application: Mapped[Application] = relationship(back_populates="scans")
 
@@ -245,8 +275,12 @@ class Sbom(Base):
     __tablename__ = "sboms"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    application_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("applications.id"), index=True)
-    scan_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("scans.id"), index=True)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("applications.id"), index=True
+    )
+    scan_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("scans.id"), index=True
+    )
     sbom_kind: Mapped[str] = mapped_column(String(50), default="source")
     format: Mapped[str] = mapped_column(String(100), default="cyclonedx-json")
     specification_version: Mapped[str | None] = mapped_column(String(50))
@@ -276,8 +310,12 @@ class Component(Base):
 class SbomComponent(Base):
     __tablename__ = "sbom_components"
 
-    sbom_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sboms.id"), primary_key=True)
-    component_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("components.id"), primary_key=True)
+    sbom_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sboms.id"), primary_key=True
+    )
+    component_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("components.id"), primary_key=True
+    )
 
 
 class Vulnerability(Base):
@@ -294,30 +332,50 @@ class Vulnerability(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    __table_args__ = (UniqueConstraint("source", "external_id", name="uq_vulnerability_source_external_id"),)
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_vulnerability_source_external_id"),
+    )
 
 
 class Finding(Base):
     __tablename__ = "findings"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    application_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("applications.id"), index=True)
-    component_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("components.id"), index=True)
-    vulnerability_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vulnerabilities.id"), index=True)
-    status: Mapped[FindingStatus] = mapped_column(Enum(FindingStatus), default=FindingStatus.open, index=True)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("applications.id"), index=True
+    )
+    component_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("components.id"), index=True
+    )
+    vulnerability_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vulnerabilities.id"), index=True
+    )
+    status: Mapped[FindingStatus] = mapped_column(
+        Enum(FindingStatus), default=FindingStatus.open, index=True
+    )
     severity: Mapped[Severity] = mapped_column(Enum(Severity), default=Severity.unknown, index=True)
-    first_seen_scan_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("scans.id"))
-    last_seen_scan_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("scans.id"))
+    first_seen_scan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("scans.id")
+    )
+    last_seen_scan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("scans.id")
+    )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     fixed_version: Mapped[str | None] = mapped_column(String(255))
     risk_score: Mapped[float] = mapped_column(Float, default=0.0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
 
     application: Mapped[Application] = relationship(back_populates="findings")
 
     __table_args__ = (
-        UniqueConstraint("application_id", "component_id", "vulnerability_id", name="uq_finding_identity"),
+        UniqueConstraint(
+            "application_id", "component_id", "vulnerability_id", name="uq_finding_identity"
+        ),
     )
 
 
@@ -325,7 +383,9 @@ class RemediationAction(Base):
     __tablename__ = "remediation_actions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    finding_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("findings.id"), index=True)
+    finding_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("findings.id"), index=True
+    )
     action_type: Mapped[str] = mapped_column(String(100), index=True)
     status: Mapped[str] = mapped_column(String(100), index=True)
     provider: Mapped[str | None] = mapped_column(String(100))
@@ -335,21 +395,27 @@ class RemediationAction(Base):
     fixed_version: Mapped[str | None] = mapped_column(String(255))
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
 
 
 class VexStatement(Base):
     __tablename__ = "vex_statements"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    finding_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("findings.id"), index=True)
+    finding_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("findings.id"), index=True
+    )
     status: Mapped[VexStatus] = mapped_column(Enum(VexStatus), index=True)
     justification: Mapped[str] = mapped_column(Text)
     impact_statement: Mapped[str | None] = mapped_column(Text)
     approved_by: Mapped[str] = mapped_column(String(255))
     review_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
 
 
 class Notification(Base):
@@ -376,5 +442,6 @@ class AuditLog(Base):
     resource_type: Mapped[str] = mapped_column(String(100), index=True)
     resource_id: Mapped[str | None] = mapped_column(String(255))
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, index=True
+    )

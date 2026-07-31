@@ -250,12 +250,17 @@ def container_coverage_items(db: Session) -> list[dict]:
                     "Application has no container SBOM evidence",
                 )
             )
-        if scan and _scan_is_container(scan) and scan.status in {
-            models.ScanStatus.failed,
-            models.ScanStatus.cancelled,
-            models.ScanStatus.timed_out,
-            models.ScanStatus.partially_succeeded,
-        }:
+        if (
+            scan
+            and _scan_is_container(scan)
+            and scan.status
+            in {
+                models.ScanStatus.failed,
+                models.ScanStatus.cancelled,
+                models.ScanStatus.timed_out,
+                models.ScanStatus.partially_succeeded,
+            }
+        ):
             items.append(
                 _container_coverage_item(
                     "failed_container_scan",
@@ -274,17 +279,28 @@ def container_coverage_items(db: Session) -> list[dict]:
 def _artifact_payloads(result_summary: dict | None) -> list[tuple[str | None, dict]]:
     artifacts = (result_summary or {}).get("artifacts") or {}
     if isinstance(artifacts, dict):
-        return [(str(key) if key else None, value) for key, value in artifacts.items() if isinstance(value, dict)]
+        return [
+            (str(key) if key else None, value)
+            for key, value in artifacts.items()
+            if isinstance(value, dict)
+        ]
     if isinstance(artifacts, list):
         return [
-            (str(item.get("type") or item.get("artifact_type")) if item.get("type") or item.get("artifact_type") else None, item)
+            (
+                str(item.get("type") or item.get("artifact_type"))
+                if item.get("type") or item.get("artifact_type")
+                else None,
+                item,
+            )
             for item in artifacts
             if isinstance(item, dict)
         ]
     return []
 
 
-def _artifact_gap(artifact_type: str | None, storage_key: str | None, digest: str | None) -> tuple[str, str]:
+def _artifact_gap(
+    artifact_type: str | None, storage_key: str | None, digest: str | None
+) -> tuple[str, str]:
     if not artifact_type:
         return "missing_artifact_type", "Artifact metadata has no type"
     if not storage_key:
@@ -343,7 +359,9 @@ def _sboms_by_scan(db: Session) -> dict[UUID, models.Sbom]:
 
 def _latest_scan_by_application(db: Session) -> dict[UUID, models.Scan]:
     latest = {}
-    for scan in db.scalars(select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.desc())):
+    for scan in db.scalars(
+        select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.desc())
+    ):
         latest.setdefault(scan.application_id, scan)
     return latest
 
@@ -352,7 +370,9 @@ def _container_sboms_by_application(db: Session) -> dict[UUID, models.Sbom]:
     sboms = db.scalars(
         select(models.Sbom)
         .where(models.Sbom.sbom_kind == "container")
-        .order_by(models.Sbom.application_id.asc(), models.Sbom.generated_at.desc(), models.Sbom.id.desc())
+        .order_by(
+            models.Sbom.application_id.asc(), models.Sbom.generated_at.desc(), models.Sbom.id.desc()
+        )
     )
     by_application = {}
     for sbom in sboms:
@@ -385,7 +405,10 @@ def _artifact_type_is_container(artifact_type: str) -> bool:
 def _scan_is_container(scan: models.Scan | None) -> bool:
     if not scan:
         return False
-    text = " ".join(str(value) for value in [scan.scan_type, scan.tool, (scan.result_summary or {}).get("scanner")])
+    text = " ".join(
+        str(value)
+        for value in [scan.scan_type, scan.tool, (scan.result_summary or {}).get("scanner")]
+    )
     return _artifact_type_is_container(text)
 
 
@@ -421,7 +444,9 @@ def _artifact_sboms_by_application(db: Session) -> dict[UUID, models.Sbom]:
     sboms = db.scalars(
         select(models.Sbom)
         .where(models.Sbom.sbom_kind != "source")
-        .order_by(models.Sbom.application_id.asc(), models.Sbom.generated_at.desc(), models.Sbom.id.desc())
+        .order_by(
+            models.Sbom.application_id.asc(), models.Sbom.generated_at.desc(), models.Sbom.id.desc()
+        )
     )
     by_application = {}
     for sbom in sboms:

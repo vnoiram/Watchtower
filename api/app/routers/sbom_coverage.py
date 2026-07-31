@@ -69,7 +69,9 @@ def _latest_active_source_sboms(
             models.Sbom.active.is_(True),
             models.Sbom.sbom_kind == "source",
         )
-        .order_by(models.Sbom.application_id.asc(), models.Sbom.generated_at.desc(), models.Sbom.id.desc())
+        .order_by(
+            models.Sbom.application_id.asc(), models.Sbom.generated_at.desc(), models.Sbom.id.desc()
+        )
     ).scalars()
     for sbom in sboms:
         latest_sboms.setdefault(sbom.application_id, sbom)

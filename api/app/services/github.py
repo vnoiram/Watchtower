@@ -15,7 +15,9 @@ from api.app.models import Repository
 GITHUB_API_VERSION = "2022-11-28"
 GITHUB_ACCEPT_HEADER = "application/vnd.github+json"
 GITHUB_REPOSITORY_INSTALLATION_API = "https://api.github.com/repos/{owner}/{name}/installation"
-GITHUB_INSTALLATION_TOKEN_API = "https://api.github.com/app/installations/{installation_id}/access_tokens"
+GITHUB_INSTALLATION_TOKEN_API = (
+    "https://api.github.com/app/installations/{installation_id}/access_tokens"
+)
 GITHUB_ORG_REPOSITORIES_API = "https://api.github.com/orgs/{owner}/repos?per_page=100&type=all"
 GITHUB_USER_REPOSITORIES_API = "https://api.github.com/users/{owner}/repos?per_page=100&type=all"
 

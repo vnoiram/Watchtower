@@ -106,7 +106,15 @@ def create_vex_statement(
     vex = models.VexStatement(**payload.model_dump())
     db.add(vex)
     db.flush()
-    audit(db, principal.actor, principal.role, "vex.create", "vex", str(vex.id), finding_id=str(vex.finding_id))
+    audit(
+        db,
+        principal.actor,
+        principal.role,
+        "vex.create",
+        "vex",
+        str(vex.id),
+        finding_id=str(vex.finding_id),
+    )
     db.commit()
     db.refresh(vex)
     return vex
@@ -135,13 +143,37 @@ def vex_invalidation_candidate_items(db: Session) -> list[dict]:
         expired = vex.review_date < _matching_datetime(now, vex.review_date)
         context = (vex, finding, application, repository, component, vulnerability, expired)
         if expired:
-            items.append(_invalidation_item("expired_review", *context, detail="VEX review date has passed"))
+            items.append(
+                _invalidation_item("expired_review", *context, detail="VEX review date has passed")
+            )
         if not vex.approved_by:
-            items.append(_invalidation_item("missing_approval", *context, detail="VEX statement has no approver"))
-        if finding.last_seen_scan_id and finding.updated_at > _matching_datetime(vex.updated_at, finding.updated_at):
-            items.append(_invalidation_item("finding_seen_after_vex", *context, detail="Finding was updated after VEX approval"))
-        if component.version and vex.impact_statement and component.version not in vex.impact_statement:
-            items.append(_invalidation_item("component_version_drift", *context, detail="Current component version is not reflected in VEX impact statement"))
+            items.append(
+                _invalidation_item(
+                    "missing_approval", *context, detail="VEX statement has no approver"
+                )
+            )
+        if finding.last_seen_scan_id and finding.updated_at > _matching_datetime(
+            vex.updated_at, finding.updated_at
+        ):
+            items.append(
+                _invalidation_item(
+                    "finding_seen_after_vex",
+                    *context,
+                    detail="Finding was updated after VEX approval",
+                )
+            )
+        if (
+            component.version
+            and vex.impact_statement
+            and component.version not in vex.impact_statement
+        ):
+            items.append(
+                _invalidation_item(
+                    "component_version_drift",
+                    *context,
+                    detail="Current component version is not reflected in VEX impact statement",
+                )
+            )
     return items
 
 

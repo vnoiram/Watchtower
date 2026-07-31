@@ -31,7 +31,9 @@ def list_sboms(
         stmt = stmt.where(models.Sbom.active.is_(active))
     if application_id:
         stmt = stmt.where(models.Sbom.application_id == application_id)
-    stmt = stmt.order_by(models.Sbom.generated_at.desc(), models.Sbom.id.asc()).limit(min(limit, 100))
+    stmt = stmt.order_by(models.Sbom.generated_at.desc(), models.Sbom.id.asc()).limit(
+        min(limit, 100)
+    )
 
     items = []
     for sbom, application, repository, count in db.execute(stmt):
@@ -88,27 +90,53 @@ def sbom_normalization_quality_items(db: Session) -> list[dict]:
         .join(models.Application, models.Sbom.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .where(models.Sbom.active.is_(True))
-        .order_by(models.Sbom.generated_at.desc(), models.Component.name.asc(), models.Component.id.asc())
+        .order_by(
+            models.Sbom.generated_at.desc(), models.Component.name.asc(), models.Component.id.asc()
+        )
     )
     items = []
     for sbom, component, application, repository in db.execute(stmt):
         context = (sbom, component, application, repository)
         if not component.purl or not component.purl.startswith("pkg:"):
-            items.append(_normalization_item("invalid_purl", *context, "Component has no valid package URL"))
+            items.append(
+                _normalization_item("invalid_purl", *context, "Component has no valid package URL")
+            )
         if not component.ecosystem:
-            items.append(_normalization_item("missing_ecosystem", *context, "Component has no ecosystem"))
+            items.append(
+                _normalization_item("missing_ecosystem", *context, "Component has no ecosystem")
+            )
         if not component.name:
-            items.append(_normalization_item("missing_name", *context, "Component has no normalized name"))
+            items.append(
+                _normalization_item("missing_name", *context, "Component has no normalized name")
+            )
         if not component.version:
-            items.append(_normalization_item("missing_version", *context, "Component has no version"))
+            items.append(
+                _normalization_item("missing_version", *context, "Component has no version")
+            )
         if not component.license:
-            items.append(_normalization_item("missing_license", *context, "Component has no license evidence"))
+            items.append(
+                _normalization_item(
+                    "missing_license", *context, "Component has no license evidence"
+                )
+            )
         if not component.supplier:
-            items.append(_normalization_item("missing_supplier", *context, "Component has no supplier evidence"))
+            items.append(
+                _normalization_item(
+                    "missing_supplier", *context, "Component has no supplier evidence"
+                )
+            )
         if not component.hash:
-            items.append(_normalization_item("missing_hash", *context, "Component has no hash evidence"))
+            items.append(
+                _normalization_item("missing_hash", *context, "Component has no hash evidence")
+            )
         if _component_key(component) in duplicate_keys:
-            items.append(_normalization_item("duplicate_identity", *context, "Multiple components share ecosystem, name, and version"))
+            items.append(
+                _normalization_item(
+                    "duplicate_identity",
+                    *context,
+                    "Multiple components share ecosystem, name, and version",
+                )
+            )
     return items
 
 

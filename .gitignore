@@ -13,3 +13,4 @@ worker-cache/
 node_modules/
 dist/
 build/
+.pre-push-check-ignore.md

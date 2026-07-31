@@ -26,4 +26,3 @@ def test_detect_applications_returns_unknown_for_unclassified_repo(tmp_path: Pat
             "detection_source": "none",
         }
     ]
-

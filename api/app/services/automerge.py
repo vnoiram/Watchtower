@@ -31,4 +31,3 @@ def evaluate_auto_merge(
     if touches_forbidden_path:
         return AutoMergeDecision(False, "change touches a forbidden path", dry_run)
     return AutoMergeDecision(True, "eligible", dry_run)
-

@@ -47,4 +47,3 @@ def detect_applications(root: Path) -> list[dict[str, str]]:
             "detection_source": "none",
         }
     return list(detected.values())
-

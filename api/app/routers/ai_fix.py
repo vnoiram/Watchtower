@@ -28,16 +28,17 @@ def list_ai_fix_actions(
         stmt = stmt.where(models.Finding.severity == severity)
     if application_id:
         stmt = stmt.where(models.Application.id == application_id)
-    stmt = stmt.order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()).limit(
-        min(limit, 100)
-    )
+    stmt = stmt.order_by(
+        models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()
+    ).limit(min(limit, 100))
 
     items = []
     for action, finding, application, vulnerability, component in db.execute(stmt):
         items.append(
             schemas.AiFixActionOut(
                 **_action_payload(action, finding, application, vulnerability, component),
-                requested_fixed_version=(action.metadata_json or {}).get("fixed_version") or action.fixed_version,
+                requested_fixed_version=(action.metadata_json or {}).get("fixed_version")
+                or action.fixed_version,
             ).model_dump(mode="json")
         )
     return schemas.CursorPage(items=items, next_cursor=None)

@@ -43,7 +43,10 @@ def list_findings(
         last = rows[limit - 1]
         next_cursor = encode_cursor(last.created_at, last.id)
         rows = rows[:limit]
-    return schemas.CursorPage(items=[schemas.FindingOut.model_validate(row).model_dump(mode="json") for row in rows], next_cursor=next_cursor)
+    return schemas.CursorPage(
+        items=[schemas.FindingOut.model_validate(row).model_dump(mode="json") for row in rows],
+        next_cursor=next_cursor,
+    )
 
 
 @router.get("/resolution-candidates", response_model=schemas.CursorPage)
@@ -265,7 +268,9 @@ def finding_traceability_gap_count(db: Session) -> int:
 
 
 def critical_high_triage_gap_count(db: Session) -> int:
-    return sum(1 for item in critical_high_triage_items(db) if item["missing"] or item["sla_breached"])
+    return sum(
+        1 for item in critical_high_triage_items(db) if item["missing"] or item["sla_breached"]
+    )
 
 
 def finding_traceability_items(db: Session) -> list[dict]:
@@ -282,18 +287,96 @@ def finding_traceability_items(db: Session) -> list[dict]:
     for finding, application, repository in db.execute(stmt):
         finding_actions = actions.get(finding.id, [])
         notification = notifications.get(finding.id)
-        issue_action = next((action for action in finding_actions if _has_issue_or_pr([action])), None)
-        validation_scan = _validation_scan(db, finding_actions) or _latest_scan_after(scans, finding.application_id, issue_action.updated_at if issue_action else None)
+        issue_action = next(
+            (action for action in finding_actions if _has_issue_or_pr([action])), None
+        )
+        validation_scan = _validation_scan(db, finding_actions) or _latest_scan_after(
+            scans, finding.application_id, issue_action.updated_at if issue_action else None
+        )
         if not finding.first_seen_scan_id and not finding.last_seen_scan_id:
-            items.append(_traceability_item("missing_scan_context", finding, application, repository, notification, issue_action, validation_scan, "Finding has no first or last scan context"))
-        if notification is None and finding.severity in {models.Severity.critical, models.Severity.high}:
-            items.append(_traceability_item("missing_notification", finding, application, repository, notification, issue_action, validation_scan, "Critical or high finding has no sent notification evidence"))
-        if issue_action is None and finding.status in {models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress}:
-            items.append(_traceability_item("missing_issue_or_pr", finding, application, repository, notification, issue_action, validation_scan, "Open finding has no issue or PR action evidence"))
-        if issue_action is not None and validation_scan is None and finding.status in {models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress, models.FindingStatus.resolved}:
-            items.append(_traceability_item("missing_validation_scan", finding, application, repository, notification, issue_action, validation_scan, "Remediation action has no validation scan evidence"))
-        if finding.status == models.FindingStatus.resolved and not _has_closure_evidence(finding_actions):
-            items.append(_traceability_item("missing_closure_evidence", finding, application, repository, notification, issue_action, validation_scan, "Resolved finding has no issue closure evidence"))
+            items.append(
+                _traceability_item(
+                    "missing_scan_context",
+                    finding,
+                    application,
+                    repository,
+                    notification,
+                    issue_action,
+                    validation_scan,
+                    "Finding has no first or last scan context",
+                )
+            )
+        if notification is None and finding.severity in {
+            models.Severity.critical,
+            models.Severity.high,
+        }:
+            items.append(
+                _traceability_item(
+                    "missing_notification",
+                    finding,
+                    application,
+                    repository,
+                    notification,
+                    issue_action,
+                    validation_scan,
+                    "Critical or high finding has no sent notification evidence",
+                )
+            )
+        if issue_action is None and finding.status in {
+            models.FindingStatus.open,
+            models.FindingStatus.triaged,
+            models.FindingStatus.in_progress,
+        }:
+            items.append(
+                _traceability_item(
+                    "missing_issue_or_pr",
+                    finding,
+                    application,
+                    repository,
+                    notification,
+                    issue_action,
+                    validation_scan,
+                    "Open finding has no issue or PR action evidence",
+                )
+            )
+        if (
+            issue_action is not None
+            and validation_scan is None
+            and finding.status
+            in {
+                models.FindingStatus.open,
+                models.FindingStatus.triaged,
+                models.FindingStatus.in_progress,
+                models.FindingStatus.resolved,
+            }
+        ):
+            items.append(
+                _traceability_item(
+                    "missing_validation_scan",
+                    finding,
+                    application,
+                    repository,
+                    notification,
+                    issue_action,
+                    validation_scan,
+                    "Remediation action has no validation scan evidence",
+                )
+            )
+        if finding.status == models.FindingStatus.resolved and not _has_closure_evidence(
+            finding_actions
+        ):
+            items.append(
+                _traceability_item(
+                    "missing_closure_evidence",
+                    finding,
+                    application,
+                    repository,
+                    notification,
+                    issue_action,
+                    validation_scan,
+                    "Resolved finding has no issue closure evidence",
+                )
+            )
     return items
 
 
@@ -313,7 +396,9 @@ def critical_high_triage_items(db: Session) -> list[dict]:
     for finding, application, repository in db.execute(stmt):
         finding_actions = actions.get(finding.id, [])
         notification = notifications.get(finding.id)
-        action = next((candidate for candidate in finding_actions if _has_issue_or_pr([candidate])), None)
+        action = next(
+            (candidate for candidate in finding_actions if _has_issue_or_pr([candidate])), None
+        )
         vex = vex_by_finding.get(finding.id)
         missing = []
         if not application.owner:
@@ -328,19 +413,41 @@ def critical_high_triage_items(db: Session) -> list[dict]:
         breached = finding.status == models.FindingStatus.open and is_sla_breached(finding, now)
         if breached:
             missing.append("sla")
-        items.append(_critical_high_triage_item(finding, application, repository, notification, action, vex, breached, missing))
+        items.append(
+            _critical_high_triage_item(
+                finding, application, repository, notification, action, vex, breached, missing
+            )
+        )
     return items
 
 
 def risk_score_explanation_items(db: Session) -> list[dict]:
     stmt = (
-        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
         .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
-        .where(models.Finding.status.in_([models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress]))
-        .order_by(models.Finding.risk_score.asc(), models.Finding.updated_at.asc(), models.Finding.id.asc())
+        .where(
+            models.Finding.status.in_(
+                [
+                    models.FindingStatus.open,
+                    models.FindingStatus.triaged,
+                    models.FindingStatus.in_progress,
+                ]
+            )
+        )
+        .order_by(
+            models.Finding.risk_score.asc(),
+            models.Finding.updated_at.asc(),
+            models.Finding.id.asc(),
+        )
     )
     items = []
     for finding, application, repository, component, vulnerability in db.execute(stmt):
@@ -380,7 +487,13 @@ def finding_lifecycle_review_items(db: Session) -> list[dict]:
     issue_actions = _issue_actions_by_finding(db)
     items = []
     stmt = (
-        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
@@ -389,12 +502,38 @@ def finding_lifecycle_review_items(db: Session) -> list[dict]:
     )
     for finding, application, repository, component, vulnerability in db.execute(stmt):
         context = (finding, application, repository, component, vulnerability, now)
-        if finding.status in {models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress} and _before(finding.updated_at, stale_cutoff):
-            items.append(_lifecycle_item("stale_open", *context, detail="Open finding has not been updated in 30 days"))
-        if finding.status in {models.FindingStatus.accepted_risk, models.FindingStatus.false_positive}:
-            items.append(_lifecycle_item(f"{finding.status.value}_review", *context, detail="Exception-like finding status requires periodic review"))
-        if finding.status == models.FindingStatus.resolved and _close_state(issue_actions.get(finding.id)) != "closed":
-            items.append(_lifecycle_item("resolved_without_close", *context, detail="Resolved finding does not have closed GitHub issue evidence"))
+        if finding.status in {
+            models.FindingStatus.open,
+            models.FindingStatus.triaged,
+            models.FindingStatus.in_progress,
+        } and _before(finding.updated_at, stale_cutoff):
+            items.append(
+                _lifecycle_item(
+                    "stale_open", *context, detail="Open finding has not been updated in 30 days"
+                )
+            )
+        if finding.status in {
+            models.FindingStatus.accepted_risk,
+            models.FindingStatus.false_positive,
+        }:
+            items.append(
+                _lifecycle_item(
+                    f"{finding.status.value}_review",
+                    *context,
+                    detail="Exception-like finding status requires periodic review",
+                )
+            )
+        if (
+            finding.status == models.FindingStatus.resolved
+            and _close_state(issue_actions.get(finding.id)) != "closed"
+        ):
+            items.append(
+                _lifecycle_item(
+                    "resolved_without_close",
+                    *context,
+                    detail="Resolved finding does not have closed GitHub issue evidence",
+                )
+            )
     return items
 
 
@@ -429,7 +568,10 @@ def _risk_gap_type(finding: models.Finding, factors: list[str]) -> str | None:
     )
     if finding.risk_score <= 0:
         return "missing_risk_score"
-    if finding.severity in {models.Severity.critical, models.Severity.high} and finding.risk_score < 7:
+    if (
+        finding.severity in {models.Severity.critical, models.Severity.high}
+        and finding.risk_score < 7
+    ):
         return "low_score_for_high_severity"
     if high_signal and finding.risk_score < 5:
         return "missing_priority_factor_weight"
@@ -437,13 +579,18 @@ def _risk_gap_type(finding: models.Finding, factors: list[str]) -> str | None:
 
 
 def _vulnerability_has(vulnerability: models.Vulnerability, tokens: set[str]) -> bool:
-    text = _flatten_evidence([vulnerability.title, vulnerability.description, vulnerability.references or []])
+    text = _flatten_evidence(
+        [vulnerability.title, vulnerability.description, vulnerability.references or []]
+    )
     return any(token in text for token in tokens)
 
 
 def _flatten_evidence(value) -> str:
     if isinstance(value, dict):
-        return " ".join([str(key).lower() for key in value] + [_flatten_evidence(item) for item in value.values()])
+        return " ".join(
+            [str(key).lower() for key in value]
+            + [_flatten_evidence(item) for item in value.values()]
+        )
     if isinstance(value, list | tuple | set):
         return " ".join(_flatten_evidence(item) for item in value)
     return str(value or "").lower()
@@ -455,7 +602,13 @@ def medium_review_items(db: Session) -> list[dict]:
     notified_ids = _sent_notification_finding_ids(db)
     vex_ids = {vex.finding_id for vex in db.scalars(select(models.VexStatement))}
     stmt = (
-        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
@@ -496,7 +649,9 @@ def medium_review_items(db: Session) -> list[dict]:
                 has_notification=has_notification,
                 has_action=has_action,
                 has_vex=has_vex,
-                age_days=max((now.replace(tzinfo=None) - finding.updated_at.replace(tzinfo=None)).days, 0),
+                age_days=max(
+                    (now.replace(tzinfo=None) - finding.updated_at.replace(tzinfo=None)).days, 0
+                ),
                 detail=detail,
                 updated_at=finding.updated_at,
             ).model_dump(mode="json")
@@ -511,7 +666,13 @@ def finding_evidence_gap_items(db: Session) -> list[dict]:
     vex_finding_ids = {vex.finding_id for vex in db.scalars(select(models.VexStatement))}
     items = []
     stmt = (
-        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
@@ -526,15 +687,56 @@ def finding_evidence_gap_items(db: Session) -> list[dict]:
             and finding.severity in {models.Severity.critical, models.Severity.high}
             and finding.id not in notified_finding_ids
         ):
-            items.append(_evidence_gap_item("missing_notification", *context, detail="Open critical/high finding has no sent notification evidence"))
-        if finding.status == models.FindingStatus.open and finding.fixed_version and not _has_issue_or_pr(actions):
-            items.append(_evidence_gap_item("missing_issue_or_pr", *context, detail="Fixable open finding has no GitHub issue or PR evidence"))
+            items.append(
+                _evidence_gap_item(
+                    "missing_notification",
+                    *context,
+                    detail="Open critical/high finding has no sent notification evidence",
+                )
+            )
+        if (
+            finding.status == models.FindingStatus.open
+            and finding.fixed_version
+            and not _has_issue_or_pr(actions)
+        ):
+            items.append(
+                _evidence_gap_item(
+                    "missing_issue_or_pr",
+                    *context,
+                    detail="Fixable open finding has no GitHub issue or PR evidence",
+                )
+            )
         if actions and not _has_successful_validation(actions):
-            items.append(_evidence_gap_item("missing_validation", *context, detail="Remediation action has no successful validation evidence"))
-        if finding.status == models.FindingStatus.resolved and _close_state(issue_actions.get(finding.id)) != "closed":
-            items.append(_evidence_gap_item("missing_closure", *context, detail="Resolved finding has no GitHub issue closure evidence"))
-        if finding.status in {models.FindingStatus.accepted_risk, models.FindingStatus.false_positive} and finding.id not in vex_finding_ids:
-            items.append(_evidence_gap_item("missing_exception_review", *context, detail="Exception-like finding has no VEX or review evidence"))
+            items.append(
+                _evidence_gap_item(
+                    "missing_validation",
+                    *context,
+                    detail="Remediation action has no successful validation evidence",
+                )
+            )
+        if (
+            finding.status == models.FindingStatus.resolved
+            and _close_state(issue_actions.get(finding.id)) != "closed"
+        ):
+            items.append(
+                _evidence_gap_item(
+                    "missing_closure",
+                    *context,
+                    detail="Resolved finding has no GitHub issue closure evidence",
+                )
+            )
+        if (
+            finding.status
+            in {models.FindingStatus.accepted_risk, models.FindingStatus.false_positive}
+            and finding.id not in vex_finding_ids
+        ):
+            items.append(
+                _evidence_gap_item(
+                    "missing_exception_review",
+                    *context,
+                    detail="Exception-like finding has no VEX or review evidence",
+                )
+            )
     return items
 
 
@@ -583,7 +785,9 @@ def _latest_successful_scans_by_application(db: Session) -> dict:
     scans = db.execute(
         select(models.Scan)
         .where(models.Scan.status == models.ScanStatus.succeeded)
-        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+        .order_by(
+            models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc()
+        )
     ).scalars()
     by_application = {}
     for scan in scans:
@@ -608,7 +812,9 @@ def _issue_actions_by_finding(db: Session) -> dict[UUID, models.RemediationActio
 
 def _actions_by_finding(db: Session) -> dict[UUID, list[models.RemediationAction]]:
     actions: dict[UUID, list[models.RemediationAction]] = {}
-    stmt = select(models.RemediationAction).order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.desc())
+    stmt = select(models.RemediationAction).order_by(
+        models.RemediationAction.created_at.desc(), models.RemediationAction.id.desc()
+    )
     for action in db.scalars(stmt):
         actions.setdefault(action.finding_id, []).append(action)
     return actions
@@ -616,7 +822,9 @@ def _actions_by_finding(db: Session) -> dict[UUID, list[models.RemediationAction
 
 def _sent_notification_finding_ids(db: Session) -> set[UUID]:
     finding_ids = set()
-    for notification in db.scalars(select(models.Notification).where(models.Notification.status == "sent")):
+    for notification in db.scalars(
+        select(models.Notification).where(models.Notification.status == "sent")
+    ):
         try:
             finding_ids.add(UUID(str((notification.metadata_json or {}).get("finding_id"))))
         except (TypeError, ValueError):
@@ -629,7 +837,9 @@ def _sent_notifications_by_finding(db: Session) -> dict[UUID, models.Notificatio
     stmt = (
         select(models.Notification)
         .where(models.Notification.status == "sent")
-        .order_by(models.Notification.sent_at.desc().nullslast(), models.Notification.created_at.desc())
+        .order_by(
+            models.Notification.sent_at.desc().nullslast(), models.Notification.created_at.desc()
+        )
     )
     for notification in db.scalars(stmt):
         finding_id = _metadata_uuid(notification.metadata_json, "finding_id")
@@ -640,7 +850,9 @@ def _sent_notifications_by_finding(db: Session) -> dict[UUID, models.Notificatio
 
 def _vex_by_finding(db: Session) -> dict[UUID, models.VexStatement]:
     statements = {}
-    stmt = select(models.VexStatement).order_by(models.VexStatement.updated_at.desc(), models.VexStatement.id.desc())
+    stmt = select(models.VexStatement).order_by(
+        models.VexStatement.updated_at.desc(), models.VexStatement.id.desc()
+    )
     for vex in db.scalars(stmt):
         statements.setdefault(vex.finding_id, vex)
     return statements
@@ -649,7 +861,12 @@ def _vex_by_finding(db: Session) -> dict[UUID, models.VexStatement]:
 def _has_issue_or_pr(actions: list[models.RemediationAction]) -> bool:
     for action in actions:
         metadata = action.metadata_json or {}
-        if action.action_type == ACTION_TYPE_GITHUB_ISSUE or action.branch or action.url or metadata.get("pull_request_url"):
+        if (
+            action.action_type == ACTION_TYPE_GITHUB_ISSUE
+            or action.branch
+            or action.url
+            or metadata.get("pull_request_url")
+        ):
             return True
     return False
 
@@ -657,13 +874,20 @@ def _has_issue_or_pr(actions: list[models.RemediationAction]) -> bool:
 def _has_closure_evidence(actions: list[models.RemediationAction]) -> bool:
     for action in actions:
         metadata = action.metadata_json or {}
-        if action.status in {"closed", "resolved", "merged"} or metadata.get("github_issue_closed_at") or metadata.get("closed_at") or metadata.get("merged_at"):
+        if (
+            action.status in {"closed", "resolved", "merged"}
+            or metadata.get("github_issue_closed_at")
+            or metadata.get("closed_at")
+            or metadata.get("merged_at")
+        ):
             return True
     return False
 
 
 def _has_successful_validation(actions: list[models.RemediationAction]) -> bool:
-    return any((action.metadata_json or {}).get("validation_status") == "succeeded" for action in actions)
+    return any(
+        (action.metadata_json or {}).get("validation_status") == "succeeded" for action in actions
+    )
 
 
 def _validation_scan(db: Session, actions: list[models.RemediationAction]) -> models.Scan | None:
@@ -679,13 +903,16 @@ def _validation_scan(db: Session, actions: list[models.RemediationAction]) -> mo
     return None
 
 
-def _latest_scan_after(scans: list[models.Scan], application_id: UUID, after: datetime | None) -> models.Scan | None:
+def _latest_scan_after(
+    scans: list[models.Scan], application_id: UUID, after: datetime | None
+) -> models.Scan | None:
     if after is None:
         return None
     candidates = [
         scan
         for scan in scans
-        if scan.application_id == application_id and scan.created_at >= _comparable_datetime(after, scan.created_at)
+        if scan.application_id == application_id
+        and scan.created_at >= _comparable_datetime(after, scan.created_at)
     ]
     return max(candidates, key=lambda scan: (scan.created_at, scan.id), default=None)
 
@@ -778,7 +1005,9 @@ def _critical_high_triage_item(
         vex_id=vex.id if vex else None,
         sla_breached=sla_breached,
         missing=missing,
-        detail="Critical/high triage evidence is complete" if not missing else f"Missing {', '.join(missing)}",
+        detail="Critical/high triage evidence is complete"
+        if not missing
+        else f"Missing {', '.join(missing)}",
         created_at=finding.created_at,
     ).model_dump(mode="json")
 

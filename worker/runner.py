@@ -74,7 +74,9 @@ def default_process_timeout() -> float | None:
 def run_command(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     timeout = default_process_timeout()
     try:
-        return subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=False, timeout=timeout)
+        return subprocess.run(
+            args, cwd=cwd, text=True, capture_output=True, check=False, timeout=timeout
+        )
     except subprocess.TimeoutExpired as exc:
         raise ScanTimeoutError(f"{args[0]} timed out after {timeout}s") from exc
 
@@ -201,7 +203,17 @@ def run_grype(target: Path, output_path: Path) -> dict:
 def run_gitleaks(target: Path, output_path: Path) -> list:
     return run_json_scanner(
         "gitleaks",
-        ["gitleaks", "detect", "--source", str(target), "--no-git", "--report-format", "json", "--report-path", "/dev/stdout"],
+        [
+            "gitleaks",
+            "detect",
+            "--source",
+            str(target),
+            "--no-git",
+            "--report-format",
+            "json",
+            "--report-path",
+            "/dev/stdout",
+        ],
         output_path,
     )
 
@@ -291,7 +303,13 @@ def scan_application(
         secrets_findings: list[dict] = []
         sast_findings: list[dict] = []
         posture_steps = (
-            ("gitleaks", "gitleaks.json", run_gitleaks, normalize_gitleaks_results, secrets_findings),
+            (
+                "gitleaks",
+                "gitleaks.json",
+                run_gitleaks,
+                normalize_gitleaks_results,
+                secrets_findings,
+            ),
             ("semgrep", "semgrep.json", run_semgrep, normalize_semgrep_results, sast_findings),
         )
         for source, filename, runner, normalizer, sink in posture_steps:
@@ -335,7 +353,9 @@ def scan_application(
                 JobType.notification,
                 repository_id=repo.id,
                 application_id=app.id,
-                payload={"notification_ids": [str(notification.id) for notification in notifications]},
+                payload={
+                    "notification_ids": [str(notification.id) for notification in notifications]
+                },
             )
         issue_requests = enqueue_github_issue_requests(
             db,
@@ -357,7 +377,9 @@ def scan_application(
                 application_id=app.id,
                 payload={
                     "operation": "close",
-                    "finding_ids": [str(finding_id) for finding_id in persistence.resolved_finding_ids],
+                    "finding_ids": [
+                        str(finding_id) for finding_id in persistence.resolved_finding_ids
+                    ],
                 },
             )
         scan.status = ScanStatus.partially_succeeded if scanner_failures else ScanStatus.succeeded
@@ -449,7 +471,9 @@ def resolve_remediation_validation_targets(
     job: Job,
 ) -> tuple[list[Application], list[RemediationAction]]:
     payload = job.payload or {}
-    action_ids = _uuid_list_from_payload(payload, "remediation_action_ids", "action_ids", "remediation_action_id")
+    action_ids = _uuid_list_from_payload(
+        payload, "remediation_action_ids", "action_ids", "remediation_action_id"
+    )
     finding_ids = _uuid_list_from_payload(payload, "finding_ids", "finding_id")
     application_ids = _uuid_list_from_payload(payload, "application_ids", "application_id")
     if job.application_id:
@@ -457,7 +481,9 @@ def resolve_remediation_validation_targets(
 
     actions: list[RemediationAction] = []
     if action_ids:
-        actions = list(db.scalars(select(RemediationAction).where(RemediationAction.id.in_(action_ids))))
+        actions = list(
+            db.scalars(select(RemediationAction).where(RemediationAction.id.in_(action_ids)))
+        )
         if len(actions) != len(set(action_ids)):
             found_ids = {action.id for action in actions}
             missing_ids = [str(action_id) for action_id in action_ids if action_id not in found_ids]
@@ -466,10 +492,16 @@ def resolve_remediation_validation_targets(
 
     applications_by_id: dict[UUID, Application] = {}
     if application_ids:
-        applications = list(db.scalars(select(Application).where(Application.id.in_(application_ids))))
+        applications = list(
+            db.scalars(select(Application).where(Application.id.in_(application_ids)))
+        )
         if len(applications) != len(set(application_ids)):
             found_ids = {application.id for application in applications}
-            missing_ids = [str(application_id) for application_id in application_ids if application_id not in found_ids]
+            missing_ids = [
+                str(application_id)
+                for application_id in application_ids
+                if application_id not in found_ids
+            ]
             raise RuntimeError(f"application not found: {', '.join(missing_ids)}")
         applications_by_id.update({application.id: application for application in applications})
 
@@ -477,7 +509,9 @@ def resolve_remediation_validation_targets(
         findings = list(db.scalars(select(Finding).where(Finding.id.in_(finding_ids))))
         if len(findings) != len(set(finding_ids)):
             found_ids = {finding.id for finding in findings}
-            missing_ids = [str(finding_id) for finding_id in finding_ids if finding_id not in found_ids]
+            missing_ids = [
+                str(finding_id) for finding_id in finding_ids if finding_id not in found_ids
+            ]
             raise RuntimeError(f"finding not found: {', '.join(missing_ids)}")
         for finding in findings:
             application = db.get(Application, finding.application_id)
@@ -485,7 +519,9 @@ def resolve_remediation_validation_targets(
                 applications_by_id[application.id] = application
 
     if not applications_by_id:
-        raise RuntimeError("remediation validation job requires remediation_action_ids, finding_ids, or application_id")
+        raise RuntimeError(
+            "remediation validation job requires remediation_action_ids, finding_ids, or application_id"
+        )
     return list(applications_by_id.values()), actions
 
 
@@ -650,7 +686,9 @@ def handle_job(db: Session, job: Job) -> None:
     elif job.job_type == JobType.repository_sync:
         run_repository_sync_job(db, job)
     else:
-        logger.info("job type placeholder job_type=%s payload=%s", job.job_type, json.dumps(job.payload))
+        logger.info(
+            "job type placeholder job_type=%s payload=%s", job.job_type, json.dumps(job.payload)
+        )
 
 
 def work_once(worker_id: str) -> bool:

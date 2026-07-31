@@ -102,19 +102,23 @@ def list_github_issue_actions(
         stmt = stmt.where(models.Finding.severity == severity)
     if finding_id:
         stmt = stmt.where(models.RemediationAction.finding_id == finding_id)
-    stmt = stmt.order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()).limit(
-        min(limit, 100)
-    )
+    stmt = stmt.order_by(
+        models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()
+    ).limit(min(limit, 100))
 
     items = []
     for action, finding, application, vulnerability, component in db.execute(stmt):
         metadata = action.metadata_json or {}
         items.append(
             schemas.GitHubIssueActionOut(
-                **_remediation_action_payload(action, finding, application, vulnerability, component),
+                **_remediation_action_payload(
+                    action, finding, application, vulnerability, component
+                ),
                 error=metadata.get("error"),
                 close_error=metadata.get("close_error"),
-                github_issue_url=metadata.get("github_issue_url") or metadata.get("html_url") or action.url,
+                github_issue_url=metadata.get("github_issue_url")
+                or metadata.get("html_url")
+                or action.url,
             ).model_dump(mode="json")
         )
     return schemas.CursorPage(items=items, next_cursor=None)
@@ -134,9 +138,9 @@ def list_remediation_validations(
         stmt = stmt.where(models.RemediationAction.action_type == action_type)
     if severity:
         stmt = stmt.where(models.Finding.severity == severity)
-    stmt = stmt.order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()).limit(
-        min(limit, 100)
-    )
+    stmt = stmt.order_by(
+        models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()
+    ).limit(min(limit, 100))
 
     items = []
     for action, finding, application, vulnerability, component in db.execute(stmt):
@@ -146,10 +150,14 @@ def list_remediation_validations(
             continue
         items.append(
             schemas.RemediationValidationOut(
-                **_remediation_action_payload(action, finding, application, vulnerability, component),
+                **_remediation_action_payload(
+                    action, finding, application, vulnerability, component
+                ),
                 validation_status=status_value,
                 validation_scan_id=_optional_uuid(metadata.get("validation_scan_id")),
-                validation_scan_status=_optional_scan_status(metadata.get("validation_scan_status")),
+                validation_scan_status=_optional_scan_status(
+                    metadata.get("validation_scan_status")
+                ),
                 validation_error=metadata.get("validation_error"),
             ).model_dump(mode="json")
         )
@@ -227,7 +235,9 @@ def list_remediation_prs(
         stmt = stmt.where(models.RemediationAction.status == status)
     if severity:
         stmt = stmt.where(models.Finding.severity == severity)
-    stmt = stmt.order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc())
+    stmt = stmt.order_by(
+        models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()
+    )
     items = []
     for action, finding, application, vulnerability, component in db.execute(stmt):
         if not _has_pr_signal(action):
@@ -587,13 +597,36 @@ def pr_staleness_items(db: Session) -> list[dict]:
         ci_passed = _metadata_bool_or_none(metadata.get("ci_passed"))
         age_days = max((now.replace(tzinfo=None) - action.updated_at.replace(tzinfo=None)).days, 0)
         repository = db.get(models.Repository, application.repository_id)
-        context = (action, finding, application, repository, vulnerability, component, ci_passed, age_days)
+        context = (
+            action,
+            finding,
+            application,
+            repository,
+            vulnerability,
+            component,
+            ci_passed,
+            age_days,
+        )
         if action.status in _BACKLOG_OPEN_STATUSES and _before(action.updated_at, stale_cutoff):
-            items.append(_pr_staleness_item("stale_pr", *context, detail="PR action has not been updated in 7 days"))
+            items.append(
+                _pr_staleness_item(
+                    "stale_pr", *context, detail="PR action has not been updated in 7 days"
+                )
+            )
         if ci_passed is not True:
-            items.append(_pr_staleness_item("ci_incomplete", *context, detail="PR action is missing successful CI evidence"))
+            items.append(
+                _pr_staleness_item(
+                    "ci_incomplete", *context, detail="PR action is missing successful CI evidence"
+                )
+            )
         if action.status in {"created", "open", "in_review", "pending_review"}:
-            items.append(_pr_staleness_item("review_or_merge_waiting", *context, detail="PR action is waiting for review or merge"))
+            items.append(
+                _pr_staleness_item(
+                    "review_or_merge_waiting",
+                    *context,
+                    detail="PR action is waiting for review or merge",
+                )
+            )
     return items
 
 
@@ -622,7 +655,12 @@ def dependency_update_items(db: Session) -> list[dict]:
                 repository_name=repository.name,
                 branch=action.branch,
                 url=_pr_url(action),
-                detail=str(metadata.get("update_kind") or metadata.get("dependency") or action.fixed_version or action.action_type),
+                detail=str(
+                    metadata.get("update_kind")
+                    or metadata.get("dependency")
+                    or action.fixed_version
+                    or action.action_type
+                ),
             ).model_dump(mode="json")
         )
     return items
@@ -641,15 +679,69 @@ def provider_sync_evidence_items(db: Session) -> list[dict]:
         metadata = action.metadata_json or {}
         url = _pr_url(action)
         if not action.provider_id:
-            items.append(_provider_sync_item("missing_provider_id", action, finding, application, repository, "Remediation action has no external provider id"))
+            items.append(
+                _provider_sync_item(
+                    "missing_provider_id",
+                    action,
+                    finding,
+                    application,
+                    repository,
+                    "Remediation action has no external provider id",
+                )
+            )
         if not url:
-            items.append(_provider_sync_item("missing_url", action, finding, application, repository, "Remediation action has no external URL"))
-        if not any(key in metadata for key in ["provider_status", "github_state", "state", "last_synced_at", "synced_at"]):
-            items.append(_provider_sync_item("missing_status_sync", action, finding, application, repository, "Remediation action has no provider status sync metadata"))
-        if action.status in {"closed", "resolved", "merged"} and not any(key in metadata for key in ["github_issue_closed_at", "closed_at", "merged_at"]):
-            items.append(_provider_sync_item("missing_close_evidence", action, finding, application, repository, "Closed or merged action has no close evidence timestamp"))
-        if _has_pr_signal(action) and "ci_passed" not in metadata and "workflow_conclusion" not in metadata:
-            items.append(_provider_sync_item("missing_ci_metadata", action, finding, application, repository, "PR action has no CI metadata"))
+            items.append(
+                _provider_sync_item(
+                    "missing_url",
+                    action,
+                    finding,
+                    application,
+                    repository,
+                    "Remediation action has no external URL",
+                )
+            )
+        if not any(
+            key in metadata
+            for key in ["provider_status", "github_state", "state", "last_synced_at", "synced_at"]
+        ):
+            items.append(
+                _provider_sync_item(
+                    "missing_status_sync",
+                    action,
+                    finding,
+                    application,
+                    repository,
+                    "Remediation action has no provider status sync metadata",
+                )
+            )
+        if action.status in {"closed", "resolved", "merged"} and not any(
+            key in metadata for key in ["github_issue_closed_at", "closed_at", "merged_at"]
+        ):
+            items.append(
+                _provider_sync_item(
+                    "missing_close_evidence",
+                    action,
+                    finding,
+                    application,
+                    repository,
+                    "Closed or merged action has no close evidence timestamp",
+                )
+            )
+        if (
+            _has_pr_signal(action)
+            and "ci_passed" not in metadata
+            and "workflow_conclusion" not in metadata
+        ):
+            items.append(
+                _provider_sync_item(
+                    "missing_ci_metadata",
+                    action,
+                    finding,
+                    application,
+                    repository,
+                    "PR action has no CI metadata",
+                )
+            )
     return items
 
 
@@ -686,7 +778,9 @@ def dependency_update_coverage_items(db: Session) -> list[dict]:
         metadata = action.metadata_json or {}
         validation_scan = _scan_from_metadata(db, metadata)
         validation_status = str(metadata.get("validation_status") or "")
-        detail = metadata.get("error") or metadata.get("validation_error") or metadata.get("ci_error")
+        detail = (
+            metadata.get("error") or metadata.get("validation_error") or metadata.get("ci_error")
+        )
         if action.status in {"failed", "close_failed"}:
             items.append(
                 _dependency_update_coverage_item(
@@ -735,12 +829,26 @@ def dependency_update_coverage_items(db: Session) -> list[dict]:
 def remediation_priority_queue_items(db: Session) -> list[dict]:
     now = datetime.now(timezone.utc)
     stmt = (
-        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
         .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
-        .where(models.Finding.status.in_([models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress]))
+        .where(
+            models.Finding.status.in_(
+                [
+                    models.FindingStatus.open,
+                    models.FindingStatus.triaged,
+                    models.FindingStatus.in_progress,
+                ]
+            )
+        )
     )
     items = []
     for finding, application, repository, component, vulnerability in db.execute(stmt):
@@ -765,12 +873,16 @@ def remediation_priority_queue_items(db: Session) -> list[dict]:
                 production=application.production,
                 internet_exposed=application.internet_exposed,
                 has_kev=_vulnerability_has(vulnerability, {"kev", "cisa"}),
-                has_exploit=_vulnerability_has(vulnerability, {"exploit", "poc", "proof-of-concept"}),
+                has_exploit=_vulnerability_has(
+                    vulnerability, {"exploit", "poc", "proof-of-concept"}
+                ),
                 fixed_version=finding.fixed_version,
                 created_at=finding.created_at,
             ).model_dump(mode="json")
         )
-    return sorted(items, key=lambda item: (-item["priority_rank"], item["created_at"], item["finding_id"]))
+    return sorted(
+        items, key=lambda item: (-item["priority_rank"], item["created_at"], item["finding_id"])
+    )
 
 
 def remediation_backlog_items(db: Session) -> list[dict]:
@@ -801,9 +913,13 @@ def remediation_backlog_items(db: Session) -> list[dict]:
                 repository_id=repository.id,
                 repository_owner=repository.owner,
                 repository_name=repository.name,
-                age_days=max((now.replace(tzinfo=None) - action.updated_at.replace(tzinfo=None)).days, 0),
+                age_days=max(
+                    (now.replace(tzinfo=None) - action.updated_at.replace(tzinfo=None)).days, 0
+                ),
                 reason=reason,
-                detail=metadata.get("error") or metadata.get("close_error") or metadata.get("validation_error"),
+                detail=metadata.get("error")
+                or metadata.get("close_error")
+                or metadata.get("validation_error"),
                 updated_at=action.updated_at,
             ).model_dump(mode="json")
         )
@@ -836,9 +952,9 @@ def remediation_rescan_items(db: Session) -> list[dict]:
                 repository_name=repository.name,
                 validation_status=validation_status,
                 validation_scan_id=validation_scan.id if validation_scan else None,
-                validation_scan_status=validation_scan.status if validation_scan else _optional_scan_status(
-                    metadata.get("validation_scan_status")
-                ),
+                validation_scan_status=validation_scan.status
+                if validation_scan
+                else _optional_scan_status(metadata.get("validation_scan_status")),
                 latest_rescan_id=latest_rescan.id if latest_rescan else None,
                 latest_rescan_status=latest_rescan.status if latest_rescan else None,
                 latest_rescan_created_at=latest_rescan.created_at if latest_rescan else None,
@@ -886,7 +1002,9 @@ def fixable_gap_items(db: Session) -> list[dict]:
     stale_cutoff = now - timedelta(days=7)
     action_by_finding = _latest_issue_or_pr_action_by_finding(db)
     items = []
-    for finding, application, repository, component, vulnerability in _fixed_critical_high_findings(db):
+    for finding, application, repository, component, vulnerability in _fixed_critical_high_findings(
+        db
+    ):
         action = action_by_finding.get(finding.id)
         if action is None:
             items.append(
@@ -904,7 +1022,9 @@ def fixable_gap_items(db: Session) -> list[dict]:
             )
             continue
         metadata = action.metadata_json or {}
-        detail = metadata.get("error") or metadata.get("close_error") or metadata.get("validation_error")
+        detail = (
+            metadata.get("error") or metadata.get("close_error") or metadata.get("validation_error")
+        )
         if action.status in {"failed", "close_failed"}:
             items.append(
                 _fixable_gap_item(
@@ -978,7 +1098,13 @@ def issue_creation_slo_items(db: Session) -> list[dict]:
     notification_evidence = _sent_notification_evidence_by_finding(db)
     action_evidence = _first_issue_or_pr_action_by_finding(db)
     stmt = (
-        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
@@ -991,7 +1117,9 @@ def issue_creation_slo_items(db: Session) -> list[dict]:
     )
     items = []
     for finding, application, repository, component, vulnerability in db.execute(stmt):
-        deadline = finding.created_at + timedelta(hours=1 if finding.severity == models.Severity.critical else 24)
+        deadline = finding.created_at + timedelta(
+            hours=1 if finding.severity == models.Severity.critical else 24
+        )
         notification = notification_evidence.get(finding.id)
         action = action_evidence.get(finding.id)
         evidence_candidates = []
@@ -999,7 +1127,9 @@ def issue_creation_slo_items(db: Session) -> list[dict]:
             evidence_candidates.append(("notification", notification.sent_at, None))
         if action:
             evidence_candidates.append(("issue_or_pr", action.created_at, action))
-        evidence = min(evidence_candidates, key=lambda item: item[1]) if evidence_candidates else None
+        evidence = (
+            min(evidence_candidates, key=lambda item: item[1]) if evidence_candidates else None
+        )
         evidence_type = evidence[0] if evidence else None
         evidence_at = evidence[1] if evidence else None
         evidence_action = evidence[2] if evidence else None
@@ -1022,7 +1152,9 @@ def issue_creation_slo_items(db: Session) -> list[dict]:
                 evidence_type=evidence_type,
                 action_id=evidence_action.id if evidence_action else None,
                 breached=breached,
-                detail="Issue creation SLO is satisfied" if not breached else "Notification, Issue, or PR evidence is missing or late",
+                detail="Issue creation SLO is satisfied"
+                if not breached
+                else "Notification, Issue, or PR evidence is missing or late",
             ).model_dump(mode="json")
         )
     return items
@@ -1031,7 +1163,13 @@ def issue_creation_slo_items(db: Session) -> list[dict]:
 def auto_resolution_evidence_items(db: Session) -> list[dict]:
     actions_by_finding = _actions_by_finding(db)
     stmt = (
-        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
@@ -1043,10 +1181,23 @@ def auto_resolution_evidence_items(db: Session) -> list[dict]:
     for finding, application, repository, component, vulnerability in db.execute(stmt):
         actions = actions_by_finding.get(finding.id, [])
         successful_action = next((action for action in actions if _successful_action(action)), None)
-        validation_scan = next((_scan_from_metadata(db, action.metadata_json or {}) for action in actions if _scan_from_metadata(db, action.metadata_json or {})), None)
-        issue_action = next((action for action in actions if action.action_type == ACTION_TYPE_GITHUB_ISSUE), None)
+        validation_scan = next(
+            (
+                _scan_from_metadata(db, action.metadata_json or {})
+                for action in actions
+                if _scan_from_metadata(db, action.metadata_json or {})
+            ),
+            None,
+        )
+        issue_action = next(
+            (action for action in actions if action.action_type == ACTION_TYPE_GITHUB_ISSUE), None
+        )
         close_state = _close_state(issue_action)
-        complete = successful_action is not None and validation_scan is not None and close_state == "closed"
+        complete = (
+            successful_action is not None
+            and validation_scan is not None
+            and close_state == "closed"
+        )
         items.append(
             schemas.AutoResolutionEvidenceOut(
                 finding_id=finding.id,
@@ -1065,7 +1216,9 @@ def auto_resolution_evidence_items(db: Session) -> list[dict]:
                 issue_action_id=issue_action.id if issue_action else None,
                 close_state=close_state,
                 complete=complete,
-                detail="Auto-resolution evidence is complete" if complete else "Resolved finding is missing action, validation, or closure evidence",
+                detail="Auto-resolution evidence is complete"
+                if complete
+                else "Resolved finding is missing action, validation, or closure evidence",
             ).model_dump(mode="json")
         )
     return items
@@ -1087,10 +1240,35 @@ def remediation_evidence_chain_items(db: Session) -> list[dict]:
         notification = notifications.get(finding.id)
         issue_or_pr = issue_or_pr_actions.get(finding.id)
         actions = actions_by_finding.get(finding.id, [])
-        validation_action = next((action for action in actions if _scan_from_metadata(db, action.metadata_json or {}) or (action.metadata_json or {}).get("validation_status")), None)
-        validation_scan = _scan_from_metadata(db, validation_action.metadata_json or {}) if validation_action else None
-        validation_status = str((validation_action.metadata_json or {}).get("validation_status")) if validation_action and (validation_action.metadata_json or {}).get("validation_status") else None
-        closure_action = next((action for action in actions if action.status == "closed" or (action.metadata_json or {}).get("github_issue_closed_at")), None)
+        validation_action = next(
+            (
+                action
+                for action in actions
+                if _scan_from_metadata(db, action.metadata_json or {})
+                or (action.metadata_json or {}).get("validation_status")
+            ),
+            None,
+        )
+        validation_scan = (
+            _scan_from_metadata(db, validation_action.metadata_json or {})
+            if validation_action
+            else None
+        )
+        validation_status = (
+            str((validation_action.metadata_json or {}).get("validation_status"))
+            if validation_action
+            and (validation_action.metadata_json or {}).get("validation_status")
+            else None
+        )
+        closure_action = next(
+            (
+                action
+                for action in actions
+                if action.status == "closed"
+                or (action.metadata_json or {}).get("github_issue_closed_at")
+            ),
+            None,
+        )
         missing = []
         if notification is None:
             missing.append("notification")
@@ -1100,7 +1278,11 @@ def remediation_evidence_chain_items(db: Session) -> list[dict]:
             missing.append("validation")
         if finding.status == models.FindingStatus.resolved and closure_action is None:
             missing.append("closure")
-        closure_status = "closed" if closure_action else ("not_required" if finding.status != models.FindingStatus.resolved else "missing")
+        closure_status = (
+            "closed"
+            if closure_action
+            else ("not_required" if finding.status != models.FindingStatus.resolved else "missing")
+        )
         items.append(
             schemas.RemediationEvidenceChainOut(
                 finding_id=finding.id,
@@ -1118,7 +1300,9 @@ def remediation_evidence_chain_items(db: Session) -> list[dict]:
                 validation_scan_status=validation_scan.status if validation_scan else None,
                 closure_status=closure_status,
                 missing_stages=missing,
-                detail="Remediation evidence chain is complete" if not missing else f"Missing {', '.join(missing)}",
+                detail="Remediation evidence chain is complete"
+                if not missing
+                else f"Missing {', '.join(missing)}",
             ).model_dump(mode="json")
         )
     return items
@@ -1127,7 +1311,9 @@ def remediation_evidence_chain_items(db: Session) -> list[dict]:
 def resolution_verification_items(db: Session) -> list[dict]:
     items = []
     issue_actions = _issue_actions_by_finding(db)
-    for action, finding, application, vulnerability, component in db.execute(_remediation_action_context_stmt()):
+    for action, finding, application, vulnerability, component in db.execute(
+        _remediation_action_context_stmt()
+    ):
         metadata = action.metadata_json or {}
         validation_status = str(metadata.get("validation_status") or "pending")
         validation_scan = _scan_from_metadata(db, metadata)
@@ -1149,7 +1335,10 @@ def resolution_verification_items(db: Session) -> list[dict]:
                     close_state,
                 )
             )
-        if validation_status in {"failed", "error"} or (validation_scan and validation_scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out}):
+        if validation_status in {"failed", "error"} or (
+            validation_scan
+            and validation_scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out}
+        ):
             items.append(
                 _resolution_verification_item(
                     "failed_validation",
@@ -1190,7 +1379,10 @@ def remediation_aging_items(db: Session) -> list[dict]:
         models.RemediationAction.id.asc(),
     )
     for action, finding, application, vulnerability, component in db.execute(stmt):
-        if action.status not in _BACKLOG_OPEN_STATUSES and action.status not in {"failed", "close_failed"}:
+        if action.status not in _BACKLOG_OPEN_STATUSES and action.status not in {
+            "failed",
+            "close_failed",
+        }:
             continue
         age_days = max((now.replace(tzinfo=None) - action.updated_at.replace(tzinfo=None)).days, 0)
         bucket = _age_bucket(age_days)
@@ -1344,10 +1536,20 @@ def _fixed_findings(db: Session):
         .join(models.Component, models.Finding.component_id == models.Component.id)
         .join(models.Vulnerability, models.Finding.vulnerability_id == models.Vulnerability.id)
         .where(
-            models.Finding.status.in_([models.FindingStatus.open, models.FindingStatus.triaged, models.FindingStatus.in_progress]),
+            models.Finding.status.in_(
+                [
+                    models.FindingStatus.open,
+                    models.FindingStatus.triaged,
+                    models.FindingStatus.in_progress,
+                ]
+            ),
             models.Finding.fixed_version.is_not(None),
         )
-        .order_by(models.Finding.risk_score.desc(), models.Finding.created_at.asc(), models.Finding.id.asc())
+        .order_by(
+            models.Finding.risk_score.desc(),
+            models.Finding.created_at.asc(),
+            models.Finding.id.asc(),
+        )
     )
 
 
@@ -1363,14 +1565,19 @@ def _latest_issue_or_pr_action_by_finding(db: Session) -> dict[UUID, models.Reme
     return actions
 
 
-def _latest_dependency_update_action_by_finding(db: Session) -> dict[UUID, models.RemediationAction]:
+def _latest_dependency_update_action_by_finding(
+    db: Session,
+) -> dict[UUID, models.RemediationAction]:
     actions = {}
     stmt = select(models.RemediationAction).order_by(
         models.RemediationAction.created_at.desc(),
         models.RemediationAction.id.desc(),
     )
     for action in db.scalars(stmt):
-        if _has_dependency_update_signal(action) or action.action_type in {ACTION_TYPE_AI_FIX, ACTION_TYPE_GITHUB_ISSUE}:
+        if _has_dependency_update_signal(action) or action.action_type in {
+            ACTION_TYPE_AI_FIX,
+            ACTION_TYPE_GITHUB_ISSUE,
+        }:
             actions.setdefault(action.finding_id, action)
     return actions
 
@@ -1470,7 +1677,9 @@ def _sent_notification_evidence_by_finding(db: Session) -> dict[UUID, models.Not
     stmt = (
         select(models.Notification)
         .where(models.Notification.status == "sent")
-        .order_by(models.Notification.sent_at.asc().nullslast(), models.Notification.created_at.asc())
+        .order_by(
+            models.Notification.sent_at.asc().nullslast(), models.Notification.created_at.asc()
+        )
     )
     for notification in db.scalars(stmt):
         finding_id = _optional_uuid((notification.metadata_json or {}).get("finding_id"))
@@ -1620,7 +1829,9 @@ def _suppression_reason(action: models.RemediationAction) -> str | None:
 
 def _dependency_update_source(action: models.RemediationAction) -> str:
     metadata = action.metadata_json or {}
-    searchable = f"{action.provider or ''} {action.branch or ''} {action.url or ''} {metadata}".lower()
+    searchable = (
+        f"{action.provider or ''} {action.branch or ''} {action.url or ''} {metadata}".lower()
+    )
     if "renovate" in searchable:
         return "renovate"
     if "dependabot" in searchable:
@@ -1663,7 +1874,9 @@ def _dependency_update_coverage_item(
         action_id=action.id if action else None,
         action_type=action.action_type if action else None,
         action_status=action.status if action else None,
-        validation_status=str(metadata.get("validation_status")) if metadata.get("validation_status") else None,
+        validation_status=str(metadata.get("validation_status"))
+        if metadata.get("validation_status")
+        else None,
         validation_scan_id=_optional_uuid(metadata.get("validation_scan_id")) if metadata else None,
         age_days=max((comparable_now - reference_time).days, 0),
         detail=detail,
@@ -1708,13 +1921,18 @@ def _priority_rank(
 
 
 def _vulnerability_has(vulnerability: models.Vulnerability, tokens: set[str]) -> bool:
-    text = _flatten_evidence([vulnerability.title, vulnerability.description, vulnerability.references or []])
+    text = _flatten_evidence(
+        [vulnerability.title, vulnerability.description, vulnerability.references or []]
+    )
     return any(token in text for token in tokens)
 
 
 def _flatten_evidence(value) -> str:
     if isinstance(value, dict):
-        return " ".join([str(key).lower() for key in value] + [_flatten_evidence(item) for item in value.values()])
+        return " ".join(
+            [str(key).lower() for key in value]
+            + [_flatten_evidence(item) for item in value.values()]
+        )
     if isinstance(value, list | tuple | set):
         return " ".join(_flatten_evidence(item) for item in value)
     return str(value or "").lower()
@@ -1748,12 +1966,20 @@ def _ci_failure_detail(action: models.RemediationAction) -> str | None:
 
 def _successful_action(action: models.RemediationAction) -> bool:
     metadata = action.metadata_json or {}
-    return action.status in {"succeeded", "merged", "closed"} or metadata.get("validation_status") == "succeeded"
+    return (
+        action.status in {"succeeded", "merged", "closed"}
+        or metadata.get("validation_status") == "succeeded"
+    )
 
 
 def _pr_url(action: models.RemediationAction) -> str | None:
     metadata = action.metadata_json or {}
-    return metadata.get("pull_request_url") or metadata.get("github_issue_url") or metadata.get("html_url") or action.url
+    return (
+        metadata.get("pull_request_url")
+        or metadata.get("github_issue_url")
+        or metadata.get("html_url")
+        or action.url
+    )
 
 
 def _metadata_bool_or_none(value: object) -> bool | None:
@@ -1799,7 +2025,9 @@ def _scan_from_metadata(db: Session, metadata: dict) -> models.Scan | None:
     return db.get(models.Scan, scan_id) if scan_id else None
 
 
-def _latest_scan_after(db: Session, application_id: UUID, created_at: datetime) -> models.Scan | None:
+def _latest_scan_after(
+    db: Session, application_id: UUID, created_at: datetime
+) -> models.Scan | None:
     scans = db.scalars(
         select(models.Scan)
         .where(models.Scan.application_id == application_id)

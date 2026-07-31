@@ -44,7 +44,10 @@ def list_scans(
         last = rows[limit - 1]
         next_cursor = encode_cursor(last.created_at, last.id)
         rows = rows[:limit]
-    return schemas.CursorPage(items=[schemas.ScanOut.model_validate(row).model_dump(mode="json") for row in rows], next_cursor=next_cursor)
+    return schemas.CursorPage(
+        items=[schemas.ScanOut.model_validate(row).model_dump(mode="json") for row in rows],
+        next_cursor=next_cursor,
+    )
 
 
 @router.get("/evidence-quality", response_model=schemas.CursorPage)
@@ -179,7 +182,9 @@ def daily_scan_slo_breach_count(db: Session) -> int:
 
 
 def daily_scan_execution_gap_count(db: Session) -> int:
-    return sum(1 for item in daily_scan_execution_evidence_items(db) if not item["evidence_present"])
+    return sum(
+        1 for item in daily_scan_execution_evidence_items(db) if not item["evidence_present"]
+    )
 
 
 def scan_freshness_gap_count(db: Session) -> int:
@@ -220,15 +225,65 @@ def scan_result_consistency_items(db: Session) -> list[dict]:
         summary = scan.result_summary or {}
         artifacts = _scan_artifact_payloads(summary)
         if scan.status == models.ScanStatus.succeeded and not summary:
-            items.append(_result_consistency_item("success_without_result", scan, application, repository, "Succeeded scan has no result summary"))
-        if scan.status == models.ScanStatus.succeeded and not artifacts and scan.id not in sbom_scan_ids and scan.id not in finding_scan_ids:
-            items.append(_result_consistency_item("success_without_artifact_or_finding", scan, application, repository, "Succeeded scan has no artifact, SBOM, or finding evidence"))
-        if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out} and not scan.error_message:
-            items.append(_result_consistency_item("failure_without_error", scan, application, repository, "Failed scan has no error message"))
-        if scan.status == models.ScanStatus.partially_succeeded and not summary.get("scanner_failures"):
-            items.append(_result_consistency_item("partial_without_scanner_failures", scan, application, repository, "Partially succeeded scan has no scanner_failures evidence"))
+            items.append(
+                _result_consistency_item(
+                    "success_without_result",
+                    scan,
+                    application,
+                    repository,
+                    "Succeeded scan has no result summary",
+                )
+            )
+        if (
+            scan.status == models.ScanStatus.succeeded
+            and not artifacts
+            and scan.id not in sbom_scan_ids
+            and scan.id not in finding_scan_ids
+        ):
+            items.append(
+                _result_consistency_item(
+                    "success_without_artifact_or_finding",
+                    scan,
+                    application,
+                    repository,
+                    "Succeeded scan has no artifact, SBOM, or finding evidence",
+                )
+            )
+        if (
+            scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out}
+            and not scan.error_message
+        ):
+            items.append(
+                _result_consistency_item(
+                    "failure_without_error",
+                    scan,
+                    application,
+                    repository,
+                    "Failed scan has no error message",
+                )
+            )
+        if scan.status == models.ScanStatus.partially_succeeded and not summary.get(
+            "scanner_failures"
+        ):
+            items.append(
+                _result_consistency_item(
+                    "partial_without_scanner_failures",
+                    scan,
+                    application,
+                    repository,
+                    "Partially succeeded scan has no scanner_failures evidence",
+                )
+            )
         if scan.id in sbom_scan_ids and scan.status != models.ScanStatus.succeeded:
-            items.append(_result_consistency_item("sbom_without_scan_success", scan, application, repository, "SBOM is attached to a scan that did not succeed"))
+            items.append(
+                _result_consistency_item(
+                    "sbom_without_scan_success",
+                    scan,
+                    application,
+                    repository,
+                    "SBOM is attached to a scan that did not succeed",
+                )
+            )
     return items
 
 
@@ -242,11 +297,38 @@ def scan_format_compliance_items(db: Session) -> list[dict]:
     items = []
     for scan, application, repository in db.execute(stmt):
         if not scan.result_summary:
-            items.append(_format_item("missing_result_summary", scan, application, repository, None, "Scan has no result summary"))
+            items.append(
+                _format_item(
+                    "missing_result_summary",
+                    scan,
+                    application,
+                    repository,
+                    None,
+                    "Scan has no result summary",
+                )
+            )
         if scan.tool and not scan.tool_version:
-            items.append(_format_item("missing_tool_version", scan, application, repository, None, "Scan has tool but no tool version"))
+            items.append(
+                _format_item(
+                    "missing_tool_version",
+                    scan,
+                    application,
+                    repository,
+                    None,
+                    "Scan has tool but no tool version",
+                )
+            )
         if _scanner_failures_shape_invalid(scan.result_summary):
-            items.append(_format_item("scanner_failure_shape", scan, application, repository, None, "scanner_failures is not a list/dict shape"))
+            items.append(
+                _format_item(
+                    "scanner_failure_shape",
+                    scan,
+                    application,
+                    repository,
+                    None,
+                    "scanner_failures is not a list/dict shape",
+                )
+            )
         for artifact_type, artifact in _scan_artifact_payloads(scan.result_summary):
             if not _artifact_format_ok(artifact_type, artifact):
                 items.append(
@@ -300,7 +382,11 @@ def raw_scan_artifact_items(db: Session) -> list[dict]:
             elif not encrypted:
                 gap = "missing_encryption_metadata"
                 detail = "Raw scan artifact has no encryption metadata"
-            items.append(_raw_artifact_item(gap, scan, application, repository, current_type, artifact, detail))
+            items.append(
+                _raw_artifact_item(
+                    gap, scan, application, repository, current_type, artifact, detail
+                )
+            )
     return items
 
 
@@ -367,14 +453,16 @@ def _artifact_format_ok(artifact_type: str | None, artifact: dict) -> bool:
     storage_key = str(artifact.get("storage_key") or artifact.get("path") or "").lower()
     declared = str(artifact.get("format") or "").lower()
     text = f"{artifact_type} {storage_key} {declared}".lower()
-    if any(token in artifact_type.lower() for token in ["source_sbom", "artifact_sbom", "container_sbom", "sbom"]):
+    if any(
+        token in artifact_type.lower()
+        for token in ["source_sbom", "artifact_sbom", "container_sbom", "sbom"]
+    ):
         return "cyclonedx" in text or "cdx" in text or storage_key.endswith(".json")
     if any(token in artifact_type.lower() for token in ["semgrep", "gitleaks", "sarif"]):
         return "sarif" in text or storage_key.endswith(".sarif")
     if any(token in artifact_type.lower() for token in ["osv", "trivy", "grype"]):
         return "json" in text or storage_key.endswith(".json")
     return bool(storage_key)
-
 
 
 def daily_scan_slo_items(db: Session) -> list[dict]:
@@ -384,7 +472,11 @@ def daily_scan_slo_items(db: Session) -> list[dict]:
             select(models.Application, models.Repository)
             .join(models.Repository, models.Application.repository_id == models.Repository.id)
             .where(models.Application.lifecycle != models.Lifecycle.archived)
-            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+            .order_by(
+                models.Repository.owner.asc(),
+                models.Repository.name.asc(),
+                models.Application.name.asc(),
+            )
         )
     )
     application_ids = [application.id for application, _ in rows]
@@ -394,7 +486,9 @@ def daily_scan_slo_items(db: Session) -> list[dict]:
     for application, repository in rows:
         latest_scan = latest_scans.get(application.id)
         scheduled_scan = latest_scheduled_scans.get(application.id)
-        manual_only = latest_scan is not None and latest_scan.trigger_type == models.TriggerType.manual
+        manual_only = (
+            latest_scan is not None and latest_scan.trigger_type == models.TriggerType.manual
+        )
         breached = (
             scheduled_scan is None
             or scheduled_scan.status != models.ScanStatus.succeeded
@@ -417,7 +511,9 @@ def daily_scan_slo_items(db: Session) -> list[dict]:
                 repository_name=repository.name,
                 latest_scheduled_scan_id=scheduled_scan.id if scheduled_scan else None,
                 latest_scheduled_scan_status=scheduled_scan.status if scheduled_scan else None,
-                latest_scheduled_scan_created_at=scheduled_scan.created_at if scheduled_scan else None,
+                latest_scheduled_scan_created_at=scheduled_scan.created_at
+                if scheduled_scan
+                else None,
                 latest_scan_id=latest_scan.id if latest_scan else None,
                 latest_scan_status=latest_scan.status if latest_scan else None,
                 latest_scan_trigger_type=latest_scan.trigger_type if latest_scan else None,
@@ -436,7 +532,11 @@ def daily_scan_execution_evidence_items(db: Session) -> list[dict]:
             select(models.Application, models.Repository)
             .join(models.Repository, models.Application.repository_id == models.Repository.id)
             .where(models.Application.lifecycle != models.Lifecycle.archived)
-            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+            .order_by(
+                models.Repository.owner.asc(),
+                models.Repository.name.asc(),
+                models.Application.name.asc(),
+            )
         )
     )
     application_ids = [application.id for application, _ in rows]
@@ -446,7 +546,9 @@ def daily_scan_execution_evidence_items(db: Session) -> list[dict]:
     for application, repository in rows:
         latest_scan = latest_scans.get(application.id)
         recent_job = recent_jobs.get(application.id)
-        recent_scan = latest_scan is not None and latest_scan.created_at >= _matching_datetime(cutoff, latest_scan.created_at)
+        recent_scan = latest_scan is not None and latest_scan.created_at >= _matching_datetime(
+            cutoff, latest_scan.created_at
+        )
         successful_recent_scan = recent_scan and latest_scan.status == models.ScanStatus.succeeded
         evidence_present = successful_recent_scan and recent_job is not None
         if latest_scan is None:
@@ -464,7 +566,17 @@ def daily_scan_execution_evidence_items(db: Session) -> list[dict]:
         else:
             issue_type = "complete"
             detail = "Daily scan execution evidence is complete"
-        items.append(_daily_execution_item(issue_type, application, repository, latest_scan, recent_job, evidence_present, detail))
+        items.append(
+            _daily_execution_item(
+                issue_type,
+                application,
+                repository,
+                latest_scan,
+                recent_job,
+                evidence_present,
+                detail,
+            )
+        )
     return items
 
 
@@ -474,7 +586,11 @@ def scan_freshness_bucket_items(db: Session) -> list[dict]:
         db.execute(
             select(models.Application, models.Repository)
             .join(models.Repository, models.Application.repository_id == models.Repository.id)
-            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+            .order_by(
+                models.Repository.owner.asc(),
+                models.Repository.name.asc(),
+                models.Application.name.asc(),
+            )
         )
     )
     latest_scans = _latest_scans_by_application(db, [application.id for application, _ in rows])
@@ -483,7 +599,11 @@ def scan_freshness_bucket_items(db: Session) -> list[dict]:
         latest_scan = latest_scans.get(application.id)
         bucket, age_days = _freshness_bucket(latest_scan, now)
         gap = application.lifecycle != models.Lifecycle.archived and bucket in {"never", "gt_30d"}
-        detail = "Application has no scan record" if latest_scan is None else f"Latest scan is in freshness bucket {bucket}"
+        detail = (
+            "Application has no scan record"
+            if latest_scan is None
+            else f"Latest scan is in freshness bucket {bucket}"
+        )
         items.append(
             schemas.ScanFreshnessBucketOut(
                 bucket=bucket,
@@ -525,21 +645,79 @@ def scan_evidence_quality_items(db: Session) -> list[dict]:
     for scan, application, repository in db.execute(stmt):
         summary = scan.result_summary or {}
         if not scan.tool:
-            items.append(_scan_quality_item("missing_tool", scan, application, repository, "Scan has no tool name evidence"))
+            items.append(
+                _scan_quality_item(
+                    "missing_tool", scan, application, repository, "Scan has no tool name evidence"
+                )
+            )
         if not scan.tool_version:
-            items.append(_scan_quality_item("missing_tool_version", scan, application, repository, "Scan has no tool version evidence"))
+            items.append(
+                _scan_quality_item(
+                    "missing_tool_version",
+                    scan,
+                    application,
+                    repository,
+                    "Scan has no tool version evidence",
+                )
+            )
         if not scan.commit_sha:
-            items.append(_scan_quality_item("missing_commit_sha", scan, application, repository, "Scan has no commit SHA evidence"))
+            items.append(
+                _scan_quality_item(
+                    "missing_commit_sha",
+                    scan,
+                    application,
+                    repository,
+                    "Scan has no commit SHA evidence",
+                )
+            )
         if not summary:
-            items.append(_scan_quality_item("empty_result_summary", scan, application, repository, "Scan result summary is empty"))
+            items.append(
+                _scan_quality_item(
+                    "empty_result_summary",
+                    scan,
+                    application,
+                    repository,
+                    "Scan result summary is empty",
+                )
+            )
         artifacts = summary.get("artifacts") if isinstance(summary, dict) else None
         source_sbom = artifacts.get("source_sbom") if isinstance(artifacts, dict) else None
-        if scan.status == models.ScanStatus.succeeded and not (isinstance(source_sbom, dict) and source_sbom.get("storage_key")):
-            items.append(_scan_quality_item("missing_source_sbom_artifact", scan, application, repository, "Succeeded scan has no source SBOM artifact evidence"))
-        if (summary.get("scanner_failures") if isinstance(summary, dict) else None):
-            items.append(_scan_quality_item("scanner_failures", scan, application, repository, "Scan result summary contains scanner failures"))
-        if scan.status == models.ScanStatus.succeeded and scan.id not in sbom_scan_ids and scan.id not in finding_scan_ids:
-            items.append(_scan_quality_item("empty_successful_scan", scan, application, repository, "Succeeded scan produced no SBOM or finding evidence"))
+        if scan.status == models.ScanStatus.succeeded and not (
+            isinstance(source_sbom, dict) and source_sbom.get("storage_key")
+        ):
+            items.append(
+                _scan_quality_item(
+                    "missing_source_sbom_artifact",
+                    scan,
+                    application,
+                    repository,
+                    "Succeeded scan has no source SBOM artifact evidence",
+                )
+            )
+        if summary.get("scanner_failures") if isinstance(summary, dict) else None:
+            items.append(
+                _scan_quality_item(
+                    "scanner_failures",
+                    scan,
+                    application,
+                    repository,
+                    "Scan result summary contains scanner failures",
+                )
+            )
+        if (
+            scan.status == models.ScanStatus.succeeded
+            and scan.id not in sbom_scan_ids
+            and scan.id not in finding_scan_ids
+        ):
+            items.append(
+                _scan_quality_item(
+                    "empty_successful_scan",
+                    scan,
+                    application,
+                    repository,
+                    "Succeeded scan produced no SBOM or finding evidence",
+                )
+            )
     return items
 
 
@@ -549,7 +727,9 @@ def _latest_scans_by_application(db: Session, application_ids: list) -> dict:
     scans = db.execute(
         select(models.Scan)
         .where(models.Scan.application_id.in_(application_ids))
-        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+        .order_by(
+            models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc()
+        )
     ).scalars()
     by_application = {}
     for scan in scans:
@@ -566,7 +746,9 @@ def _latest_scheduled_scans_by_application(db: Session, application_ids: list) -
             models.Scan.application_id.in_(application_ids),
             models.Scan.trigger_type == models.TriggerType.schedule,
         )
-        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+        .order_by(
+            models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc()
+        )
     ).scalars()
     by_application = {}
     for scan in scans:
@@ -578,14 +760,17 @@ def _recent_scan_jobs_by_application(db: Session, cutoff: datetime) -> dict:
     jobs = db.execute(
         select(models.Job)
         .where(models.Job.job_type == models.JobType.scan)
-        .order_by(models.Job.application_id.asc(), models.Job.created_at.desc(), models.Job.id.desc())
+        .order_by(
+            models.Job.application_id.asc(), models.Job.created_at.desc(), models.Job.id.desc()
+        )
     ).scalars()
     by_application = {}
     for job in jobs:
         if job.application_id is None:
             continue
         recent = job.created_at >= _matching_datetime(cutoff, job.created_at) or (
-            job.completed_at is not None and job.completed_at >= _matching_datetime(cutoff, job.completed_at)
+            job.completed_at is not None
+            and job.completed_at >= _matching_datetime(cutoff, job.completed_at)
         )
         if recent:
             by_application.setdefault(job.application_id, job)
@@ -662,7 +847,9 @@ def _daily_execution_item(
     ).model_dump(mode="json")
 
 
-def _scan_artifact_payloads(result_summary: dict[str, Any] | None) -> list[tuple[str, dict[str, Any]]]:
+def _scan_artifact_payloads(
+    result_summary: dict[str, Any] | None,
+) -> list[tuple[str, dict[str, Any]]]:
     raw = (result_summary or {}).get("artifacts") if isinstance(result_summary, dict) else None
     if isinstance(raw, dict):
         return [(str(key), value) for key, value in raw.items() if isinstance(value, dict)]
@@ -670,7 +857,12 @@ def _scan_artifact_payloads(result_summary: dict[str, Any] | None) -> list[tuple
         payloads = []
         for index, value in enumerate(raw):
             if isinstance(value, dict):
-                payloads.append((str(value.get("type") or value.get("artifact_type") or f"artifact_{index}"), value))
+                payloads.append(
+                    (
+                        str(value.get("type") or value.get("artifact_type") or f"artifact_{index}"),
+                        value,
+                    )
+                )
         return payloads
     return []
 
@@ -678,7 +870,9 @@ def _scan_artifact_payloads(result_summary: dict[str, Any] | None) -> list[tuple
 def _artifact_encrypted(artifact: dict[str, Any]) -> bool:
     if artifact.get("encrypted") or artifact.get("encryption") or artifact.get("kms_key_id"):
         return True
-    text = " ".join(str(artifact.get(key) or "").lower() for key in ("storage_key", "digest", "metadata"))
+    text = " ".join(
+        str(artifact.get(key) or "").lower() for key in ("storage_key", "digest", "metadata")
+    )
     return "encrypted" in text or "kms" in text
 
 

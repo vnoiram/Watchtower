@@ -1,2 +1,1 @@
 """Watchtower worker package."""
-

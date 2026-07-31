@@ -100,7 +100,9 @@ def normalize_osv_results(payload: dict) -> list[NormalizedFinding]:
                     severity=severity,
                     fixed_version=fixed,
                     title=vuln.get("summary"),
-                    references=tuple(ref.get("url") for ref in vuln.get("references", []) if ref.get("url")),
+                    references=tuple(
+                        ref.get("url") for ref in vuln.get("references", []) if ref.get("url")
+                    ),
                 )
             )
     return findings
@@ -120,7 +122,8 @@ def normalize_trivy_results(payload: dict) -> list[NormalizedFinding]:
                     package_name=name,
                     package_version=version,
                     ecosystem=ecosystem,
-                    purl=vuln.get("PkgIdentifier", {}).get("PURL") or normalize_purl(ecosystem, name, version),
+                    purl=vuln.get("PkgIdentifier", {}).get("PURL")
+                    or normalize_purl(ecosystem, name, version),
                     severity=normalize_severity(vuln.get("Severity")),
                     fixed_version=vuln.get("FixedVersion"),
                     title=vuln.get("Title"),
@@ -168,7 +171,9 @@ def normalize_gitleaks_results(payload: list | dict) -> list[dict]:
                 "severity": Severity.high.value,
                 "path": leak.get("File"),
                 "title": leak.get("Description") or leak.get("RuleID") or "secret detected",
-                "detail": f"{leak.get('File')}:{leak.get('StartLine')}" if leak.get("File") else None,
+                "detail": f"{leak.get('File')}:{leak.get('StartLine')}"
+                if leak.get("File")
+                else None,
                 "commit": leak.get("Commit"),
                 "fingerprint": leak.get("Fingerprint"),
             }
@@ -196,9 +201,12 @@ def normalize_semgrep_results(payload: dict) -> list[dict]:
                 "rule_id": result.get("check_id"),
                 "severity": severity.value,
                 "path": result.get("path"),
-                "title": extra.get("message") or result.get("check_id") or "static analysis finding",
-                "detail": f"{result.get('path')}:{start_line}" if result.get("path") else extra.get("message"),
+                "title": extra.get("message")
+                or result.get("check_id")
+                or "static analysis finding",
+                "detail": f"{result.get('path')}:{start_line}"
+                if result.get("path")
+                else extra.get("message"),
             }
         )
     return findings
-

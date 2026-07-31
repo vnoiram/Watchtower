@@ -39,7 +39,9 @@ def list_remediation_actions(
         stmt = stmt.where(models.RemediationAction.action_type == action_type)
     if finding_id:
         stmt = stmt.where(models.RemediationAction.finding_id == finding_id)
-    stmt = stmt.order_by(models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()).limit(min(limit, 100))
+    stmt = stmt.order_by(
+        models.RemediationAction.created_at.desc(), models.RemediationAction.id.asc()
+    ).limit(min(limit, 100))
 
     items = []
     for action, finding, application, vulnerability, component in db.execute(stmt):

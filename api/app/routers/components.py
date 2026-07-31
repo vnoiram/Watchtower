@@ -39,13 +39,22 @@ def list_components(
         stmt = stmt.where(models.Component.purl.ilike(f"%{purl}%"))
     if ecosystem:
         stmt = stmt.where(models.Component.ecosystem == ecosystem)
-    stmt = stmt.order_by(applications.desc(), models.Component.name.asc(), models.Component.id.asc()).limit(min(limit, 100))
+    stmt = stmt.order_by(
+        applications.desc(), models.Component.name.asc(), models.Component.id.asc()
+    ).limit(min(limit, 100))
 
     rows = list(db.execute(stmt))
     usage_by_component = _component_usage_by_id(db, [component.id for component, _, _ in rows])
     items = []
     for component, active_sbom_count, application_count in rows:
-        items.append(_component_out(component, active_sbom_count, application_count, usage_by_component.get(component.id, [])))
+        items.append(
+            _component_out(
+                component,
+                active_sbom_count,
+                application_count,
+                usage_by_component.get(component.id, []),
+            )
+        )
     return schemas.CursorPage(items=items, next_cursor=None)
 
 
@@ -196,22 +205,49 @@ def dependency_relationship_items(db: Session) -> list[dict]:
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .outerjoin(models.Scan, models.Sbom.scan_id == models.Scan.id)
         .where(models.Sbom.active.is_(True))
-        .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc(), models.Component.name.asc())
+        .order_by(
+            models.Repository.owner.asc(),
+            models.Repository.name.asc(),
+            models.Application.name.asc(),
+            models.Component.name.asc(),
+        )
     )
     items = []
     for component, sbom, application, repository, scan in db.execute(stmt):
         metadata = _dependency_metadata(component, scan.result_summary if scan else None)
         context = (component, sbom, application, repository, metadata)
         if _metadata_value(metadata, "direct", "direct_dependency", "is_direct") is None:
-            items.append(_dependency_relationship_item("missing_direct_dependency", *context, "Direct/transitive dependency evidence is missing"))
+            items.append(
+                _dependency_relationship_item(
+                    "missing_direct_dependency",
+                    *context,
+                    "Direct/transitive dependency evidence is missing",
+                )
+            )
         if _metadata_value(metadata, "scope", "dependency_scope") is None:
-            items.append(_dependency_relationship_item("missing_dependency_scope", *context, "Dependency scope evidence is missing"))
+            items.append(
+                _dependency_relationship_item(
+                    "missing_dependency_scope", *context, "Dependency scope evidence is missing"
+                )
+            )
         if _metadata_value(metadata, "path", "dependency_path") is None:
-            items.append(_dependency_relationship_item("missing_dependency_path", *context, "Dependency path evidence is missing"))
+            items.append(
+                _dependency_relationship_item(
+                    "missing_dependency_path", *context, "Dependency path evidence is missing"
+                )
+            )
         if _metadata_value(metadata, "development", "development_dependency", "dev") is None:
-            items.append(_dependency_relationship_item("missing_development_flag", *context, "Development dependency flag is missing"))
+            items.append(
+                _dependency_relationship_item(
+                    "missing_development_flag", *context, "Development dependency flag is missing"
+                )
+            )
         if _metadata_value(metadata, "optional", "optional_dependency") is None:
-            items.append(_dependency_relationship_item("missing_optional_flag", *context, "Optional dependency flag is missing"))
+            items.append(
+                _dependency_relationship_item(
+                    "missing_optional_flag", *context, "Optional dependency flag is missing"
+                )
+            )
     return items
 
 
@@ -243,7 +279,9 @@ def _component_usage_by_id(
     if not component_ids:
         return {}
     stmt = (
-        select(models.SbomComponent.component_id, models.Sbom, models.Application, models.Repository)
+        select(
+            models.SbomComponent.component_id, models.Sbom, models.Application, models.Repository
+        )
         .join(models.Sbom, models.SbomComponent.sbom_id == models.Sbom.id)
         .join(models.Application, models.Sbom.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
@@ -283,7 +321,9 @@ def _license_issue(license_value: str | None) -> str | None:
     return None
 
 
-def _dependency_metadata(component: models.Component, result_summary: dict[str, Any] | None) -> dict[str, Any]:
+def _dependency_metadata(
+    component: models.Component, result_summary: dict[str, Any] | None
+) -> dict[str, Any]:
     candidates = _dependency_candidates(result_summary or {})
     for candidate in candidates:
         if not isinstance(candidate, dict):
@@ -301,7 +341,12 @@ def _dependency_candidates(value: Any) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         for key, child in value.items():
             key_text = str(key).lower()
-            if key_text in {"dependencies", "dependency_relationships", "dependency_graph", "components"}:
+            if key_text in {
+                "dependencies",
+                "dependency_relationships",
+                "dependency_graph",
+                "components",
+            }:
                 if isinstance(child, list):
                     items.extend(item for item in child if isinstance(item, dict))
                 elif isinstance(child, dict):
@@ -336,7 +381,9 @@ def _metadata_bool(metadata: dict[str, Any], *keys: str) -> bool | None:
 
 def _flatten_text(value: Any) -> str:
     if isinstance(value, dict):
-        return " ".join([str(key).lower() for key in value] + [_flatten_text(item) for item in value.values()])
+        return " ".join(
+            [str(key).lower() for key in value] + [_flatten_text(item) for item in value.values()]
+        )
     if isinstance(value, list | tuple | set):
         return " ".join(_flatten_text(item) for item in value)
     return str(value or "").lower()
@@ -367,7 +414,9 @@ def _dependency_relationship_item(
         direct_dependency=_metadata_bool(metadata, "direct", "direct_dependency", "is_direct"),
         dependency_scope=_metadata_value(metadata, "scope", "dependency_scope"),
         dependency_path=_metadata_value(metadata, "path", "dependency_path"),
-        development_dependency=_metadata_bool(metadata, "development", "development_dependency", "dev"),
+        development_dependency=_metadata_bool(
+            metadata, "development", "development_dependency", "dev"
+        ),
         optional_dependency=_metadata_bool(metadata, "optional", "optional_dependency"),
         detail=detail,
     ).model_dump(mode="json")

@@ -120,7 +120,11 @@ def ownership_review_items(db: Session, repository_id: UUID | None = None) -> li
     stmt = (
         select(models.Application, models.Repository)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
-        .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        .order_by(
+            models.Repository.owner.asc(),
+            models.Repository.name.asc(),
+            models.Application.name.asc(),
+        )
     )
     if repository_id:
         stmt = stmt.where(models.Repository.id == repository_id)
@@ -137,7 +141,11 @@ def owner_handoff_items(db: Session) -> list[dict]:
         db.execute(
             select(models.Application, models.Repository)
             .join(models.Repository, models.Application.repository_id == models.Repository.id)
-            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+            .order_by(
+                models.Repository.owner.asc(),
+                models.Repository.name.asc(),
+                models.Application.name.asc(),
+            )
         )
     )
     latest_scans = _latest_scans_by_application(db, [application.id for application, _ in rows])
@@ -148,15 +156,43 @@ def owner_handoff_items(db: Session) -> list[dict]:
         latest_scan = latest_scans.get(application.id)
         context = (application, repository, latest_scan, open_counts.get(application.id, 0))
         if not application.owner:
-            items.append(_owner_handoff_item("missing_owner", *context, "Application has no owner for handoff"))
+            items.append(
+                _owner_handoff_item(
+                    "missing_owner", *context, "Application has no owner for handoff"
+                )
+            )
         if latest_scan is None or _before(latest_scan.created_at, cutoff):
-            items.append(_owner_handoff_item("stale_scan", *context, "Application has no recent scan for owner handoff"))
+            items.append(
+                _owner_handoff_item(
+                    "stale_scan", *context, "Application has no recent scan for owner handoff"
+                )
+            )
         if open_counts.get(application.id, 0):
-            items.append(_owner_handoff_item("open_critical_high", *context, "Application has open critical/high findings before handoff"))
-        if (str(application.id) not in handoff_evidence) and (str(repository.id) not in handoff_evidence):
-            items.append(_owner_handoff_item("missing_handoff_evidence", *context, "No recent owner handoff or runbook audit evidence"))
+            items.append(
+                _owner_handoff_item(
+                    "open_critical_high",
+                    *context,
+                    "Application has open critical/high findings before handoff",
+                )
+            )
+        if (str(application.id) not in handoff_evidence) and (
+            str(repository.id) not in handoff_evidence
+        ):
+            items.append(
+                _owner_handoff_item(
+                    "missing_handoff_evidence",
+                    *context,
+                    "No recent owner handoff or runbook audit evidence",
+                )
+            )
         if application.lifecycle in {models.Lifecycle.deprecated, models.Lifecycle.archived}:
-            items.append(_owner_handoff_item("lifecycle_exit_work", *context, "Deprecated or archived application still needs owner handoff"))
+            items.append(
+                _owner_handoff_item(
+                    "lifecycle_exit_work",
+                    *context,
+                    "Deprecated or archived application still needs owner handoff",
+                )
+            )
     return items
 
 
@@ -165,7 +201,10 @@ def exposure_review_items(db: Session) -> list[dict]:
         db.execute(
             select(models.Application, models.Repository)
             .join(models.Repository, models.Application.repository_id == models.Repository.id)
-            .where((models.Application.internet_exposed.is_(True)) | (models.Application.production.is_(True)))
+            .where(
+                (models.Application.internet_exposed.is_(True))
+                | (models.Application.production.is_(True))
+            )
             .order_by(models.Application.name.asc(), models.Application.id.asc())
         )
     )
@@ -189,7 +228,10 @@ def exposure_review_items(db: Session) -> list[dict]:
             reasons.append("missing_active_source_sbom")
         if scan is None or _before(scan.created_at, cutoff):
             reasons.append("stale_scan")
-        if scan is not None and scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out}:
+        if scan is not None and scan.status in {
+            models.ScanStatus.failed,
+            models.ScanStatus.timed_out,
+        }:
             reasons.append("latest_scan_failed")
         open_count = open_counts.get(application.id, 0)
         if open_count:
@@ -420,22 +462,56 @@ def quarterly_review_items(db: Session) -> list[schemas.QuarterlyReviewOut]:
         db,
         lambda app: app.lifecycle in {models.Lifecycle.deprecated, models.Lifecycle.archived},
     )
-    ownership_tier = _count_applications(db, lambda app: not app.owner or (app.criticality or "").lower() not in KNOWN_CRITICALITIES)
+    ownership_tier = _count_applications(
+        db, lambda app: not app.owner or (app.criticality or "").lower() not in KNOWN_CRITICALITIES
+    )
     exposure = _count_applications(db, lambda app: app.internet_exposed or app.production)
     isolated = _count_repositories(
         db,
-        lambda repo: repo.provider == models.RepositoryProvider.isolated
-        or repo.source_classification in {models.SourceClassification.restricted, models.SourceClassification.isolated},
+        lambda repo: (
+            repo.provider == models.RepositoryProvider.isolated
+            or repo.source_classification
+            in {models.SourceClassification.restricted, models.SourceClassification.isolated}
+        ),
     )
     auto_merge = _count_applications(db, lambda app: app.auto_merge_enabled)
-    github_settings = _count_repositories(db, lambda repo: repo.provider == models.RepositoryProvider.github)
+    github_settings = _count_repositories(
+        db, lambda repo: repo.provider == models.RepositoryProvider.github
+    )
     return [
-        _quarterly("deprecation_candidates", "warn", deprecated, "Deprecated or archived applications requiring quarterly review"),
-        _quarterly("owner_tier_review", "warn", ownership_tier, "Applications with missing owner or unknown tier"),
-        _quarterly("external_exposure_review", "warn", exposure, "Production or internet exposed applications"),
-        _quarterly("github_app_permissions_review", "warn", github_settings, "GitHub repositories requiring app permission review"),
-        _quarterly("isolated_classification_review", "warn", isolated, "Restricted or isolated repositories requiring classification review"),
-        _quarterly("auto_merge_scope_review", "warn", auto_merge, "Applications with auto-merge enabled"),
+        _quarterly(
+            "deprecation_candidates",
+            "warn",
+            deprecated,
+            "Deprecated or archived applications requiring quarterly review",
+        ),
+        _quarterly(
+            "owner_tier_review",
+            "warn",
+            ownership_tier,
+            "Applications with missing owner or unknown tier",
+        ),
+        _quarterly(
+            "external_exposure_review",
+            "warn",
+            exposure,
+            "Production or internet exposed applications",
+        ),
+        _quarterly(
+            "github_app_permissions_review",
+            "warn",
+            github_settings,
+            "GitHub repositories requiring app permission review",
+        ),
+        _quarterly(
+            "isolated_classification_review",
+            "warn",
+            isolated,
+            "Restricted or isolated repositories requiring classification review",
+        ),
+        _quarterly(
+            "auto_merge_scope_review", "warn", auto_merge, "Applications with auto-merge enabled"
+        ),
     ]
 
 
@@ -447,15 +523,24 @@ def _ownership_issues(application: models.Application) -> list[tuple[str, str]]:
     if criticality not in KNOWN_CRITICALITIES:
         issues.append(("unknown_criticality", "Application criticality is not classified"))
     if application.production and criticality == "low":
-        issues.append(("production_low_criticality", "Production application is classified as low criticality"))
+        issues.append(
+            (
+                "production_low_criticality",
+                "Production application is classified as low criticality",
+            )
+        )
     if application.support_status != "supported":
         issues.append(("unsupported", "Application support status is not supported"))
     if application.lifecycle in {models.Lifecycle.deprecated, models.Lifecycle.archived}:
-        issues.append((application.lifecycle.value, "Application lifecycle requires governance review"))
+        issues.append(
+            (application.lifecycle.value, "Application lifecycle requires governance review")
+        )
     return issues
 
 
-def _quarterly(item: str, nonzero_status: str, count: int, detail: str) -> schemas.QuarterlyReviewOut:
+def _quarterly(
+    item: str, nonzero_status: str, count: int, detail: str
+) -> schemas.QuarterlyReviewOut:
     return schemas.QuarterlyReviewOut(
         item=item,
         status=nonzero_status if count else "ok",
@@ -465,7 +550,9 @@ def _quarterly(item: str, nonzero_status: str, count: int, detail: str) -> schem
 
 
 def _count_applications(db: Session, predicate) -> int:
-    return sum(1 for application in db.scalars(select(models.Application)) if predicate(application))
+    return sum(
+        1 for application in db.scalars(select(models.Application)) if predicate(application)
+    )
 
 
 def _count_repositories(db: Session, predicate) -> int:
@@ -475,7 +562,9 @@ def _count_repositories(db: Session, predicate) -> int:
 def _runtime_candidate(name: str | None, category: str | None) -> bool:
     normalized_name = (name or "").lower()
     normalized_category = (category or "").lower()
-    if any(token in normalized_category for token in ["runtime", "platform", "language", "container"]):
+    if any(
+        token in normalized_category for token in ["runtime", "platform", "language", "container"]
+    ):
         return True
     return _runtime_key(normalized_name) is not None
 
@@ -587,7 +676,9 @@ def _owner_handoff_item(
 def _handoff_evidence_keys(db: Session, cutoff: datetime) -> set[str]:
     keys = set()
     tokens = {"owner", "handoff", "runbook"}
-    for audit_log in db.scalars(select(models.AuditLog).where(models.AuditLog.created_at >= cutoff)):
+    for audit_log in db.scalars(
+        select(models.AuditLog).where(models.AuditLog.created_at >= cutoff)
+    ):
         text = f"{audit_log.action} {audit_log.metadata_json or {}}".lower()
         if any(token in text for token in tokens) and audit_log.resource_id:
             keys.add(str(audit_log.resource_id))
@@ -609,16 +700,18 @@ def _open_critical_high_counts(db: Session) -> dict:
 
 def _recent_validation_by_application(db: Session, cutoff: datetime) -> set:
     application_ids = set()
-    rows = (
-        db.execute(
-            select(models.RemediationAction, models.Finding)
-            .join(models.Finding, models.RemediationAction.finding_id == models.Finding.id)
-            .where(models.RemediationAction.updated_at >= cutoff)
-        )
+    rows = db.execute(
+        select(models.RemediationAction, models.Finding)
+        .join(models.Finding, models.RemediationAction.finding_id == models.Finding.id)
+        .where(models.RemediationAction.updated_at >= cutoff)
     )
     for action, finding in rows:
         metadata = action.metadata_json or {}
-        if metadata.get("validation_status") == "succeeded" or action.status in {"succeeded", "merged", "closed"}:
+        if metadata.get("validation_status") == "succeeded" or action.status in {
+            "succeeded",
+            "merged",
+            "closed",
+        }:
             application_ids.add(finding.application_id)
     return application_ids
 
@@ -632,7 +725,9 @@ def _blocked_auto_merge_actions_by_application(db: Session) -> dict:
     )
     for action, finding in rows:
         metadata = action.metadata_json or {}
-        blocked = action.status in {"failed", "blocked"} or metadata.get("auto_merge_allowed") is False
+        blocked = (
+            action.status in {"failed", "blocked"} or metadata.get("auto_merge_allowed") is False
+        )
         if blocked:
             counts[finding.application_id] = counts.get(finding.application_id, 0) + 1
     return counts

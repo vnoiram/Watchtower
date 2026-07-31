@@ -121,7 +121,11 @@ def notification_retry_posture_items(db: Session) -> list[dict]:
     now = datetime.now(timezone.utc)
     stale_cutoff = now - timedelta(hours=24)
     notifications = list(
-        db.scalars(select(models.Notification).order_by(models.Notification.created_at.asc(), models.Notification.id.asc()))
+        db.scalars(
+            select(models.Notification).order_by(
+                models.Notification.created_at.asc(), models.Notification.id.asc()
+            )
+        )
     )
     retry_jobs = _notification_retry_jobs(db)
     duplicate_counts = _duplicate_notification_counts(notifications)
@@ -134,13 +138,37 @@ def notification_retry_posture_items(db: Session) -> list[dict]:
         duplicate_count = duplicate_counts.get(_notification_identity(notification), 0)
         context = (notification, finding, application, repository, retry_job, duplicate_count)
         if notification.status == "queued" and _before(notification.created_at, stale_cutoff):
-            items.append(_retry_item("stale_queued_notification", *context, "Queued notification is older than 24 hours"))
+            items.append(
+                _retry_item(
+                    "stale_queued_notification",
+                    *context,
+                    "Queued notification is older than 24 hours",
+                )
+            )
         if notification.status == "failed" and retry_job is None:
-            items.append(_retry_item("failed_without_retry_job", *context, "Failed notification has no queued retry job"))
+            items.append(
+                _retry_item(
+                    "failed_without_retry_job",
+                    *context,
+                    "Failed notification has no queued retry job",
+                )
+            )
         if finding is None:
-            items.append(_retry_item("missing_finding_context", *context, "Notification metadata does not resolve to a finding"))
+            items.append(
+                _retry_item(
+                    "missing_finding_context",
+                    *context,
+                    "Notification metadata does not resolve to a finding",
+                )
+            )
         if duplicate_count > 1:
-            items.append(_retry_item("duplicate_notification", *context, "Multiple notifications share channel, subject, finding, and status"))
+            items.append(
+                _retry_item(
+                    "duplicate_notification",
+                    *context,
+                    "Multiple notifications share channel, subject, finding, and status",
+                )
+            )
     return items
 
 
@@ -203,7 +231,12 @@ def notification_digest_readiness_items(db: Session) -> list[dict]:
         .order_by(models.Finding.created_at.asc(), models.Finding.id.asc())
     )
     for finding, application, repository in db.execute(finding_stmt):
-        if finding.severity in {models.Severity.medium, models.Severity.low, models.Severity.info, models.Severity.unknown}:
+        if finding.severity in {
+            models.Severity.medium,
+            models.Severity.low,
+            models.Severity.info,
+            models.Severity.unknown,
+        }:
             items.append(
                 _digest_item(
                     "digest_candidate",
@@ -216,7 +249,11 @@ def notification_digest_readiness_items(db: Session) -> list[dict]:
                     repository=repository,
                 )
             )
-        if finding.severity in {models.Severity.critical, models.Severity.high} and finding.id not in sent_by_finding and _after(cutoff, finding.created_at):
+        if (
+            finding.severity in {models.Severity.critical, models.Severity.high}
+            and finding.id not in sent_by_finding
+            and _after(cutoff, finding.created_at)
+        ):
             items.append(
                 _digest_item(
                     "missing_critical_high_notification",
@@ -229,7 +266,9 @@ def notification_digest_readiness_items(db: Session) -> list[dict]:
                     repository=repository,
                 )
             )
-    for notification in db.scalars(select(models.Notification).where(models.Notification.status == "failed")):
+    for notification in db.scalars(
+        select(models.Notification).where(models.Notification.status == "failed")
+    ):
         finding = _finding_from_metadata(db, notification.metadata_json)
         application = db.get(models.Application, finding.application_id) if finding else None
         repository = db.get(models.Repository, application.repository_id) if application else None
@@ -272,7 +311,9 @@ def _notification_retry_jobs(db: Session) -> list[models.Job]:
     )
 
 
-def _retry_job_for_notification(notification: models.Notification, jobs: list[models.Job]) -> models.Job | None:
+def _retry_job_for_notification(
+    notification: models.Notification, jobs: list[models.Job]
+) -> models.Job | None:
     notification_id = str(notification.id)
     finding_id = str((notification.metadata_json or {}).get("finding_id") or "")
     for job in jobs:
@@ -286,7 +327,9 @@ def _retry_job_for_notification(notification: models.Notification, jobs: list[mo
     return None
 
 
-def _duplicate_notification_counts(notifications: list[models.Notification]) -> dict[tuple[str, str, str, str], int]:
+def _duplicate_notification_counts(
+    notifications: list[models.Notification],
+) -> dict[tuple[str, str, str, str], int]:
     counts: dict[tuple[str, str, str, str], int] = {}
     for notification in notifications:
         identity = _notification_identity(notification)
@@ -336,7 +379,9 @@ def _sent_notifications_by_finding(db: Session) -> dict[UUID, datetime]:
     notifications = db.execute(
         select(models.Notification)
         .where(models.Notification.status == "sent")
-        .order_by(models.Notification.sent_at.asc().nullslast(), models.Notification.created_at.asc())
+        .order_by(
+            models.Notification.sent_at.asc().nullslast(), models.Notification.created_at.asc()
+        )
     ).scalars()
     by_finding = {}
     for notification in notifications:

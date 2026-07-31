@@ -34,7 +34,15 @@ def enqueue_repository_scan(
     principal: Principal = Depends(require_role("operator")),
 ):
     job = enqueue_job(db, models.JobType.scan, payload={"repository_id": repository_id})
-    audit(db, principal.actor, principal.role, "repository.scan.enqueue", "repository", repository_id, job_id=str(job.id))
+    audit(
+        db,
+        principal.actor,
+        principal.role,
+        "repository.scan.enqueue",
+        "repository",
+        repository_id,
+        job_id=str(job.id),
+    )
     db.commit()
     db.refresh(job)
     return job
@@ -54,7 +62,10 @@ def list_repositories(
         last = rows[limit - 1]
         next_cursor = encode_cursor(last.created_at, last.id)
         rows = rows[:limit]
-    return schemas.CursorPage(items=[schemas.RepositoryOut.model_validate(row).model_dump(mode="json") for row in rows], next_cursor=next_cursor)
+    return schemas.CursorPage(
+        items=[schemas.RepositoryOut.model_validate(row).model_dump(mode="json") for row in rows],
+        next_cursor=next_cursor,
+    )
 
 
 @router.get("/classification-review", response_model=schemas.CursorPage)
@@ -82,20 +93,65 @@ def repository_classification_review_items(db: Session) -> list[dict]:
     for application in db.scalars(select(models.Application)):
         applications_by_repository.setdefault(application.repository_id, []).append(application)
     items = []
-    for repository in db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc())):
+    for repository in db.scalars(
+        select(models.Repository).order_by(
+            models.Repository.owner.asc(), models.Repository.name.asc()
+        )
+    ):
         applications = applications_by_repository.get(repository.id, [])
         if not repository.visibility:
-            items.append(_classification_item("missing_visibility", repository, None, "Repository visibility is not recorded"))
+            items.append(
+                _classification_item(
+                    "missing_visibility", repository, None, "Repository visibility is not recorded"
+                )
+            )
         if repository.visibility and _classification_mismatch(repository):
-            items.append(_classification_item("classification_mismatch", repository, None, "Visibility and source classification look inconsistent"))
-        if repository.source_classification == models.SourceClassification.isolated and repository.provider != models.RepositoryProvider.isolated:
-            items.append(_classification_item("isolated_provider_mismatch", repository, None, "Isolated classification should use the isolated provider"))
-        if repository.provider == models.RepositoryProvider.isolated and repository.source_classification != models.SourceClassification.isolated:
-            items.append(_classification_item("isolated_provider_mismatch", repository, None, "Isolated provider should use isolated classification"))
+            items.append(
+                _classification_item(
+                    "classification_mismatch",
+                    repository,
+                    None,
+                    "Visibility and source classification look inconsistent",
+                )
+            )
+        if (
+            repository.source_classification == models.SourceClassification.isolated
+            and repository.provider != models.RepositoryProvider.isolated
+        ):
+            items.append(
+                _classification_item(
+                    "isolated_provider_mismatch",
+                    repository,
+                    None,
+                    "Isolated classification should use the isolated provider",
+                )
+            )
+        if (
+            repository.provider == models.RepositoryProvider.isolated
+            and repository.source_classification != models.SourceClassification.isolated
+        ):
+            items.append(
+                _classification_item(
+                    "isolated_provider_mismatch",
+                    repository,
+                    None,
+                    "Isolated provider should use isolated classification",
+                )
+            )
         if repository.archived:
             for application in applications:
-                if application.lifecycle not in {models.Lifecycle.archived, models.Lifecycle.deprecated}:
-                    items.append(_classification_item("archived_active_app", repository, application, "Archived repository has an active application record"))
+                if application.lifecycle not in {
+                    models.Lifecycle.archived,
+                    models.Lifecycle.deprecated,
+                }:
+                    items.append(
+                        _classification_item(
+                            "archived_active_app",
+                            repository,
+                            application,
+                            "Archived repository has an active application record",
+                        )
+                    )
     return items
 
 
@@ -107,7 +163,10 @@ def _classification_mismatch(repository: models.Repository) -> bool:
         models.SourceClassification.isolated,
     }:
         return True
-    if visibility in {"private", "internal"} and repository.source_classification == models.SourceClassification.public:
+    if (
+        visibility in {"private", "internal"}
+        and repository.source_classification == models.SourceClassification.public
+    ):
         return True
     return False
 

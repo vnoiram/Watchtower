@@ -155,7 +155,14 @@ def auto_merge_pilot_readiness_items(db: Session) -> list[dict]:
             tier_allows=tier_allows,
             touches_forbidden_path=touches_forbidden_path,
         )
-        reason = _pilot_reason(application, decision.reason, ci_passed, validation_scan_resolved, tier_allows, touches_forbidden_path)
+        reason = _pilot_reason(
+            application,
+            decision.reason,
+            ci_passed,
+            validation_scan_resolved,
+            tier_allows,
+            touches_forbidden_path,
+        )
         items.append(
             schemas.AutoMergePilotReadinessOut(
                 action_id=action.id,
@@ -206,13 +213,36 @@ def automation_guardrail_items(db: Session) -> list[schemas.AutomationGuardrailO
         if not _has_audit_log(audit_logs, "remediation_action", str(action.id)):
             audit_missing += 1
     return [
-        _guardrail("production_high_criticality", "warn", production_high, "Automation actions touching production or high criticality applications"),
-        _guardrail("auto_merge_disabled", "warn", disabled, "Automation actions where application auto-merge is disabled"),
-        _guardrail("ci_not_passed", "fail", ci_missing, "Automation actions without successful CI evidence"),
-        _guardrail("validation_not_passed", "fail", validation_missing, "Automation actions without successful validation evidence"),
-        _guardrail("forbidden_path", "fail", forbidden_path, "Automation actions touching forbidden paths"),
-        _guardrail("tier_blocked", "warn", tier_blocked, "Automation actions blocked by tier policy"),
-        _guardrail("audit_missing", "warn", audit_missing, "Automation actions without audit log evidence"),
+        _guardrail(
+            "production_high_criticality",
+            "warn",
+            production_high,
+            "Automation actions touching production or high criticality applications",
+        ),
+        _guardrail(
+            "auto_merge_disabled",
+            "warn",
+            disabled,
+            "Automation actions where application auto-merge is disabled",
+        ),
+        _guardrail(
+            "ci_not_passed", "fail", ci_missing, "Automation actions without successful CI evidence"
+        ),
+        _guardrail(
+            "validation_not_passed",
+            "fail",
+            validation_missing,
+            "Automation actions without successful validation evidence",
+        ),
+        _guardrail(
+            "forbidden_path", "fail", forbidden_path, "Automation actions touching forbidden paths"
+        ),
+        _guardrail(
+            "tier_blocked", "warn", tier_blocked, "Automation actions blocked by tier policy"
+        ),
+        _guardrail(
+            "audit_missing", "warn", audit_missing, "Automation actions without audit log evidence"
+        ),
     ]
 
 
@@ -226,15 +256,43 @@ def auto_merge_policy_violation_items(db: Session) -> list[dict]:
         validation_status = _validation_status(metadata)
         auto_merge_allowed = _metadata_bool_or_none(metadata.get("auto_merge_allowed"))
         if merged and auto_merge_allowed is False:
-            items.append(_policy_violation("policy_disallowed_merged", *context, detail="Action merged despite auto_merge_allowed=false"))
+            items.append(
+                _policy_violation(
+                    "policy_disallowed_merged",
+                    *context,
+                    detail="Action merged despite auto_merge_allowed=false",
+                )
+            )
         if merged and ci_passed is False:
-            items.append(_policy_violation("ci_failed_merged", *context, detail="Action merged despite failed CI"))
+            items.append(
+                _policy_violation(
+                    "ci_failed_merged", *context, detail="Action merged despite failed CI"
+                )
+            )
         if merged and validation_status != "succeeded":
-            items.append(_policy_violation("validation_missing_merged", *context, detail="Action merged without successful validation"))
-        if _metadata_bool(metadata.get("auto_processed")) and (application.production or application.criticality in {"high", "critical"}):
-            items.append(_policy_violation("production_high_automated", *context, detail="Automation processed production or high criticality application"))
+            items.append(
+                _policy_violation(
+                    "validation_missing_merged",
+                    *context,
+                    detail="Action merged without successful validation",
+                )
+            )
+        if _metadata_bool(metadata.get("auto_processed")) and (
+            application.production or application.criticality in {"high", "critical"}
+        ):
+            items.append(
+                _policy_violation(
+                    "production_high_automated",
+                    *context,
+                    detail="Automation processed production or high criticality application",
+                )
+            )
         if _metadata_bool(metadata.get("touches_forbidden_path")):
-            items.append(_policy_violation("forbidden_path", *context, detail="Automation touched forbidden path"))
+            items.append(
+                _policy_violation(
+                    "forbidden_path", *context, detail="Automation touched forbidden path"
+                )
+            )
     return items
 
 
@@ -248,7 +306,9 @@ def auto_merge_dry_run_items(db: Session) -> list[dict]:
         auto_merge_allowed = _metadata_bool_or_none(metadata.get("auto_merge_allowed"))
         decision = raw_decision or ("allowed" if auto_merge_allowed else "blocked")
         merged = _is_merged_action(action)
-        mismatch = (decision in {"blocked", "denied", "not_allowed"} and merged) or (decision in {"allowed", "eligible"} and action.status in {"blocked", "failed"})
+        mismatch = (decision in {"blocked", "denied", "not_allowed"} and merged) or (
+            decision in {"allowed", "eligible"} and action.status in {"blocked", "failed"}
+        )
         items.append(
             schemas.AutoMergeDryRunOut(
                 action_id=action.id,
@@ -267,7 +327,9 @@ def auto_merge_dry_run_items(db: Session) -> list[dict]:
                 policy_reason=metadata.get("policy_reason"),
                 ci_passed=_metadata_bool_or_none(metadata.get("ci_passed")),
                 validation_status=_validation_status(metadata),
-                detail=metadata.get("policy_reason") or metadata.get("dry_run_reason") or "Dry-run decision recorded",
+                detail=metadata.get("policy_reason")
+                or metadata.get("dry_run_reason")
+                or "Dry-run decision recorded",
                 updated_at=action.updated_at,
             ).model_dump(mode="json")
         )
@@ -284,7 +346,9 @@ def _automation_context_stmt():
     )
 
 
-def _guardrail(check: str, nonzero_status: str, count: int, detail: str) -> schemas.AutomationGuardrailOut:
+def _guardrail(
+    check: str, nonzero_status: str, count: int, detail: str
+) -> schemas.AutomationGuardrailOut:
     return schemas.AutomationGuardrailOut(
         check=check,
         status=nonzero_status if count else "ok",
@@ -339,7 +403,9 @@ def _is_merged_action(action: models.RemediationAction) -> bool:
 
 
 def _has_audit_log(audit_logs: list[models.AuditLog], resource_type: str, resource_id: str) -> bool:
-    return any(log.resource_type == resource_type and log.resource_id == resource_id for log in audit_logs)
+    return any(
+        log.resource_type == resource_type and log.resource_id == resource_id for log in audit_logs
+    )
 
 
 def _metadata_bool(value: object) -> bool:

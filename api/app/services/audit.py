@@ -3,7 +3,15 @@ from sqlalchemy.orm import Session
 from api.app.models import AuditLog
 
 
-def audit(db: Session, actor: str, role: str, action: str, resource_type: str, resource_id: str | None = None, **metadata) -> None:
+def audit(
+    db: Session,
+    actor: str,
+    role: str,
+    action: str,
+    resource_type: str,
+    resource_id: str | None = None,
+    **metadata,
+) -> None:
     db.add(
         AuditLog(
             actor=actor,
@@ -14,4 +22,3 @@ def audit(db: Session, actor: str, role: str, action: str, resource_type: str, r
             metadata_json=metadata,
         )
     )
-

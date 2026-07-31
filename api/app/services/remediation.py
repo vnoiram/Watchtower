@@ -92,7 +92,9 @@ def enqueue_ai_fix_requests(
     if target_finding_ids:
         findings = list(db.scalars(select(Finding).where(Finding.id.in_(target_finding_ids))))
         found_ids = {finding.id for finding in findings}
-        missing_ids = [str(finding_id) for finding_id in target_finding_ids if finding_id not in found_ids]
+        missing_ids = [
+            str(finding_id) for finding_id in target_finding_ids if finding_id not in found_ids
+        ]
         if missing_ids:
             raise RuntimeError(f"finding not found: {', '.join(missing_ids)}")
     elif application_id:
@@ -189,7 +191,9 @@ def process_github_issue_actions(
     for action in actions:
         if action.provider_id or action.url:
             continue
-        if created_github_issue_action_exists(db, finding_id=action.finding_id, exclude_action_id=action.id):
+        if created_github_issue_action_exists(
+            db, finding_id=action.finding_id, exclude_action_id=action.id
+        ):
             action.status = "skipped_duplicate"
             set_action_metadata(action, error=None, skipped_reason="github issue already created")
             processed.append(action)

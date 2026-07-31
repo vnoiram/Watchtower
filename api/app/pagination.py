@@ -24,4 +24,3 @@ def apply_cursor(stmt: Select, model, cursor: str | None, limit: int) -> Select:
         created_at, item_id = decoded
         stmt = stmt.where(tuple_(model.created_at, model.id) > (created_at, item_id))
     return stmt.order_by(model.created_at.asc(), model.id.asc()).limit(min(limit, 100) + 1)
-

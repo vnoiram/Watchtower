@@ -36,7 +36,9 @@ def test_run_once_uses_settings_and_commits(monkeypatch: pytest.MonkeyPatch) -> 
     db = FakeSession()
     calls = []
 
-    def fake_enqueue(db_arg: FakeSession, *, stale_after_hours: int, limit: int | None) -> FakeResult:
+    def fake_enqueue(
+        db_arg: FakeSession, *, stale_after_hours: int, limit: int | None
+    ) -> FakeResult:
         calls.append((db_arg, stale_after_hours, limit))
         return FakeResult()
 

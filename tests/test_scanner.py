@@ -129,4 +129,3 @@ def test_normalize_semgrep_results() -> None:
     assert findings[0]["rule_id"] == "python.lang.security.audit.dangerous-eval"
     assert findings[0]["path"] == "app/main.py"
     assert findings[0]["detail"] == "app/main.py:42"
-

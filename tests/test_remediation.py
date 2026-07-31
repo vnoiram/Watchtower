@@ -243,7 +243,10 @@ def test_build_github_issue_payload_uses_finding_context(tmp_path: Path) -> None
         assert payload["title"].startswith("[Watchtower] high vulnerability GHSA-")
         assert "demo-" in payload["title"]
         assert "- Application: demo" in payload["body"]
-        assert f"- Vulnerability: {action.metadata_json['vulnerability_external_id']}" in payload["body"]
+        assert (
+            f"- Vulnerability: {action.metadata_json['vulnerability_external_id']}"
+            in payload["body"]
+        )
         assert "- Fixed version: 1.0.1" in payload["body"]
         assert "- Risk score: 8.0" in payload["body"]
         assert f"- Finding ID: {finding.id}" in payload["body"]
@@ -282,7 +285,9 @@ def test_process_github_issue_actions_creates_issue(monkeypatch, tmp_path: Path)
         assert action.url == "https://github.com/local/demo/issues/42"
         assert action.metadata_json["github_issue_url"] == "https://github.com/local/demo/issues/42"
         assert action.metadata_json["html_url"] == "https://github.com/local/demo/issues/42"
-        assert action.metadata_json["api_url"] == "https://api.github.com/repos/local/demo/issues/42"
+        assert (
+            action.metadata_json["api_url"] == "https://api.github.com/repos/local/demo/issues/42"
+        )
         assert calls[0][0].startswith("https://api.github.com/repos/local/demo-")
         assert calls[0][1]["headers"]["Authorization"] == "Bearer token"
         assert calls[0][1]["json"]["title"].startswith("[Watchtower] high vulnerability")
@@ -407,7 +412,10 @@ def test_process_github_issue_actions_records_http_failure(monkeypatch, tmp_path
 
         assert processed == [action]
         assert action.status == "failed"
-        assert action.metadata_json["error"] == "github issue create failed with status 422: bad request"
+        assert (
+            action.metadata_json["error"]
+            == "github issue create failed with status 422: bad request"
+        )
 
 
 def test_process_github_issue_actions_records_exception(monkeypatch, tmp_path: Path) -> None:
@@ -584,7 +592,9 @@ def test_process_github_issue_closures_records_exception(monkeypatch, tmp_path: 
         assert action.metadata_json["close_error"] == "github issue close failed: network down"
 
 
-def test_process_github_issue_closures_skips_ineligible_actions(monkeypatch, tmp_path: Path) -> None:
+def test_process_github_issue_closures_skips_ineligible_actions(
+    monkeypatch, tmp_path: Path
+) -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
         open_finding = create_finding(db, tmp_path)

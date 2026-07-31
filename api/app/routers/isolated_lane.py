@@ -22,7 +22,11 @@ def list_isolated_lane(
         select(models.Application, models.Repository)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .where(_isolated_repository_condition())
-        .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        .order_by(
+            models.Repository.owner.asc(),
+            models.Repository.name.asc(),
+            models.Application.name.asc(),
+        )
         .limit(min(limit, 100))
     )
     rows = list(db.execute(stmt))
@@ -105,7 +109,11 @@ def isolated_safeguard_items(db: Session) -> list[dict]:
         select(models.Application, models.Repository)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .where(_isolated_repository_condition())
-        .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        .order_by(
+            models.Repository.owner.asc(),
+            models.Repository.name.asc(),
+            models.Application.name.asc(),
+        )
     )
     rows = list(db.execute(stmt))
     application_ids = [application.id for application, _ in rows]
@@ -115,17 +123,49 @@ def isolated_safeguard_items(db: Session) -> list[dict]:
     items = []
     for application, repository in rows:
         latest_scan = latest_scans.get(application.id)
-        context = (application, repository, latest_scan, sbom_counts.get(application.id, 0), application.id in artifact_app_ids)
+        context = (
+            application,
+            repository,
+            latest_scan,
+            sbom_counts.get(application.id, 0),
+            application.id in artifact_app_ids,
+        )
         if repository.provider == models.RepositoryProvider.github:
-            items.append(_safeguard_item("github_provider_mixed", *context, detail="Isolated lane application is attached to a GitHub provider repository"))
+            items.append(
+                _safeguard_item(
+                    "github_provider_mixed",
+                    *context,
+                    detail="Isolated lane application is attached to a GitHub provider repository",
+                )
+            )
         if not application.owner:
-            items.append(_safeguard_item("missing_owner", *context, detail="Isolated lane application has no owner"))
+            items.append(
+                _safeguard_item(
+                    "missing_owner", *context, detail="Isolated lane application has no owner"
+                )
+            )
         if not latest_scan:
-            items.append(_safeguard_item("missing_scan", *context, detail="Isolated lane application has no scan record"))
+            items.append(
+                _safeguard_item(
+                    "missing_scan", *context, detail="Isolated lane application has no scan record"
+                )
+            )
         if sbom_counts.get(application.id, 0) == 0:
-            items.append(_safeguard_item("missing_active_source_sbom", *context, detail="Isolated lane application has no active source SBOM"))
+            items.append(
+                _safeguard_item(
+                    "missing_active_source_sbom",
+                    *context,
+                    detail="Isolated lane application has no active source SBOM",
+                )
+            )
         if application.id not in artifact_app_ids:
-            items.append(_safeguard_item("missing_artifact_storage", *context, detail="Isolated lane application has no scan artifact storage key"))
+            items.append(
+                _safeguard_item(
+                    "missing_artifact_storage",
+                    *context,
+                    detail="Isolated lane application has no scan artifact storage key",
+                )
+            )
     return items
 
 
@@ -135,7 +175,11 @@ def isolated_scan_health_items(db: Session) -> list[dict]:
         select(models.Application, models.Repository)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .where(_isolated_repository_condition())
-        .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        .order_by(
+            models.Repository.owner.asc(),
+            models.Repository.name.asc(),
+            models.Application.name.asc(),
+        )
     )
     rows = list(db.execute(stmt))
     application_ids = [application.id for application, _ in rows]
@@ -153,15 +197,45 @@ def isolated_scan_health_items(db: Session) -> list[dict]:
             application.id in artifact_app_ids,
         )
         if latest_scan is None:
-            items.append(_scan_health_item("missing_scan", *context, detail="Isolated lane application has no scan record"))
+            items.append(
+                _scan_health_item(
+                    "missing_scan", *context, detail="Isolated lane application has no scan record"
+                )
+            )
         elif _before(latest_scan.created_at, cutoff):
-            items.append(_scan_health_item("stale_scan", *context, detail="Latest isolated lane scan is older than 30 days"))
-        if latest_scan and latest_scan.status in {models.ScanStatus.failed, models.ScanStatus.partially_succeeded, models.ScanStatus.timed_out}:
-            items.append(_scan_health_item("unhealthy_scan", *context, detail=latest_scan.error_message or "Latest isolated lane scan did not succeed"))
+            items.append(
+                _scan_health_item(
+                    "stale_scan", *context, detail="Latest isolated lane scan is older than 30 days"
+                )
+            )
+        if latest_scan and latest_scan.status in {
+            models.ScanStatus.failed,
+            models.ScanStatus.partially_succeeded,
+            models.ScanStatus.timed_out,
+        }:
+            items.append(
+                _scan_health_item(
+                    "unhealthy_scan",
+                    *context,
+                    detail=latest_scan.error_message or "Latest isolated lane scan did not succeed",
+                )
+            )
         if sbom_counts.get(application.id, 0) == 0:
-            items.append(_scan_health_item("missing_active_source_sbom", *context, detail="Isolated lane application has no active source SBOM"))
+            items.append(
+                _scan_health_item(
+                    "missing_active_source_sbom",
+                    *context,
+                    detail="Isolated lane application has no active source SBOM",
+                )
+            )
         if application.id not in artifact_app_ids:
-            items.append(_scan_health_item("missing_artifact_storage", *context, detail="Isolated lane application has no scan artifact storage key"))
+            items.append(
+                _scan_health_item(
+                    "missing_artifact_storage",
+                    *context,
+                    detail="Isolated lane application has no scan artifact storage key",
+                )
+            )
     return items
 
 
@@ -181,7 +255,8 @@ def _artifact_storage_application_ids(db: Session, application_ids: list[UUID]) 
     for scan in scans:
         artifacts = (scan.result_summary or {}).get("artifacts") or {}
         if isinstance(artifacts, dict) and any(
-            isinstance(artifact, dict) and artifact.get("storage_key") for artifact in artifacts.values()
+            isinstance(artifact, dict) and artifact.get("storage_key")
+            for artifact in artifacts.values()
         ):
             app_ids.add(scan.application_id)
     return app_ids
@@ -250,7 +325,9 @@ def _latest_scans_by_application(
     scans = db.execute(
         select(models.Scan)
         .where(models.Scan.application_id.in_(application_ids))
-        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+        .order_by(
+            models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc()
+        )
     ).scalars()
     for scan in scans:
         latest_scans.setdefault(scan.application_id, scan)

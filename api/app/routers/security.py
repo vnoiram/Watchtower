@@ -24,16 +24,47 @@ def data_protection(
         and settings.minio_secret_key
         and settings.minio_bucket
     )
-    github_secret_configured = bool(settings.github_webhook_secret and (settings.github_token or settings.github_app_id))
-    missing_storage_keys = sum(1 for sbom in db.scalars(select(models.Sbom)) if not sbom.storage_key)
-    classification_missing = sum(1 for sbom in db.scalars(select(models.Sbom)) if not sbom.sbom_kind)
+    github_secret_configured = bool(
+        settings.github_webhook_secret and (settings.github_token or settings.github_app_id)
+    )
+    missing_storage_keys = sum(
+        1 for sbom in db.scalars(select(models.Sbom)) if not sbom.storage_key
+    )
+    classification_missing = sum(
+        1 for sbom in db.scalars(select(models.Sbom)) if not sbom.sbom_kind
+    )
     artifact_count = _stored_artifact_count(db)
     return [
-        _protection("object_storage", storage_configured, 1 if storage_configured else 0, "Object storage settings are configured"),
-        _protection("github_secrets", github_secret_configured, 1 if github_secret_configured else 0, "GitHub token/app and webhook secret are configured"),
-        _protection("sbom_storage_keys", missing_storage_keys == 0, missing_storage_keys, "SBOM records without storage keys"),
-        _protection("sbom_classification", classification_missing == 0, classification_missing, "SBOM records without kind classification"),
-        _protection("stored_artifacts", artifact_count > 0, artifact_count, "Scan artifacts with storage keys"),
+        _protection(
+            "object_storage",
+            storage_configured,
+            1 if storage_configured else 0,
+            "Object storage settings are configured",
+        ),
+        _protection(
+            "github_secrets",
+            github_secret_configured,
+            1 if github_secret_configured else 0,
+            "GitHub token/app and webhook secret are configured",
+        ),
+        _protection(
+            "sbom_storage_keys",
+            missing_storage_keys == 0,
+            missing_storage_keys,
+            "SBOM records without storage keys",
+        ),
+        _protection(
+            "sbom_classification",
+            classification_missing == 0,
+            classification_missing,
+            "SBOM records without kind classification",
+        ),
+        _protection(
+            "stored_artifacts",
+            artifact_count > 0,
+            artifact_count,
+            "Scan artifacts with storage keys",
+        ),
     ]
 
 
@@ -208,7 +239,9 @@ def rbac_review_count(db: Session, settings: Settings) -> int:
 
 
 def secret_management_gap_count(db: Session, settings: Settings) -> int:
-    return sum(max(item.count, 1) for item in secret_management_items(db, settings) if item.status != "ok")
+    return sum(
+        max(item.count, 1) for item in secret_management_items(db, settings) if item.status != "ok"
+    )
 
 
 def credential_exposure_count(db: Session) -> int:
@@ -216,7 +249,9 @@ def credential_exposure_count(db: Session) -> int:
 
 
 def auth_deployment_gap_count(db: Session, settings: Settings) -> int:
-    return sum(max(item.count, 1) for item in auth_deployment_items(db, settings) if item.status != "ok")
+    return sum(
+        max(item.count, 1) for item in auth_deployment_items(db, settings) if item.status != "ok"
+    )
 
 
 def secret_scan_coverage_count(db: Session) -> int:
@@ -349,7 +384,13 @@ def _security_scan_coverage_items(
 
 def exploit_intel_items(db: Session) -> list[dict]:
     stmt = (
-        select(models.Finding, models.Application, models.Repository, models.Component, models.Vulnerability)
+        select(
+            models.Finding,
+            models.Application,
+            models.Repository,
+            models.Component,
+            models.Vulnerability,
+        )
         .join(models.Application, models.Finding.application_id == models.Application.id)
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .join(models.Component, models.Finding.component_id == models.Component.id)
@@ -470,7 +511,9 @@ def secret_management_items(db: Session, settings: Settings) -> list[schemas.Sec
             "secret_manager_evidence",
             "ok" if manager_evidence else "warn",
             manager_evidence,
-            "Secret manager evidence found" if manager_evidence else "No secret manager evidence found in audit or job metadata",
+            "Secret manager evidence found"
+            if manager_evidence
+            else "No secret manager evidence found in audit or job metadata",
         ),
     ]
 
@@ -480,7 +523,9 @@ def auth_deployment_items(db: Session, settings: Settings) -> list[schemas.Secur
     roles = {log.role for log in logs}
     default_token = settings.api_token == "change-me"
     default_role_admin = settings.api_default_role == "admin"
-    proxy_evidence = _evidence_count(db, {"reverse_proxy", "proxy_auth", "x-forwarded-user", "oauth2-proxy"})
+    proxy_evidence = _evidence_count(
+        db, {"reverse_proxy", "proxy_auth", "x-forwarded-user", "oauth2-proxy"}
+    )
     oidc_evidence = _evidence_count(db, {"oidc", "openid", "sso", "identity_provider"})
     role_count = len(roles & {"viewer", "operator", "admin"})
     return [
@@ -521,7 +566,9 @@ def auth_deployment_items(db: Session, settings: Settings) -> list[schemas.Secur
 
 def credential_exposure_items(db: Session) -> list[dict]:
     items = []
-    for audit_log in db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc())):
+    for audit_log in db.scalars(
+        select(models.AuditLog).order_by(models.AuditLog.created_at.desc())
+    ):
         for field, exposure_type, severity in _credential_exposures(audit_log.metadata_json):
             items.append(
                 _credential_exposure(
@@ -559,7 +606,9 @@ def credential_exposure_items(db: Session) -> list[dict]:
         .order_by(models.Scan.created_at.desc())
     )
     for scan, application, repository in db.execute(scan_stmt):
-        for field, exposure_type, severity in _credential_exposures(scan.result_summary, scan.error_message):
+        for field, exposure_type, severity in _credential_exposures(
+            scan.result_summary, scan.error_message
+        ):
             items.append(
                 _credential_exposure(
                     "scan",
@@ -573,7 +622,9 @@ def credential_exposure_items(db: Session) -> list[dict]:
                     scan.created_at,
                 )
             )
-    for action in db.scalars(select(models.RemediationAction).order_by(models.RemediationAction.created_at.desc())):
+    for action in db.scalars(
+        select(models.RemediationAction).order_by(models.RemediationAction.created_at.desc())
+    ):
         context = _remediation_context(db, action)
         for field, exposure_type, severity in _credential_exposures(action.metadata_json):
             items.append(
@@ -589,7 +640,9 @@ def credential_exposure_items(db: Session) -> list[dict]:
                     action.created_at,
                 )
             )
-    for notification in db.scalars(select(models.Notification).order_by(models.Notification.created_at.desc())):
+    for notification in db.scalars(
+        select(models.Notification).order_by(models.Notification.created_at.desc())
+    ):
         for field, exposure_type, severity in _credential_exposures(notification.metadata_json):
             items.append(
                 _credential_exposure(
@@ -621,7 +674,9 @@ def _rbac_check(check: str, status: str, count: int, detail: str) -> schemas.Rba
     return schemas.RbacReviewOut(check=check, status=status, count=count, detail=detail)
 
 
-def _security_posture(check: str, status: str, count: int, detail: str) -> schemas.SecurityPostureOut:
+def _security_posture(
+    check: str, status: str, count: int, detail: str
+) -> schemas.SecurityPostureOut:
     return schemas.SecurityPostureOut(check=check, status=status, count=count, detail=detail)
 
 
@@ -661,7 +716,9 @@ def _evidence_count(db: Session, tokens: set[str]) -> int:
         if _matches_tokens(_evidence_text(job.job_type.value, job.payload, job.last_error), tokens):
             count += 1
     for scan in db.scalars(select(models.Scan)):
-        if _matches_tokens(_evidence_text(scan.tool, scan.result_summary, scan.error_message), tokens):
+        if _matches_tokens(
+            _evidence_text(scan.tool, scan.result_summary, scan.error_message), tokens
+        ):
             count += 1
     return count
 
@@ -730,15 +787,25 @@ def _credential_signal(field: str | None, value: str) -> tuple[str, str] | None:
     value_text = value.lower()
     if "secret_manager" in field_text or "secret manager" in value_text:
         return None
-    if "private_key" in field_text or "private key" in field_text or "begin private key" in value_text:
+    if (
+        "private_key" in field_text
+        or "private key" in field_text
+        or "begin private key" in value_text
+    ):
         return ("private_key", "critical")
     if field_text in {"password", "passwd", "client_secret", "webhook_secret"}:
-        return ("password" if "password" in field_text or "passwd" in field_text else "secret", "critical")
+        return (
+            "password" if "password" in field_text or "passwd" in field_text else "secret",
+            "critical",
+        )
     if field_text in {"token", "api_token", "access_token", "refresh_token", "github_token"}:
         return ("token", "high")
     if field_text in {"secret", "api_key", "apikey", "credential", "credentials"}:
         return ("secret" if "secret" in field_text or "key" in field_text else "credential", "high")
-    if any(pattern in value_text for pattern in ["ghp_", "github_pat_", "xoxb-", "token=", "password=", "api_key="]):
+    if any(
+        pattern in value_text
+        for pattern in ["ghp_", "github_pat_", "xoxb-", "token=", "password=", "api_key="]
+    ):
         return ("token", "high")
     if any(pattern in value_text for pattern in ["super_secret", "audit_secret", "private_secret"]):
         return ("secret", "high")
@@ -787,7 +854,11 @@ def _stored_artifact_count(db: Session) -> int:
         artifacts = (scan.result_summary or {}).get("artifacts") or {}
         if not isinstance(artifacts, dict):
             continue
-        count += sum(1 for artifact in artifacts.values() if isinstance(artifact, dict) and artifact.get("storage_key"))
+        count += sum(
+            1
+            for artifact in artifacts.values()
+            if isinstance(artifact, dict) and artifact.get("storage_key")
+        )
     return count
 
 
@@ -849,11 +920,16 @@ def _secretish(finding: dict) -> bool:
 
 def _secret_text(value: str) -> bool:
     text = value.lower()
-    return any(token in text for token in ["secret", "credential", "token", "api key", "apikey", "private key"])
+    return any(
+        token in text
+        for token in ["secret", "credential", "token", "api key", "apikey", "private key"]
+    )
 
 
 def _safe_secret_detail(finding: dict) -> str | None:
-    value = finding.get("path") or finding.get("file") or finding.get("rule_id") or finding.get("type")
+    value = (
+        finding.get("path") or finding.get("file") or finding.get("rule_id") or finding.get("type")
+    )
     return str(value) if value else None
 
 
@@ -864,7 +940,11 @@ def _kev_signal(vulnerability: models.Vulnerability) -> bool:
 
 def _epss_signal(vulnerability: models.Vulnerability, finding: models.Finding) -> bool:
     text = _vulnerability_text(vulnerability)
-    return "epss" in text or (vulnerability.cvss_score or 0) >= 9.0 or finding.severity == models.Severity.critical
+    return (
+        "epss" in text
+        or (vulnerability.cvss_score or 0) >= 9.0
+        or finding.severity == models.Severity.critical
+    )
 
 
 def _vulnerability_text(vulnerability: models.Vulnerability) -> str:
@@ -893,36 +973,56 @@ def _finding_severity(finding: dict) -> str | None:
 
 
 def _finding_title(finding: dict) -> str:
-    return str(finding.get("title") or finding.get("rule_id") or finding.get("type") or "security finding")
+    return str(
+        finding.get("title") or finding.get("rule_id") or finding.get("type") or "security finding"
+    )
 
 
 def _finding_detail(finding: dict) -> str | None:
-    value = finding.get("detail") or finding.get("message") or finding.get("description") or finding.get("path")
+    value = (
+        finding.get("detail")
+        or finding.get("message")
+        or finding.get("description")
+        or finding.get("path")
+    )
     return str(value) if value else None
 
 
 def _latest_scan_by_application(db: Session) -> dict:
     latest = {}
-    scans = db.scalars(select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.desc()))
+    scans = db.scalars(
+        select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.desc())
+    )
     for scan in scans:
         latest.setdefault(scan.application_id, scan)
     return latest
 
 
 def _findings_of_type(result_summary: dict[str, Any] | None, finding_type: str) -> list[dict]:
-    return [finding for current_type, finding in _security_findings(result_summary) if current_type == finding_type]
+    return [
+        finding
+        for current_type, finding in _security_findings(result_summary)
+        if current_type == finding_type
+    ]
 
 
-def _has_scan_evidence(scan: models.Scan | None, evidence_tokens: set[str], finding_type: str) -> bool:
+def _has_scan_evidence(
+    scan: models.Scan | None, evidence_tokens: set[str], finding_type: str
+) -> bool:
     if not scan:
         return False
     summary = scan.result_summary or {}
     if finding_type in summary:
         return True
     artifacts = summary.get("artifacts") or {}
-    if isinstance(artifacts, dict) and any(_matches_tokens(str(key), evidence_tokens) for key in artifacts):
+    if isinstance(artifacts, dict) and any(
+        _matches_tokens(str(key), evidence_tokens) for key in artifacts
+    ):
         return True
-    text = " ".join(str(value) for value in [scan.scan_type, scan.tool, summary.get("scanner"), summary.get("tool")])
+    text = " ".join(
+        str(value)
+        for value in [scan.scan_type, scan.tool, summary.get("scanner"), summary.get("tool")]
+    )
     return _matches_tokens(text, evidence_tokens)
 
 
@@ -940,7 +1040,14 @@ def _scanner_failures_for(scan: models.Scan | None, evidence_tokens: set[str]) -
             continue
         text = " ".join(str(value) for value in failure.values())
         if _matches_tokens(text, evidence_tokens):
-            matched.append(str(failure.get("error") or failure.get("message") or failure.get("scanner") or "scanner failure"))
+            matched.append(
+                str(
+                    failure.get("error")
+                    or failure.get("message")
+                    or failure.get("scanner")
+                    or "scanner failure"
+                )
+            )
     return matched
 
 

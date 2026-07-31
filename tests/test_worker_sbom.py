@@ -163,7 +163,9 @@ def test_scan_application_persists_successful_syft_sbom(monkeypatch, tmp_path: P
         assert db.scalar(select(Component).where(Component.purl == "pkg:generic/fastapi@0.111.0"))
 
 
-def test_scan_application_accepts_remediation_validation_trigger(monkeypatch, tmp_path: Path) -> None:
+def test_scan_application_accepts_remediation_validation_trigger(
+    monkeypatch, tmp_path: Path
+) -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
         disable_notifications(monkeypatch)
@@ -220,7 +222,14 @@ def test_scan_application_records_secrets_and_sast_findings(monkeypatch, tmp_pat
         monkeypatch.setattr(
             runner,
             "run_gitleaks",
-            lambda *_: [{"RuleID": "generic-api-key", "Description": "Generic API Key", "File": "config.py", "StartLine": 3}],
+            lambda *_: [
+                {
+                    "RuleID": "generic-api-key",
+                    "Description": "Generic API Key",
+                    "File": "config.py",
+                    "StartLine": 3,
+                }
+            ],
         )
         monkeypatch.setattr(
             runner,
@@ -380,7 +389,9 @@ def test_scan_application_enqueues_chat_notifications(monkeypatch, tmp_path: Pat
         assert scan.result_summary["issue_close_request_count"] == 0
         assert {notification.channel for notification in notifications} == {"slack", "discord"}
         assert job
-        assert set(job.payload["notification_ids"]) == {str(notification.id) for notification in notifications}
+        assert set(job.payload["notification_ids"]) == {
+            str(notification.id) for notification in notifications
+        }
 
 
 def test_scan_application_enqueues_github_issue_requests(monkeypatch, tmp_path: Path) -> None:
@@ -477,7 +488,9 @@ def test_scan_application_records_partial_success_for_scanner_failure(
             ]
 
         monkeypatch.setattr(runner, "run_syft", fake_run_syft)
-        monkeypatch.setattr(runner, "run_osv_scanner", lambda *_: (_ for _ in ()).throw(RuntimeError("osv missing")))
+        monkeypatch.setattr(
+            runner, "run_osv_scanner", lambda *_: (_ for _ in ()).throw(RuntimeError("osv missing"))
+        )
         monkeypatch.setattr(runner, "run_trivy", lambda *_: {"Results": []})
         monkeypatch.setattr(runner, "run_grype", lambda *_: {"matches": []})
         monkeypatch.setattr(runner, "run_gitleaks", lambda *_: [])
@@ -620,7 +633,9 @@ def test_run_notification_job_delivers_queued_notifications(monkeypatch, tmp_pat
             target.status = "sent"
 
         monkeypatch.setattr(runner, "deliver_notification", fake_deliver)
-        monkeypatch.setattr(runner, "get_settings", lambda: Settings(slack_webhook_url="https://example.test"))
+        monkeypatch.setattr(
+            runner, "get_settings", lambda: Settings(slack_webhook_url="https://example.test")
+        )
 
         runner.run_notification_job(db, job)
 
@@ -674,7 +689,9 @@ def test_run_issue_create_job_processes_payload_action_ids(monkeypatch, tmp_path
         job.payload = {"remediation_action_ids": [str(action.id)]}
         calls = []
 
-        def fake_process(db_arg: Session, *, action_ids: list, settings: Settings) -> list[RemediationAction]:
+        def fake_process(
+            db_arg: Session, *, action_ids: list, settings: Settings
+        ) -> list[RemediationAction]:
             calls.append((db_arg, action_ids, settings))
             action.status = "created"
             return [action]
@@ -746,7 +763,9 @@ def test_run_issue_create_job_processes_all_when_payload_empty(monkeypatch, tmp_
         db.add_all([queued, pending, created, job])
         db.flush()
 
-        def fake_process(db_arg: Session, *, action_ids: list, settings: Settings) -> list[RemediationAction]:
+        def fake_process(
+            db_arg: Session, *, action_ids: list, settings: Settings
+        ) -> list[RemediationAction]:
             assert db_arg is db
             assert action_ids == []
             queued.status = "created"
@@ -802,7 +821,9 @@ def test_run_issue_create_job_processes_close_operation(monkeypatch, tmp_path: P
         db.flush()
         calls = []
 
-        def fake_close(db_arg: Session, *, finding_ids: list, settings: Settings) -> list[RemediationAction]:
+        def fake_close(
+            db_arg: Session, *, finding_ids: list, settings: Settings
+        ) -> list[RemediationAction]:
             calls.append((db_arg, finding_ids, settings))
             return []
 
@@ -814,7 +835,9 @@ def test_run_issue_create_job_processes_close_operation(monkeypatch, tmp_path: P
         assert calls == [(db, [finding.id], runner.get_settings())]
 
 
-def test_run_remediation_validation_job_scans_action_application(monkeypatch, tmp_path: Path) -> None:
+def test_run_remediation_validation_job_scans_action_application(
+    monkeypatch, tmp_path: Path
+) -> None:
     SessionLocal = session_factory()
     with SessionLocal() as db:
         disable_notifications(monkeypatch)
@@ -884,7 +907,9 @@ def test_run_remediation_validation_job_scans_action_application(monkeypatch, tm
         runner.run_remediation_validation_job(db, job)
         db.flush()
 
-        scan = db.scalar(select(Scan).where(Scan.trigger_type == TriggerType.remediation_validation))
+        scan = db.scalar(
+            select(Scan).where(Scan.trigger_type == TriggerType.remediation_validation)
+        )
         close_job = db.scalar(
             select(Job).where(
                 Job.job_type == JobType.issue_create,
@@ -966,7 +991,9 @@ def test_run_remediation_validation_job_records_failed_validation(
             raise AssertionError("expected RuntimeError")
         db.flush()
 
-        scan = db.scalar(select(Scan).where(Scan.trigger_type == TriggerType.remediation_validation))
+        scan = db.scalar(
+            select(Scan).where(Scan.trigger_type == TriggerType.remediation_validation)
+        )
         assert scan.status == ScanStatus.failed
         assert action.status == "created"
         assert action.metadata_json["validation_scan_id"] == str(scan.id)

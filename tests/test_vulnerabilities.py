@@ -103,8 +103,12 @@ def test_upsert_findings_updates_existing_without_duplicate(tmp_path: Path) -> N
     SessionLocal = session_factory()
     with SessionLocal() as db:
         _, app, first_scan = create_repo_app_scan(db, tmp_path)
-        upsert_findings(db, app, first_scan, [normalized(severity=Severity.medium)], resolved_sources={"osv"})
-        second_scan = Scan(application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running)
+        upsert_findings(
+            db, app, first_scan, [normalized(severity=Severity.medium)], resolved_sources={"osv"}
+        )
+        second_scan = Scan(
+            application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running
+        )
         db.add(second_scan)
         db.flush()
 
@@ -131,7 +135,9 @@ def test_upsert_findings_resolves_missing_open_finding(tmp_path: Path) -> None:
     with SessionLocal() as db:
         _, app, first_scan = create_repo_app_scan(db, tmp_path)
         upsert_findings(db, app, first_scan, [normalized()], resolved_sources={"osv"})
-        second_scan = Scan(application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running)
+        second_scan = Scan(
+            application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running
+        )
         db.add(second_scan)
         db.flush()
 
@@ -150,7 +156,9 @@ def test_upsert_findings_does_not_resolve_when_no_sources_succeeded(tmp_path: Pa
     with SessionLocal() as db:
         _, app, first_scan = create_repo_app_scan(db, tmp_path)
         upsert_findings(db, app, first_scan, [normalized()], resolved_sources={"osv"})
-        second_scan = Scan(application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running)
+        second_scan = Scan(
+            application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running
+        )
         db.add(second_scan)
         db.flush()
 
@@ -168,11 +176,15 @@ def test_upsert_findings_reports_reopened_finding_for_notification(tmp_path: Pat
     with SessionLocal() as db:
         _, app, first_scan = create_repo_app_scan(db, tmp_path)
         upsert_findings(db, app, first_scan, [normalized()], resolved_sources={"osv"})
-        second_scan = Scan(application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running)
+        second_scan = Scan(
+            application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running
+        )
         db.add(second_scan)
         db.flush()
         upsert_findings(db, app, second_scan, [], resolved_sources={"osv"})
-        third_scan = Scan(application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running)
+        third_scan = Scan(
+            application_id=app.id, trigger_type=TriggerType.manual, status=ScanStatus.running
+        )
         db.add(third_scan)
         db.flush()
 

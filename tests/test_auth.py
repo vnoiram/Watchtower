@@ -80,7 +80,9 @@ def test_operator_token_can_create_repository_and_is_audited(client: TestClient)
     assert response.status_code == 200
     assert response.json()["owner"] == "watchtower"
 
-    audit_response = client.get("/v1/audit-logs", headers={"Authorization": "Bearer operator-secret"})
+    audit_response = client.get(
+        "/v1/audit-logs", headers={"Authorization": "Bearer operator-secret"}
+    )
     assert audit_response.status_code == 200
     entries = audit_response.json()["items"]
     assert entries[0]["actor"] == "operator-user"

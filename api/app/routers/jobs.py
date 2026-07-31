@@ -42,7 +42,10 @@ def list_jobs(
         last = rows[limit - 1]
         next_cursor = encode_cursor(last.created_at, last.id)
         rows = rows[:limit]
-    return schemas.CursorPage(items=[schemas.JobOut.model_validate(row).model_dump(mode="json") for row in rows], next_cursor=next_cursor)
+    return schemas.CursorPage(
+        items=[schemas.JobOut.model_validate(row).model_dump(mode="json") for row in rows],
+        next_cursor=next_cursor,
+    )
 
 
 @router.get("/retry-candidates", response_model=schemas.CursorPage)
@@ -176,15 +179,63 @@ def job_retry_posture_items(db: Session) -> list[dict]:
     )
     items = []
     for job in db.scalars(stmt):
-        if job.status in {models.JobStatus.failed, models.JobStatus.timed_out, models.JobStatus.cancelled}:
+        if job.status in {
+            models.JobStatus.failed,
+            models.JobStatus.timed_out,
+            models.JobStatus.cancelled,
+        }:
             if job.attempts >= job.max_attempts:
-                items.append(_job_retry_item("retry_exhausted", job, now, repositories, applications, "Job has no retry attempts remaining"))
+                items.append(
+                    _job_retry_item(
+                        "retry_exhausted",
+                        job,
+                        now,
+                        repositories,
+                        applications,
+                        "Job has no retry attempts remaining",
+                    )
+                )
             else:
-                items.append(_job_retry_item("retryable_failure", job, now, repositories, applications, "Job failed but still has retry attempts remaining"))
-        if job.status == models.JobStatus.queued and _before(job.run_after, now) and _age_hours(job.run_after, now) >= 1:
-            items.append(_job_retry_item("overdue_retry", job, now, repositories, applications, "Queued retry is past run_after"))
-        if job.status == models.JobStatus.running and job.locked_at and _before(job.locked_at, now - timedelta(hours=1)):
-            items.append(_job_retry_item("stale_running_lock", job, now, repositories, applications, "Running job lock is older than 1 hour"))
+                items.append(
+                    _job_retry_item(
+                        "retryable_failure",
+                        job,
+                        now,
+                        repositories,
+                        applications,
+                        "Job failed but still has retry attempts remaining",
+                    )
+                )
+        if (
+            job.status == models.JobStatus.queued
+            and _before(job.run_after, now)
+            and _age_hours(job.run_after, now) >= 1
+        ):
+            items.append(
+                _job_retry_item(
+                    "overdue_retry",
+                    job,
+                    now,
+                    repositories,
+                    applications,
+                    "Queued retry is past run_after",
+                )
+            )
+        if (
+            job.status == models.JobStatus.running
+            and job.locked_at
+            and _before(job.locked_at, now - timedelta(hours=1))
+        ):
+            items.append(
+                _job_retry_item(
+                    "stale_running_lock",
+                    job,
+                    now,
+                    repositories,
+                    applications,
+                    "Running job lock is older than 1 hour",
+                )
+            )
     return items
 
 
@@ -259,10 +310,7 @@ def job_concurrency_risk_items(db: Session) -> list[dict]:
         if job.status in {models.JobStatus.queued, models.JobStatus.running}:
             active_by_key.setdefault(_job_concurrency_key(job), []).append(job)
     duplicate_ids = {
-        job.id: len(group)
-        for group in active_by_key.values()
-        if len(group) > 1
-        for job in group
+        job.id: len(group) for group in active_by_key.values() if len(group) > 1 for job in group
     }
     repositories = {repo.id: repo for repo in db.scalars(select(models.Repository))}
     applications = {app.id: app for app in db.scalars(select(models.Application))}
@@ -270,20 +318,66 @@ def job_concurrency_risk_items(db: Session) -> list[dict]:
     for job in jobs:
         duplicate_count = duplicate_ids.get(job.id, 0)
         if duplicate_count:
-            items.append(_job_concurrency_item("duplicate_active_job", job, duplicate_count, now, repositories, applications, "Multiple queued/running jobs target the same work"))
-        if job.status == models.JobStatus.running and job.locked_at and _before(job.locked_at, now - timedelta(hours=1)):
-            items.append(_job_concurrency_item("stale_lock", job, duplicate_count, now, repositories, applications, "Running job lock is older than 1 hour"))
-        if job.status in {models.JobStatus.failed, models.JobStatus.timed_out, models.JobStatus.cancelled} and job.attempts >= job.max_attempts:
-            items.append(_job_concurrency_item("retry_exhausted", job, duplicate_count, now, repositories, applications, "Job exhausted retry attempts"))
+            items.append(
+                _job_concurrency_item(
+                    "duplicate_active_job",
+                    job,
+                    duplicate_count,
+                    now,
+                    repositories,
+                    applications,
+                    "Multiple queued/running jobs target the same work",
+                )
+            )
+        if (
+            job.status == models.JobStatus.running
+            and job.locked_at
+            and _before(job.locked_at, now - timedelta(hours=1))
+        ):
+            items.append(
+                _job_concurrency_item(
+                    "stale_lock",
+                    job,
+                    duplicate_count,
+                    now,
+                    repositories,
+                    applications,
+                    "Running job lock is older than 1 hour",
+                )
+            )
+        if (
+            job.status
+            in {models.JobStatus.failed, models.JobStatus.timed_out, models.JobStatus.cancelled}
+            and job.attempts >= job.max_attempts
+        ):
+            items.append(
+                _job_concurrency_item(
+                    "retry_exhausted",
+                    job,
+                    duplicate_count,
+                    now,
+                    repositories,
+                    applications,
+                    "Job exhausted retry attempts",
+                )
+            )
     return items
 
 
 def _job_backlog_reason(job: models.Job, now: datetime) -> str | None:
     if job.status == models.JobStatus.queued and _before(job.run_after, now):
         return "stale_queued" if _age_hours(job.created_at, now) >= 24 else "queued"
-    if job.status == models.JobStatus.running and job.started_at and _age_hours(job.started_at, now) >= 24:
+    if (
+        job.status == models.JobStatus.running
+        and job.started_at
+        and _age_hours(job.started_at, now) >= 24
+    ):
         return "stale_running"
-    if job.status in {models.JobStatus.failed, models.JobStatus.timed_out, models.JobStatus.cancelled}:
+    if job.status in {
+        models.JobStatus.failed,
+        models.JobStatus.timed_out,
+        models.JobStatus.cancelled,
+    }:
         if job.attempts >= job.max_attempts:
             return "retry_exhausted"
         return job.status.value

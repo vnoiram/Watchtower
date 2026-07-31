@@ -49,7 +49,9 @@ def scheduled_scan_coverage_items(db: Session) -> list[dict]:
             cutoff,
             scheduled_scan.created_at,
         )
-        manual_only = latest_scan is not None and latest_scan.trigger_type == models.TriggerType.manual
+        manual_only = (
+            latest_scan is not None and latest_scan.trigger_type == models.TriggerType.manual
+        )
         items.append(
             schemas.ScheduledScanCoverageOut(
                 application_id=application.id,
@@ -60,7 +62,9 @@ def scheduled_scan_coverage_items(db: Session) -> list[dict]:
                 repository_name=repository.name,
                 latest_scheduled_scan_id=scheduled_scan.id if scheduled_scan else None,
                 latest_scheduled_scan_status=scheduled_scan.status if scheduled_scan else None,
-                latest_scheduled_scan_created_at=scheduled_scan.created_at if scheduled_scan else None,
+                latest_scheduled_scan_created_at=scheduled_scan.created_at
+                if scheduled_scan
+                else None,
                 latest_scan_id=latest_scan.id if latest_scan else None,
                 latest_scan_status=latest_scan.status if latest_scan else None,
                 latest_scan_trigger_type=latest_scan.trigger_type if latest_scan else None,
@@ -80,7 +84,9 @@ def _latest_scheduled_scans_by_application(db: Session, application_ids: list) -
             models.Scan.application_id.in_(application_ids),
             models.Scan.trigger_type == models.TriggerType.schedule,
         )
-        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+        .order_by(
+            models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc()
+        )
     ).scalars()
     by_application = {}
     for scan in scans:

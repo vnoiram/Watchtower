@@ -101,7 +101,11 @@ def scanner_execution_matrix_items(db: Session) -> list[dict]:
             select(models.Application, models.Repository)
             .join(models.Repository, models.Application.repository_id == models.Repository.id)
             .where(models.Application.lifecycle != models.Lifecycle.archived)
-            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+            .order_by(
+                models.Repository.owner.asc(),
+                models.Repository.name.asc(),
+                models.Application.name.asc(),
+            )
         )
     )
     scans_by_app = _scans_by_application(db)
@@ -110,14 +114,54 @@ def scanner_execution_matrix_items(db: Session) -> list[dict]:
         for tool in _required_tools(application):
             scan = _latest_tool_scan(scans_by_app.get(application.id, []), tool)
             if scan is None:
-                items.append(_execution_item("missing_required_scanner", tool, application, repository, None, "Required scanner has no scan record"))
+                items.append(
+                    _execution_item(
+                        "missing_required_scanner",
+                        tool,
+                        application,
+                        repository,
+                        None,
+                        "Required scanner has no scan record",
+                    )
+                )
                 continue
             if _before(scan.created_at, cutoff):
-                items.append(_execution_item("stale_scanner_run", tool, application, repository, scan, "Latest scanner run is older than 30 days"))
-            if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out, models.ScanStatus.cancelled}:
-                items.append(_execution_item("failed_latest_scanner", tool, application, repository, scan, "Latest scanner run did not complete successfully"))
+                items.append(
+                    _execution_item(
+                        "stale_scanner_run",
+                        tool,
+                        application,
+                        repository,
+                        scan,
+                        "Latest scanner run is older than 30 days",
+                    )
+                )
+            if scan.status in {
+                models.ScanStatus.failed,
+                models.ScanStatus.timed_out,
+                models.ScanStatus.cancelled,
+            }:
+                items.append(
+                    _execution_item(
+                        "failed_latest_scanner",
+                        tool,
+                        application,
+                        repository,
+                        scan,
+                        "Latest scanner run did not complete successfully",
+                    )
+                )
             if not scan.tool_version:
-                items.append(_execution_item("missing_tool_version", tool, application, repository, scan, "Latest scanner run has no tool version"))
+                items.append(
+                    _execution_item(
+                        "missing_tool_version",
+                        tool,
+                        application,
+                        repository,
+                        scan,
+                        "Latest scanner run has no tool version",
+                    )
+                )
     return items
 
 
@@ -127,7 +171,11 @@ def scanner_tool_coverage_items(db: Session) -> list[dict]:
             select(models.Application, models.Repository)
             .join(models.Repository, models.Application.repository_id == models.Repository.id)
             .where(models.Application.lifecycle != models.Lifecycle.archived)
-            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+            .order_by(
+                models.Repository.owner.asc(),
+                models.Repository.name.asc(),
+                models.Application.name.asc(),
+            )
         )
     )
     scans_by_app = _scans_by_application(db)
@@ -137,10 +185,33 @@ def scanner_tool_coverage_items(db: Session) -> list[dict]:
         for tool in _mvp_scanner_tools():
             scan = _latest_tool_scan(scans, tool)
             if scan is None:
-                items.append(_tool_coverage_item("missing_tool", tool, application, repository, None, "Required MVP scanner has no scan evidence"))
+                items.append(
+                    _tool_coverage_item(
+                        "missing_tool",
+                        tool,
+                        application,
+                        repository,
+                        None,
+                        "Required MVP scanner has no scan evidence",
+                    )
+                )
                 continue
-            if scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out, models.ScanStatus.cancelled, models.ScanStatus.partially_succeeded}:
-                items.append(_tool_coverage_item("unhealthy_latest_scan", tool, application, repository, scan, "Latest required scanner run did not fully succeed"))
+            if scan.status in {
+                models.ScanStatus.failed,
+                models.ScanStatus.timed_out,
+                models.ScanStatus.cancelled,
+                models.ScanStatus.partially_succeeded,
+            }:
+                items.append(
+                    _tool_coverage_item(
+                        "unhealthy_latest_scan",
+                        tool,
+                        application,
+                        repository,
+                        scan,
+                        "Latest required scanner run did not fully succeed",
+                    )
+                )
     return items
 
 
@@ -186,19 +257,56 @@ def scanner_database_freshness_items(db: Session) -> list[dict]:
         if not _scanner_uses_database(scan):
             continue
         db_updated_at = _scanner_database_updated_at(scan)
-        failures = [failure for failure in _scan_failures(scan) if failure["failure_type"] == "trivy_db_update" or "db" in (failure["error"] or "").lower()]
+        failures = [
+            failure
+            for failure in _scan_failures(scan)
+            if failure["failure_type"] == "trivy_db_update"
+            or "db" in (failure["error"] or "").lower()
+        ]
         if db_updated_at is None:
-            items.append(_database_freshness_item("missing_db_metadata", scan, application, repository, None, None, "Scanner database update timestamp is missing"))
+            items.append(
+                _database_freshness_item(
+                    "missing_db_metadata",
+                    scan,
+                    application,
+                    repository,
+                    None,
+                    None,
+                    "Scanner database update timestamp is missing",
+                )
+            )
         elif _before(db_updated_at, cutoff):
-            items.append(_database_freshness_item("stale_db", scan, application, repository, db_updated_at, _age_days(db_updated_at, now), "Scanner database metadata is older than 30 days"))
+            items.append(
+                _database_freshness_item(
+                    "stale_db",
+                    scan,
+                    application,
+                    repository,
+                    db_updated_at,
+                    _age_days(db_updated_at, now),
+                    "Scanner database metadata is older than 30 days",
+                )
+            )
         for failure in failures:
-            items.append(_database_freshness_item("db_update_failed", scan, application, repository, db_updated_at, _age_days(db_updated_at, now) if db_updated_at else None, failure["error"] or "Scanner database update failed"))
+            items.append(
+                _database_freshness_item(
+                    "db_update_failed",
+                    scan,
+                    application,
+                    repository,
+                    db_updated_at,
+                    _age_days(db_updated_at, now) if db_updated_at else None,
+                    failure["error"] or "Scanner database update failed",
+                )
+            )
     return items
 
 
 def _scans_by_application(db: Session) -> dict:
     scans: dict = {}
-    for scan in db.scalars(select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.desc())):
+    for scan in db.scalars(
+        select(models.Scan).order_by(models.Scan.created_at.desc(), models.Scan.id.desc())
+    ):
         scans.setdefault(scan.application_id, []).append(scan)
     return scans
 
@@ -219,7 +327,9 @@ def _latest_tool_scan(scans: list[models.Scan], tool: str) -> models.Scan | None
 
 
 def _tool_matches(scan: models.Scan, tool: str) -> bool:
-    text = " ".join(str(value or "").lower() for value in [scan.tool, scan.scan_type, scan.result_summary])
+    text = " ".join(
+        str(value or "").lower() for value in [scan.tool, scan.scan_type, scan.result_summary]
+    )
     if tool == "container":
         return "container" in text or "image" in text
     return tool in text
@@ -285,8 +395,17 @@ def _scan_failures(scan: models.Scan) -> list[dict[str, str | None]]:
             else:
                 tool = scan.tool
                 error = str(raw)
-            failures.append({"tool": str(tool) if tool else None, "failure_type": _failure_type(tool, error), "error": error})
-    if scan.error_message and scan.status in {models.ScanStatus.failed, models.ScanStatus.timed_out}:
+            failures.append(
+                {
+                    "tool": str(tool) if tool else None,
+                    "failure_type": _failure_type(tool, error),
+                    "error": error,
+                }
+            )
+    if scan.error_message and scan.status in {
+        models.ScanStatus.failed,
+        models.ScanStatus.timed_out,
+    }:
         failures.append(
             {
                 "tool": scan.tool,
@@ -298,7 +417,10 @@ def _scan_failures(scan: models.Scan) -> list[dict[str, str | None]]:
 
 
 def _scanner_uses_database(scan: models.Scan) -> bool:
-    text = " ".join(str(value) for value in [scan.tool, scan.scan_type, (scan.result_summary or {}).get("scanner")]).lower()
+    text = " ".join(
+        str(value)
+        for value in [scan.tool, scan.scan_type, (scan.result_summary or {}).get("scanner")]
+    ).lower()
     return any(token in text for token in ["trivy", "osv", "grype", "vulnerability"])
 
 

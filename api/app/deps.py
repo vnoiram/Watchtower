@@ -1,5 +1,6 @@
 import secrets
 from dataclasses import dataclass
+from typing import Annotated
 
 from fastapi import Depends, Header
 
@@ -25,8 +26,8 @@ def _extract_bearer_token(authorization: str | None) -> str | None:
 
 
 def get_principal(
-    authorization: str | None = Header(default=None),
-    settings: Settings = Depends(get_settings),
+    settings: Annotated[Settings, Depends(get_settings)],
+    authorization: Annotated[str | None, Header()] = None,
 ) -> Principal:
     token = _extract_bearer_token(authorization)
     if not token:
@@ -45,7 +46,7 @@ def get_principal(
 
 
 def require_role(required: str):
-    def dependency(principal: Principal = Depends(get_principal)) -> Principal:
+    def dependency(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
         if ROLE_ORDER.get(principal.role, 0) < ROLE_ORDER[required]:
             raise problem(403, "Forbidden", f"Requires {required} role")
         return principal

@@ -82,22 +82,37 @@ def storage_pressure_count(db: Session) -> int:
 
 
 def storage_encryption_count(db: Session, settings: Settings) -> int:
-    return sum(max(item.count, 1) for item in storage_encryption_posture_items(db, settings) if item.status != "ok")
+    return sum(
+        max(item.count, 1)
+        for item in storage_encryption_posture_items(db, settings)
+        if item.status != "ok"
+    )
 
 
 def retention_review_items(db: Session) -> list[schemas.RetentionReviewOut]:
     cutoff_90 = datetime.now(timezone.utc) - timedelta(days=90)
     old_scan_artifacts = len(_old_scan_artifacts(db, cutoff_90))
-    inactive_sboms = db.scalar(
-        select(func.count()).select_from(models.Sbom).where(models.Sbom.active.is_(False))
-    ) or 0
-    old_audit_logs = sum(1 for log in db.scalars(select(models.AuditLog)) if _before(log.created_at, cutoff_90))
+    inactive_sboms = (
+        db.scalar(
+            select(func.count()).select_from(models.Sbom).where(models.Sbom.active.is_(False))
+        )
+        or 0
+    )
+    old_audit_logs = sum(
+        1 for log in db.scalars(select(models.AuditLog)) if _before(log.created_at, cutoff_90)
+    )
     cleanup_candidates = len(list_storage_cleanup_candidates(db=db, _=None).items)
     return [
-        _retention_item("old_scan_artifacts", old_scan_artifacts, "Scan artifacts older than 90 days"),
-        _retention_item("inactive_sboms", inactive_sboms, "Inactive SBOM records eligible for review"),
+        _retention_item(
+            "old_scan_artifacts", old_scan_artifacts, "Scan artifacts older than 90 days"
+        ),
+        _retention_item(
+            "inactive_sboms", inactive_sboms, "Inactive SBOM records eligible for review"
+        ),
         _retention_item("old_audit_logs", old_audit_logs, "Audit logs older than 90 days"),
-        _retention_item("cleanup_candidates", cleanup_candidates, "Storage cleanup candidates awaiting review"),
+        _retention_item(
+            "cleanup_candidates", cleanup_candidates, "Storage cleanup candidates awaiting review"
+        ),
     ]
 
 
@@ -105,11 +120,16 @@ def storage_pressure_items(db: Session) -> list[schemas.StoragePressureOut]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=90)
     missing_storage_keys = _count(
         db,
-        select(models.Sbom).where((models.Sbom.storage_key.is_(None)) | (models.Sbom.storage_key == "")),
+        select(models.Sbom).where(
+            (models.Sbom.storage_key.is_(None)) | (models.Sbom.storage_key == "")
+        ),
     )
-    inactive_sboms = db.scalar(
-        select(func.count()).select_from(models.Sbom).where(models.Sbom.active.is_(False))
-    ) or 0
+    inactive_sboms = (
+        db.scalar(
+            select(func.count()).select_from(models.Sbom).where(models.Sbom.active.is_(False))
+        )
+        or 0
+    )
     old_artifacts = _old_scan_artifacts(db, cutoff)
     failed_without_sbom = _failed_scans_without_sbom(db)
     artifact_count = 0
@@ -120,16 +140,48 @@ def storage_pressure_items(db: Session) -> list[schemas.StoragePressureOut]:
             estimated_bytes += _artifact_size(artifact)
     cleanup = len(list_storage_cleanup_candidates(db=db, _=None).items)
     return [
-        _pressure("missing_storage_keys", "fail", missing_storage_keys, 0, "SBOM records without storage_key"),
+        _pressure(
+            "missing_storage_keys",
+            "fail",
+            missing_storage_keys,
+            0,
+            "SBOM records without storage_key",
+        ),
         _pressure("inactive_sboms", "warn", inactive_sboms, 0, "Inactive SBOM records"),
-        _pressure("old_scan_artifacts", "warn", len(old_artifacts), _cleanup_estimated_bytes(old_artifacts), "Scan artifacts older than 90 days"),
-        _pressure("failed_scan_without_sbom", "warn", len(failed_without_sbom), 0, "Failed scans that did not store SBOM output"),
-        _pressure("artifact_inventory", "ok", artifact_count, estimated_bytes, "Stored artifact records found in scan summaries"),
-        _pressure("cleanup_backlog", "warn", cleanup, _cleanup_estimated_bytes(old_artifacts), "Storage cleanup candidates awaiting review"),
+        _pressure(
+            "old_scan_artifacts",
+            "warn",
+            len(old_artifacts),
+            _cleanup_estimated_bytes(old_artifacts),
+            "Scan artifacts older than 90 days",
+        ),
+        _pressure(
+            "failed_scan_without_sbom",
+            "warn",
+            len(failed_without_sbom),
+            0,
+            "Failed scans that did not store SBOM output",
+        ),
+        _pressure(
+            "artifact_inventory",
+            "ok",
+            artifact_count,
+            estimated_bytes,
+            "Stored artifact records found in scan summaries",
+        ),
+        _pressure(
+            "cleanup_backlog",
+            "warn",
+            cleanup,
+            _cleanup_estimated_bytes(old_artifacts),
+            "Storage cleanup candidates awaiting review",
+        ),
     ]
 
 
-def storage_encryption_posture_items(db: Session, settings: Settings) -> list[schemas.StorageEncryptionPostureOut]:
+def storage_encryption_posture_items(
+    db: Session, settings: Settings
+) -> list[schemas.StorageEncryptionPostureOut]:
     tls_enabled = str(settings.minio_endpoint or "").startswith("https://")
     encrypted_sboms = 0
     total_sboms = 0
@@ -150,7 +202,9 @@ def storage_encryption_posture_items(db: Session, settings: Settings) -> list[sc
             "object_storage_tls",
             "ok" if tls_enabled else "warn",
             1 if tls_enabled else 0,
-            "Object storage endpoint uses HTTPS" if tls_enabled else "Object storage endpoint does not use HTTPS",
+            "Object storage endpoint uses HTTPS"
+            if tls_enabled
+            else "Object storage endpoint does not use HTTPS",
         ),
         _encryption_check(
             "sbom_encryption_metadata",
@@ -182,13 +236,41 @@ def retention_execution_items(db: Session) -> list[dict]:
     for candidate in candidates:
         audit = _cleanup_audit_for_candidate(candidate, cleanup_audits)
         if audit is None:
-            items.append(_retention_execution_item("missing_cleanup_audit", candidate, None, "Cleanup candidate has no cleanup audit evidence"))
+            items.append(
+                _retention_execution_item(
+                    "missing_cleanup_audit",
+                    candidate,
+                    None,
+                    "Cleanup candidate has no cleanup audit evidence",
+                )
+            )
         if _before(_candidate_created_at(candidate), stale_cutoff):
-            items.append(_retention_execution_item("stale_cleanup_candidate", candidate, audit, "Cleanup candidate is older than 24 hours"))
+            items.append(
+                _retention_execution_item(
+                    "stale_cleanup_candidate",
+                    candidate,
+                    audit,
+                    "Cleanup candidate is older than 24 hours",
+                )
+            )
         if candidate["reason"] == "inactive_sbom":
-            items.append(_retention_execution_item("inactive_sbom_retained", candidate, audit, "Inactive SBOM remains in storage inventory"))
+            items.append(
+                _retention_execution_item(
+                    "inactive_sbom_retained",
+                    candidate,
+                    audit,
+                    "Inactive SBOM remains in storage inventory",
+                )
+            )
         if candidate["reason"] == "old_scan_artifact":
-            items.append(_retention_execution_item("old_artifact_retained", candidate, audit, "Old scan artifact remains in storage inventory"))
+            items.append(
+                _retention_execution_item(
+                    "old_artifact_retained",
+                    candidate,
+                    audit,
+                    "Old scan artifact remains in storage inventory",
+                )
+            )
     return items
 
 
@@ -300,14 +382,20 @@ def _cleanup_item(
 
 def _cleanup_audit_logs(db: Session) -> list[models.AuditLog]:
     logs = []
-    for log in db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc(), models.AuditLog.id.asc())):
+    for log in db.scalars(
+        select(models.AuditLog).order_by(
+            models.AuditLog.created_at.desc(), models.AuditLog.id.asc()
+        )
+    ):
         text = f"{log.action} {log.resource_type} {log.resource_id} {log.metadata_json}".lower()
         if "cleanup" in text or "retention" in text or "storage.delete" in text:
             logs.append(log)
     return logs
 
 
-def _cleanup_audit_for_candidate(candidate: dict, logs: list[models.AuditLog]) -> models.AuditLog | None:
+def _cleanup_audit_for_candidate(
+    candidate: dict, logs: list[models.AuditLog]
+) -> models.AuditLog | None:
     identifiers = {
         str(candidate.get("storage_key") or ""),
         str(candidate.get("scan_id") or ""),
@@ -328,8 +416,15 @@ def _candidate_created_at(candidate: dict) -> datetime:
     return datetime.fromisoformat(str(value))
 
 
-def _retention_execution_item(gap_type: str, candidate: dict, audit: models.AuditLog | None, detail: str) -> dict:
-    source_id = str(candidate.get("sbom_id") or candidate.get("scan_id") or candidate.get("storage_key") or candidate["reason"])
+def _retention_execution_item(
+    gap_type: str, candidate: dict, audit: models.AuditLog | None, detail: str
+) -> dict:
+    source_id = str(
+        candidate.get("sbom_id")
+        or candidate.get("scan_id")
+        or candidate.get("storage_key")
+        or candidate["reason"]
+    )
     return schemas.RetentionExecutionOut(
         gap_type=gap_type,
         reason=candidate["reason"],
@@ -376,7 +471,9 @@ def _cleanup_estimated_bytes(items: list[dict]) -> int:
     return sum(int(item.get("estimated_bytes") or 0) for item in items)
 
 
-def _pressure(check: str, nonzero_status: str, count: int, estimated_bytes: int, detail: str) -> schemas.StoragePressureOut:
+def _pressure(
+    check: str, nonzero_status: str, count: int, estimated_bytes: int, detail: str
+) -> schemas.StoragePressureOut:
     return schemas.StoragePressureOut(
         check=check,
         status=nonzero_status if count else "ok",
@@ -386,8 +483,12 @@ def _pressure(check: str, nonzero_status: str, count: int, estimated_bytes: int,
     )
 
 
-def _encryption_check(check: str, status: str, count: int, detail: str) -> schemas.StorageEncryptionPostureOut:
-    return schemas.StorageEncryptionPostureOut(check=check, status=status, count=count, detail=detail)
+def _encryption_check(
+    check: str, status: str, count: int, detail: str
+) -> schemas.StorageEncryptionPostureOut:
+    return schemas.StorageEncryptionPostureOut(
+        check=check, status=status, count=count, detail=detail
+    )
 
 
 def _artifact_encrypted(artifact: dict[str, Any]) -> bool:
@@ -395,7 +496,9 @@ def _artifact_encrypted(artifact: dict[str, Any]) -> bool:
         artifact.get("encrypted")
         or artifact.get("encryption")
         or artifact.get("kms_key_id")
-        or _encrypted_text(artifact.get("storage_key"), artifact.get("digest"), artifact.get("metadata"))
+        or _encrypted_text(
+            artifact.get("storage_key"), artifact.get("digest"), artifact.get("metadata")
+        )
     )
 
 
@@ -408,7 +511,9 @@ def _backup_encryption_logs(db: Session) -> list[models.AuditLog]:
     logs = []
     for log in db.scalars(select(models.AuditLog)):
         text = f"{log.action} {log.resource_type} {log.resource_id} {log.metadata_json}".lower()
-        if "backup" in text and any(token in text for token in ["encrypted", "encryption", "kms", "sse"]):
+        if "backup" in text and any(
+            token in text for token in ["encrypted", "encryption", "kms", "sse"]
+        ):
             logs.append(log)
     return logs
 

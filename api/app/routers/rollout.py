@@ -28,12 +28,16 @@ def list_repository_rollout(
         stmt = stmt.where(models.Repository.source_classification == source_classification)
     if archived is not None:
         stmt = stmt.where(models.Repository.archived.is_(archived))
-    stmt = stmt.order_by(models.Repository.owner.asc(), models.Repository.name.asc()).limit(min(limit, 100))
+    stmt = stmt.order_by(models.Repository.owner.asc(), models.Repository.name.asc()).limit(
+        min(limit, 100)
+    )
 
     items = []
     for repository in db.execute(stmt).scalars():
         applications = list(
-            db.scalars(select(models.Application).where(models.Application.repository_id == repository.id))
+            db.scalars(
+                select(models.Application).where(models.Application.repository_id == repository.id)
+            )
         )
         scans = _repository_scans(db, repository.id)
         latest_scan = scans[0] if scans else None
@@ -45,9 +49,8 @@ def list_repository_rollout(
             1
             for app in applications
             if app.id not in latest_scan_by_app
-            or latest_scan_by_app[app.id].created_at < _matching_datetime(
-                stale_cutoff, latest_scan_by_app[app.id].created_at
-            )
+            or latest_scan_by_app[app.id].created_at
+            < _matching_datetime(stale_cutoff, latest_scan_by_app[app.id].created_at)
         )
         open_critical_high_count = _open_critical_high_count(db, application_ids)
         owner_count = sum(1 for app in applications if app.owner)
@@ -241,7 +244,9 @@ def list_repository_workflow_trace(
     if provider:
         items = [item for item in items if item["provider"] == provider.value]
     if source_classification:
-        items = [item for item in items if item["source_classification"] == source_classification.value]
+        items = [
+            item for item in items if item["source_classification"] == source_classification.value
+        ]
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
@@ -260,7 +265,9 @@ def list_application_mapping_quality(
     if provider:
         items = [item for item in items if item["provider"] == provider.value]
     if source_classification:
-        items = [item for item in items if item["source_classification"] == source_classification.value]
+        items = [
+            item for item in items if item["source_classification"] == source_classification.value
+        ]
     return schemas.CursorPage(items=items[: min(limit, 100)], next_cursor=None)
 
 
@@ -309,12 +316,54 @@ def rollout_baseline_items(db: Session) -> list[schemas.RolloutBaselineOut]:
     forks = sum(1 for repo in repositories if repo.fork)
     active = total - archived
     return [
-        _baseline("repository_inventory", total >= 54, total, 54, _percent(total, 54), "Registered repositories"),
-        _baseline("visibility_known", visibility_known == total, total - visibility_known, 0, _percent(visibility_known, total), "Repositories without visibility"),
-        _baseline("classification_known", classification_known == total, total - classification_known, 0, _percent(classification_known, total), "Repositories without source classification"),
-        _baseline("archived_repositories", True, archived, None, _percent(archived, total), "Archived repositories in inventory"),
-        _baseline("fork_repositories", True, forks, None, _percent(forks, total), "Fork repositories in inventory"),
-        _baseline("active_repositories", True, active, None, _percent(active, total), "Non-archived repositories in inventory"),
+        _baseline(
+            "repository_inventory",
+            total >= 54,
+            total,
+            54,
+            _percent(total, 54),
+            "Registered repositories",
+        ),
+        _baseline(
+            "visibility_known",
+            visibility_known == total,
+            total - visibility_known,
+            0,
+            _percent(visibility_known, total),
+            "Repositories without visibility",
+        ),
+        _baseline(
+            "classification_known",
+            classification_known == total,
+            total - classification_known,
+            0,
+            _percent(classification_known, total),
+            "Repositories without source classification",
+        ),
+        _baseline(
+            "archived_repositories",
+            True,
+            archived,
+            None,
+            _percent(archived, total),
+            "Archived repositories in inventory",
+        ),
+        _baseline(
+            "fork_repositories",
+            True,
+            forks,
+            None,
+            _percent(forks, total),
+            "Fork repositories in inventory",
+        ),
+        _baseline(
+            "active_repositories",
+            True,
+            active,
+            None,
+            _percent(active, total),
+            "Non-archived repositories in inventory",
+        ),
     ]
 
 
@@ -350,13 +399,29 @@ def repository_inventory_gap_items(db: Session) -> list[dict]:
             "source_classification": repository.source_classification,
         }
         if not repository.visibility:
-            items.append(_inventory_gap("missing_visibility", context, "Repository visibility is missing"))
+            items.append(
+                _inventory_gap("missing_visibility", context, "Repository visibility is missing")
+            )
         if repository.source_classification is None:
-            items.append(_inventory_gap("missing_source_classification", context, "Repository source classification is missing"))
+            items.append(
+                _inventory_gap(
+                    "missing_source_classification",
+                    context,
+                    "Repository source classification is missing",
+                )
+            )
         if not repository.default_branch:
-            items.append(_inventory_gap("missing_default_branch", context, "Repository default branch is missing"))
+            items.append(
+                _inventory_gap(
+                    "missing_default_branch", context, "Repository default branch is missing"
+                )
+            )
         if not repository.primary_language:
-            items.append(_inventory_gap("missing_primary_language", context, "Repository primary language is missing"))
+            items.append(
+                _inventory_gap(
+                    "missing_primary_language", context, "Repository primary language is missing"
+                )
+            )
     return items
 
 
@@ -386,15 +451,35 @@ def repository_inventory_assurance_items(db: Session) -> list[dict]:
             "count": 1,
         }
         if not repository.provider_repository_id:
-            items.append(_inventory_assurance_item("missing_provider_id", context, "Repository is missing provider_repository_id"))
+            items.append(
+                _inventory_assurance_item(
+                    "missing_provider_id", context, "Repository is missing provider_repository_id"
+                )
+            )
         if not repository.visibility:
-            items.append(_inventory_assurance_item("missing_visibility", context, "Repository visibility is missing"))
+            items.append(
+                _inventory_assurance_item(
+                    "missing_visibility", context, "Repository visibility is missing"
+                )
+            )
         if not repository.default_branch:
-            items.append(_inventory_assurance_item("missing_default_branch", context, "Repository default branch is missing"))
+            items.append(
+                _inventory_assurance_item(
+                    "missing_default_branch", context, "Repository default branch is missing"
+                )
+            )
         if not repository.primary_language:
-            items.append(_inventory_assurance_item("missing_primary_language", context, "Repository primary language is missing"))
+            items.append(
+                _inventory_assurance_item(
+                    "missing_primary_language", context, "Repository primary language is missing"
+                )
+            )
         if repository.last_synced_at is None or _before(repository.last_synced_at, stale_cutoff):
-            items.append(_inventory_assurance_item("stale_sync", context, "Repository sync evidence is older than 30 days"))
+            items.append(
+                _inventory_assurance_item(
+                    "stale_sync", context, "Repository sync evidence is older than 30 days"
+                )
+            )
     return items
 
 
@@ -402,7 +487,11 @@ def repository_onboarding_proof_items(db: Session) -> list[dict]:
     items = []
     repositories = _repositories_for_rollout(db)
     for repository in repositories:
-        applications = list(db.scalars(select(models.Application).where(models.Application.repository_id == repository.id)))
+        applications = list(
+            db.scalars(
+                select(models.Application).where(models.Application.repository_id == repository.id)
+            )
+        )
         application_ids = [application.id for application in applications]
         active_sbom_app_ids = _active_sbom_application_ids(db, application_ids)
         scans = _repository_scans(db, repository.id)
@@ -443,7 +532,9 @@ def repository_onboarding_proof_items(db: Session) -> list[dict]:
                 latest_scan_created_at=latest_scan.created_at if latest_scan else None,
                 open_critical_high_count=open_count,
                 missing_checks=missing,
-                detail="Repository onboarding proof is complete" if ready else f"Missing {', '.join(missing)}",
+                detail="Repository onboarding proof is complete"
+                if ready
+                else f"Missing {', '.join(missing)}",
             ).model_dump(mode="json")
         )
     return items
@@ -456,7 +547,11 @@ def application_readiness_items(db: Session) -> list[dict]:
             select(models.Application, models.Repository)
             .join(models.Repository, models.Application.repository_id == models.Repository.id)
             .where(models.Application.lifecycle != models.Lifecycle.archived)
-            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+            .order_by(
+                models.Repository.owner.asc(),
+                models.Repository.name.asc(),
+                models.Application.name.asc(),
+            )
         )
     )
     application_ids = [application.id for application, _ in rows]
@@ -470,13 +565,51 @@ def application_readiness_items(db: Session) -> list[dict]:
         latest_scan = latest_scan_by_app.get(application.id)
         has_sbom = application.id in active_sbom_app_ids
         if not application.owner:
-            items.append(_readiness_item("missing_owner", application, repository, latest_scan, has_sbom, "Active application has no owner"))
+            items.append(
+                _readiness_item(
+                    "missing_owner",
+                    application,
+                    repository,
+                    latest_scan,
+                    has_sbom,
+                    "Active application has no owner",
+                )
+            )
         if (application.criticality or "").lower() not in {"low", "medium", "high", "critical"}:
-            items.append(_readiness_item("unknown_criticality", application, repository, latest_scan, has_sbom, "Application criticality is not classified"))
+            items.append(
+                _readiness_item(
+                    "unknown_criticality",
+                    application,
+                    repository,
+                    latest_scan,
+                    has_sbom,
+                    "Application criticality is not classified",
+                )
+            )
         if not has_sbom:
-            items.append(_readiness_item("missing_active_source_sbom", application, repository, latest_scan, has_sbom, "Application has no active source SBOM"))
-        if latest_scan is None or latest_scan.created_at < _matching_datetime(cutoff, latest_scan.created_at):
-            items.append(_readiness_item("stale_scan", application, repository, latest_scan, has_sbom, "Application has no scan in the last 30 days"))
+            items.append(
+                _readiness_item(
+                    "missing_active_source_sbom",
+                    application,
+                    repository,
+                    latest_scan,
+                    has_sbom,
+                    "Application has no active source SBOM",
+                )
+            )
+        if latest_scan is None or latest_scan.created_at < _matching_datetime(
+            cutoff, latest_scan.created_at
+        ):
+            items.append(
+                _readiness_item(
+                    "stale_scan",
+                    application,
+                    repository,
+                    latest_scan,
+                    has_sbom,
+                    "Application has no scan in the last 30 days",
+                )
+            )
     return items
 
 
@@ -485,23 +618,62 @@ def repository_drift_items(db: Session) -> list[dict]:
     sync_cutoff = now - timedelta(days=30)
     items = []
     repositories = list(
-        db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc()))
+        db.scalars(
+            select(models.Repository).order_by(
+                models.Repository.owner.asc(), models.Repository.name.asc()
+            )
+        )
     )
     for repository in repositories:
         applications = list(
-            db.scalars(select(models.Application).where(models.Application.repository_id == repository.id))
+            db.scalars(
+                select(models.Application).where(models.Application.repository_id == repository.id)
+            )
         )
         active_apps = [app for app in applications if app.lifecycle != models.Lifecycle.archived]
         latest_scan = _repository_scans(db, repository.id)[0] if applications else None
         context = (repository, None, latest_scan)
         if repository.last_synced_at is None or _before(repository.last_synced_at, sync_cutoff):
-            items.append(_drift_item("stale_sync", *context, count=1, detail="Repository has not synced in the last 30 days"))
+            items.append(
+                _drift_item(
+                    "stale_sync",
+                    *context,
+                    count=1,
+                    detail="Repository has not synced in the last 30 days",
+                )
+            )
         if not repository.visibility:
-            items.append(_drift_item("missing_visibility", *context, count=1, detail="Repository visibility is missing"))
+            items.append(
+                _drift_item(
+                    "missing_visibility",
+                    *context,
+                    count=1,
+                    detail="Repository visibility is missing",
+                )
+            )
         if repository.source_classification is None:
-            items.append(_drift_item("missing_classification", *context, count=1, detail="Repository source classification is missing"))
-        if repository.pushed_at and latest_scan and repository.pushed_at > _matching_datetime(latest_scan.created_at, repository.pushed_at):
-            items.append(_drift_item("pushed_after_scan", *context, count=1, detail="Repository has commits newer than latest scan"))
+            items.append(
+                _drift_item(
+                    "missing_classification",
+                    *context,
+                    count=1,
+                    detail="Repository source classification is missing",
+                )
+            )
+        if (
+            repository.pushed_at
+            and latest_scan
+            and repository.pushed_at
+            > _matching_datetime(latest_scan.created_at, repository.pushed_at)
+        ):
+            items.append(
+                _drift_item(
+                    "pushed_after_scan",
+                    *context,
+                    count=1,
+                    detail="Repository has commits newer than latest scan",
+                )
+            )
         if (repository.archived or repository.fork) and active_apps:
             for application in active_apps:
                 items.append(
@@ -519,7 +691,11 @@ def repository_drift_items(db: Session) -> list[dict]:
 
 def application_mapping_quality_items(db: Session) -> list[dict]:
     items = []
-    for repository in db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc())):
+    for repository in db.scalars(
+        select(models.Repository).order_by(
+            models.Repository.owner.asc(), models.Repository.name.asc()
+        )
+    ):
         applications = list(
             db.scalars(
                 select(models.Application)
@@ -530,18 +706,64 @@ def application_mapping_quality_items(db: Session) -> list[dict]:
         path_counts: dict[str, int] = {}
         for application in applications:
             path_counts[application.path] = path_counts.get(application.path, 0) + 1
-        active_applications = [app for app in applications if app.lifecycle not in {models.Lifecycle.archived, models.Lifecycle.deprecated}]
+        active_applications = [
+            app
+            for app in applications
+            if app.lifecycle not in {models.Lifecycle.archived, models.Lifecycle.deprecated}
+        ]
         if not repository.archived and not active_applications:
-            items.append(_mapping_item("active_repo_without_active_application", repository, None, "Active repository has no active application mapping"))
+            items.append(
+                _mapping_item(
+                    "active_repo_without_active_application",
+                    repository,
+                    None,
+                    "Active repository has no active application mapping",
+                )
+            )
         for application in applications:
             if path_counts.get(application.path, 0) > 1:
-                items.append(_mapping_item("duplicate_application_path", repository, application, "Repository has duplicate application path mappings"))
+                items.append(
+                    _mapping_item(
+                        "duplicate_application_path",
+                        repository,
+                        application,
+                        "Repository has duplicate application path mappings",
+                    )
+                )
             if application.application_type == models.ApplicationType.unknown:
-                items.append(_mapping_item("unknown_application_type", repository, application, "Application type is unknown"))
-            if application.path == "." and _monorepo_evidence(application, repository) and not _application_has_path_evidence(application):
-                items.append(_mapping_item("root_monorepo_without_evidence", repository, application, "Monorepo-like repository maps application to root without path evidence"))
-            if repository.archived and application.lifecycle not in {models.Lifecycle.archived, models.Lifecycle.deprecated}:
-                items.append(_mapping_item("archived_repo_active_application", repository, application, "Archived repository has active application mapping"))
+                items.append(
+                    _mapping_item(
+                        "unknown_application_type",
+                        repository,
+                        application,
+                        "Application type is unknown",
+                    )
+                )
+            if (
+                application.path == "."
+                and _monorepo_evidence(application, repository)
+                and not _application_has_path_evidence(application)
+            ):
+                items.append(
+                    _mapping_item(
+                        "root_monorepo_without_evidence",
+                        repository,
+                        application,
+                        "Monorepo-like repository maps application to root without path evidence",
+                    )
+                )
+            if repository.archived and application.lifecycle not in {
+                models.Lifecycle.archived,
+                models.Lifecycle.deprecated,
+            }:
+                items.append(
+                    _mapping_item(
+                        "archived_repo_active_application",
+                        repository,
+                        application,
+                        "Archived repository has active application mapping",
+                    )
+                )
     return items
 
 
@@ -549,38 +771,89 @@ def repository_workflow_trace_items(db: Session) -> list[dict]:
     now = datetime.now(timezone.utc)
     stale_cutoff = now - timedelta(days=30)
     items = []
-    for repository in db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc())):
-        applications = list(db.scalars(select(models.Application).where(models.Application.repository_id == repository.id)))
+    for repository in db.scalars(
+        select(models.Repository).order_by(
+            models.Repository.owner.asc(), models.Repository.name.asc()
+        )
+    ):
+        applications = list(
+            db.scalars(
+                select(models.Application).where(models.Application.repository_id == repository.id)
+            )
+        )
         application_ids = [application.id for application in applications]
-        active_applications = [application for application in applications if application.lifecycle != models.Lifecycle.archived]
+        active_applications = [
+            application
+            for application in applications
+            if application.lifecycle != models.Lifecycle.archived
+        ]
         scans = _repository_scans(db, repository.id)
         latest_scan = scans[0] if scans else None
-        active_sbom_ids = _active_sbom_application_ids(db, [application.id for application in active_applications])
+        active_sbom_ids = _active_sbom_application_ids(
+            db, [application.id for application in active_applications]
+        )
         critical_high = _open_critical_high_count(db, application_ids)
         has_triage = _repository_triage_evidence(db, application_ids)
         context = (repository, applications, active_sbom_ids, latest_scan, critical_high)
-        if repository.provider == models.RepositoryProvider.github and repository.last_synced_at is None:
-            items.append(_workflow_trace_item("missing_sync", *context, "GitHub repository has no sync timestamp"))
+        if (
+            repository.provider == models.RepositoryProvider.github
+            and repository.last_synced_at is None
+        ):
+            items.append(
+                _workflow_trace_item(
+                    "missing_sync", *context, "GitHub repository has no sync timestamp"
+                )
+            )
         if not applications:
-            items.append(_workflow_trace_item("missing_application_detection", *context, "Repository has no detected applications"))
+            items.append(
+                _workflow_trace_item(
+                    "missing_application_detection",
+                    *context,
+                    "Repository has no detected applications",
+                )
+            )
         if active_applications and len(active_sbom_ids) < len(active_applications):
-            items.append(_workflow_trace_item("missing_active_source_sbom", *context, "Active applications are missing active source SBOM coverage"))
-        if active_applications and (latest_scan is None or _before(latest_scan.created_at, stale_cutoff)):
-            items.append(_workflow_trace_item("missing_recent_scan", *context, "Repository has no scan in the last 30 days"))
+            items.append(
+                _workflow_trace_item(
+                    "missing_active_source_sbom",
+                    *context,
+                    "Active applications are missing active source SBOM coverage",
+                )
+            )
+        if active_applications and (
+            latest_scan is None or _before(latest_scan.created_at, stale_cutoff)
+        ):
+            items.append(
+                _workflow_trace_item(
+                    "missing_recent_scan", *context, "Repository has no scan in the last 30 days"
+                )
+            )
         if critical_high and not has_triage:
-            items.append(_workflow_trace_item("missing_triage_evidence", *context, "Open critical/high findings have no notification, issue/PR, VEX, or review evidence"))
+            items.append(
+                _workflow_trace_item(
+                    "missing_triage_evidence",
+                    *context,
+                    "Open critical/high findings have no notification, issue/PR, VEX, or review evidence",
+                )
+            )
     return items
 
 
 def rollout_gap_items(db: Session) -> list[dict]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     repositories = list(
-        db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc()))
+        db.scalars(
+            select(models.Repository).order_by(
+                models.Repository.owner.asc(), models.Repository.name.asc()
+            )
+        )
     )
     items = []
     for repository in repositories:
         applications = list(
-            db.scalars(select(models.Application).where(models.Application.repository_id == repository.id))
+            db.scalars(
+                select(models.Application).where(models.Application.repository_id == repository.id)
+            )
         )
         if not applications:
             items.append(
@@ -604,14 +877,52 @@ def rollout_gap_items(db: Session) -> list[dict]:
                 continue
             latest_scan = latest_scan_by_app.get(application.id)
             if not application.owner:
-                items.append(_rollout_gap("missing_owner", repository, application, latest_scan, 1, "Active application has no owner"))
+                items.append(
+                    _rollout_gap(
+                        "missing_owner",
+                        repository,
+                        application,
+                        latest_scan,
+                        1,
+                        "Active application has no owner",
+                    )
+                )
             if application.id not in active_sbom_app_ids:
-                items.append(_rollout_gap("missing_active_source_sbom", repository, application, latest_scan, 1, "Active application has no active source SBOM"))
-            if latest_scan is None or latest_scan.created_at < _matching_datetime(cutoff, latest_scan.created_at):
-                items.append(_rollout_gap("stale_scan", repository, application, latest_scan, 1, "Application has no scan in the last 30 days"))
+                items.append(
+                    _rollout_gap(
+                        "missing_active_source_sbom",
+                        repository,
+                        application,
+                        latest_scan,
+                        1,
+                        "Active application has no active source SBOM",
+                    )
+                )
+            if latest_scan is None or latest_scan.created_at < _matching_datetime(
+                cutoff, latest_scan.created_at
+            ):
+                items.append(
+                    _rollout_gap(
+                        "stale_scan",
+                        repository,
+                        application,
+                        latest_scan,
+                        1,
+                        "Application has no scan in the last 30 days",
+                    )
+                )
             open_count = open_counts.get(application.id, 0)
             if open_count:
-                items.append(_rollout_gap("open_critical_high", repository, application, latest_scan, open_count, "Application has open critical or high findings"))
+                items.append(
+                    _rollout_gap(
+                        "open_critical_high",
+                        repository,
+                        application,
+                        latest_scan,
+                        open_count,
+                        "Application has open critical or high findings",
+                    )
+                )
     return items
 
 
@@ -631,9 +942,8 @@ def rollout_wave_items(db: Session) -> list[schemas.RolloutWaveOut]:
             1
             for app in applications
             if app.id in latest_scan_by_app
-            and latest_scan_by_app[app.id].created_at >= _matching_datetime(
-                fresh_cutoff, latest_scan_by_app[app.id].created_at
-            )
+            and latest_scan_by_app[app.id].created_at
+            >= _matching_datetime(fresh_cutoff, latest_scan_by_app[app.id].created_at)
         )
         owner_count = sum(1 for app in applications if app.owner)
         open_count = _open_critical_high_count(db, application_ids)
@@ -665,7 +975,11 @@ def mvp_target_readiness_items(db: Session) -> list[dict]:
     items = []
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     for repository in repositories:
-        applications = list(db.scalars(select(models.Application).where(models.Application.repository_id == repository.id)))
+        applications = list(
+            db.scalars(
+                select(models.Application).where(models.Application.repository_id == repository.id)
+            )
+        )
         application_ids = [app.id for app in applications]
         active_sbom_app_ids = _active_sbom_application_ids(db, application_ids)
         scans = _repository_scans(db, repository.id)
@@ -676,8 +990,10 @@ def mvp_target_readiness_items(db: Session) -> list[dict]:
             "missing_visibility": bool(repository.visibility),
             "missing_application": bool(applications),
             "missing_owner": bool(applications) and owner_count == len(applications),
-            "missing_active_source_sbom": bool(applications) and len(active_sbom_app_ids) == len(applications),
-            "stale_scan": latest_scan is not None and latest_scan.created_at >= _matching_datetime(cutoff, latest_scan.created_at),
+            "missing_active_source_sbom": bool(applications)
+            and len(active_sbom_app_ids) == len(applications),
+            "stale_scan": latest_scan is not None
+            and latest_scan.created_at >= _matching_datetime(cutoff, latest_scan.created_at),
             "open_critical_high": open_count == 0,
         }
         failing = [issue for issue, ok in checks.items() if not ok]
@@ -694,7 +1010,9 @@ def mvp_target_readiness_items(db: Session) -> list[dict]:
                 active_sbom_coverage_percent=_percent(len(active_sbom_app_ids), len(applications)),
                 latest_scan_created_at=latest_scan.created_at if latest_scan else None,
                 open_critical_high_count=open_count,
-                detail="MVP target is ready" if not failing else f"MVP target has {', '.join(failing)}",
+                detail="MVP target is ready"
+                if not failing
+                else f"MVP target has {', '.join(failing)}",
             ).model_dump(mode="json")
         )
     return items
@@ -704,7 +1022,11 @@ def mvp_readiness_drilldown_items(db: Session) -> list[dict]:
     items = []
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     for repository in _mvp_target_repositories(db):
-        applications = list(db.scalars(select(models.Application).where(models.Application.repository_id == repository.id)))
+        applications = list(
+            db.scalars(
+                select(models.Application).where(models.Application.repository_id == repository.id)
+            )
+        )
         application_ids = [app.id for app in applications]
         owner_count = sum(1 for app in applications if app.owner)
         active_sbom_app_ids = _active_sbom_application_ids(db, application_ids)
@@ -739,7 +1061,9 @@ def mvp_readiness_drilldown_items(db: Session) -> list[dict]:
                 latest_scan_status=latest_scan.status if latest_scan else None,
                 latest_scan_created_at=latest_scan.created_at if latest_scan else None,
                 open_critical_high_count=open_count,
-                detail="MVP target readiness complete" if not failing else f"Missing {', '.join(failing)}",
+                detail="MVP target readiness complete"
+                if not failing
+                else f"Missing {', '.join(failing)}",
             ).model_dump(mode="json")
         )
     return items
@@ -752,9 +1076,25 @@ def initial_inventory_items(db: Session) -> list[dict]:
     exception_finding_ids = _exception_finding_ids(db)
     repositories = _repositories_for_rollout(db)
     for repository in repositories:
-        applications = list(db.scalars(select(models.Application).where(models.Application.repository_id == repository.id)))
+        applications = list(
+            db.scalars(
+                select(models.Application).where(models.Application.repository_id == repository.id)
+            )
+        )
         if not applications:
-            items.append(_initial_inventory_item("missing_application", False, repository, None, None, 0, False, False, "Repository has no detected applications"))
+            items.append(
+                _initial_inventory_item(
+                    "missing_application",
+                    False,
+                    repository,
+                    None,
+                    None,
+                    0,
+                    False,
+                    False,
+                    "Repository has no detected applications",
+                )
+            )
             continue
         for application in applications:
             scans = list(
@@ -769,16 +1109,23 @@ def initial_inventory_items(db: Session) -> list[dict]:
                 db.scalars(
                     select(models.Finding).where(
                         models.Finding.application_id == application.id,
-                        models.Finding.severity.in_([models.Severity.critical, models.Severity.high]),
+                        models.Finding.severity.in_(
+                            [models.Severity.critical, models.Severity.high]
+                        ),
                     )
                 )
             )
-            open_findings = [finding for finding in findings if finding.status == models.FindingStatus.open]
+            open_findings = [
+                finding for finding in findings if finding.status == models.FindingStatus.open
+            ]
             has_notification_or_action = any(
-                finding.id in notification_finding_ids or finding.id in action_finding_ids for finding in findings
+                finding.id in notification_finding_ids or finding.id in action_finding_ids
+                for finding in findings
             )
             has_exception = any(finding.id in exception_finding_ids for finding in findings)
-            complete = latest_scan is not None and (not open_findings or has_notification_or_action or has_exception)
+            complete = latest_scan is not None and (
+                not open_findings or has_notification_or_action or has_exception
+            )
             if latest_scan is None:
                 issue_type = "missing_scan"
                 detail = "Application has no initial scan"
@@ -816,17 +1163,31 @@ def _repository_scans(db: Session, repository_id) -> list[models.Scan]:
 
 
 def _repositories_for_rollout(db: Session) -> list[models.Repository]:
-    return list(db.scalars(select(models.Repository).order_by(models.Repository.owner.asc(), models.Repository.name.asc())))
+    return list(
+        db.scalars(
+            select(models.Repository).order_by(
+                models.Repository.owner.asc(), models.Repository.name.asc()
+            )
+        )
+    )
 
 
-def _applications_for_repositories(db: Session, repositories: list[models.Repository]) -> list[models.Application]:
+def _applications_for_repositories(
+    db: Session, repositories: list[models.Repository]
+) -> list[models.Application]:
     repository_ids = [repo.id for repo in repositories]
     if not repository_ids:
         return []
-    return list(db.scalars(select(models.Application).where(models.Application.repository_id.in_(repository_ids))))
+    return list(
+        db.scalars(
+            select(models.Application).where(models.Application.repository_id.in_(repository_ids))
+        )
+    )
 
 
-def _repositories_by_wave(repositories: list[models.Repository]) -> dict[str, list[models.Repository]]:
+def _repositories_by_wave(
+    repositories: list[models.Repository],
+) -> dict[str, list[models.Repository]]:
     by_wave = {f"wave_{index}": [] for index in range(1, 5)}
     unassigned = []
     for repository in repositories:
@@ -862,7 +1223,8 @@ def _mvp_target_repositories(db: Session) -> list[models.Repository]:
     explicit = [
         repo
         for repo in repositories
-        if {str(topic).lower() for topic in (repo.topics or [])} & {"mvp", "mvp-target", "wave-1", "wave_1"}
+        if {str(topic).lower() for topic in (repo.topics or [])}
+        & {"mvp", "mvp-target", "wave-1", "wave_1"}
     ]
     if explicit:
         return explicit[:10]
@@ -911,7 +1273,9 @@ def _open_critical_high_counts_by_application(db: Session, application_ids: list
 
 def _notified_finding_ids(db: Session) -> set:
     finding_ids = set()
-    for notification in db.scalars(select(models.Notification).where(models.Notification.status == "sent")):
+    for notification in db.scalars(
+        select(models.Notification).where(models.Notification.status == "sent")
+    ):
         finding_id = (notification.metadata_json or {}).get("finding_id")
         if not finding_id:
             continue
@@ -923,7 +1287,11 @@ def _notified_finding_ids(db: Session) -> set:
 
 
 def _action_finding_ids(db: Session) -> set:
-    return {action.finding_id for action in db.scalars(select(models.RemediationAction)) if action.action_type or action.url or action.branch}
+    return {
+        action.finding_id
+        for action in db.scalars(select(models.RemediationAction))
+        if action.action_type or action.url or action.branch
+    }
 
 
 def _exception_finding_ids(db: Session) -> set:
@@ -931,7 +1299,9 @@ def _exception_finding_ids(db: Session) -> set:
     exception_ids = set(
         db.scalars(
             select(models.Finding.id).where(
-                models.Finding.status.in_([models.FindingStatus.accepted_risk, models.FindingStatus.false_positive])
+                models.Finding.status.in_(
+                    [models.FindingStatus.accepted_risk, models.FindingStatus.false_positive]
+                )
             )
         )
     )
@@ -1125,17 +1495,40 @@ def _repository_triage_evidence(db: Session, application_ids: list) -> bool:
     )
     if not finding_ids:
         return True
-    if db.scalar(select(func.count()).select_from(models.Notification).where(models.Notification.severity.in_([models.Severity.critical, models.Severity.high]), models.Notification.status == "sent")):
+    if db.scalar(
+        select(func.count())
+        .select_from(models.Notification)
+        .where(
+            models.Notification.severity.in_([models.Severity.critical, models.Severity.high]),
+            models.Notification.status == "sent",
+        )
+    ):
         return True
-    if db.scalar(select(func.count()).select_from(models.RemediationAction).where(models.RemediationAction.finding_id.in_(finding_ids))):
+    if db.scalar(
+        select(func.count())
+        .select_from(models.RemediationAction)
+        .where(models.RemediationAction.finding_id.in_(finding_ids))
+    ):
         return True
-    if db.scalar(select(func.count()).select_from(models.VexStatement).where(models.VexStatement.finding_id.in_(finding_ids))):
+    if db.scalar(
+        select(func.count())
+        .select_from(models.VexStatement)
+        .where(models.VexStatement.finding_id.in_(finding_ids))
+    ):
         return True
     return bool(
         db.scalar(
-            select(func.count()).select_from(models.Finding).where(
+            select(func.count())
+            .select_from(models.Finding)
+            .where(
                 models.Finding.id.in_(finding_ids),
-                models.Finding.status.in_([models.FindingStatus.accepted_risk, models.FindingStatus.false_positive, models.FindingStatus.in_progress]),
+                models.Finding.status.in_(
+                    [
+                        models.FindingStatus.accepted_risk,
+                        models.FindingStatus.false_positive,
+                        models.FindingStatus.in_progress,
+                    ]
+                ),
             )
         )
     )

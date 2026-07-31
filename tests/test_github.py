@@ -258,7 +258,9 @@ def test_list_github_owner_repositories_follows_pagination(monkeypatch) -> None:
         return FakeResponse(
             200,
             [github_repo_payload(repo_id=1, name="first")],
-            headers={"Link": '<https://api.github.com/orgs/acme/repos?per_page=100&type=all&page=2>; rel="next"'},
+            headers={
+                "Link": '<https://api.github.com/orgs/acme/repos?per_page=100&type=all&page=2>; rel="next"'
+            },
         )
 
     monkeypatch.setattr("api.app.services.github.httpx.get", fake_get)
@@ -312,7 +314,9 @@ def test_sync_github_repositories_creates_new_repo(monkeypatch) -> None:
         primary_language="Python",
         pushed_at=datetime(2026, 7, 14, 12, 34, 56, tzinfo=timezone.utc),
     )
-    monkeypatch.setattr("api.app.services.repositories.list_github_owner_repositories", lambda *_: [repo_info])
+    monkeypatch.setattr(
+        "api.app.services.repositories.list_github_owner_repositories", lambda *_: [repo_info]
+    )
 
     with SessionLocal() as db:
         repositories = sync_github_repositories(db, "acme", Settings(github_token="token"))
@@ -347,7 +351,9 @@ def test_sync_github_repositories_updates_by_provider_repository_id(monkeypatch)
         topics=["security"],
         primary_language="Go",
     )
-    monkeypatch.setattr("api.app.services.repositories.list_github_owner_repositories", lambda *_: [repo_info])
+    monkeypatch.setattr(
+        "api.app.services.repositories.list_github_owner_repositories", lambda *_: [repo_info]
+    )
 
     with SessionLocal() as db:
         existing = Repository(
@@ -387,7 +393,9 @@ def test_sync_github_repositories_updates_existing_owner_name_with_provider_id(m
         topics=[],
         primary_language=None,
     )
-    monkeypatch.setattr("api.app.services.repositories.list_github_owner_repositories", lambda *_: [repo_info])
+    monkeypatch.setattr(
+        "api.app.services.repositories.list_github_owner_repositories", lambda *_: [repo_info]
+    )
 
     with SessionLocal() as db:
         existing = Repository(

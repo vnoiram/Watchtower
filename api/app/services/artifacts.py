@@ -36,4 +36,3 @@ class ArtifactStore:
         self.ensure_bucket()
         self.client.put_object(Bucket=self.settings.minio_bucket, Key=key, Body=data)
         return sha256_bytes(data)
-

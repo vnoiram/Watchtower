@@ -67,11 +67,12 @@ def mark_job_failed(job: Job, error: str) -> None:
         job.status = JobStatus.queued
         job.locked_by = None
         job.locked_at = None
-        job.run_after = datetime.now(timezone.utc) + timedelta(seconds=_retry_backoff_seconds(job.attempts))
+        job.run_after = datetime.now(timezone.utc) + timedelta(
+            seconds=_retry_backoff_seconds(job.attempts)
+        )
 
 
 def mark_job_timed_out(job: Job, error: str) -> None:
     job.status = JobStatus.timed_out
     job.last_error = error
     job.completed_at = datetime.now(timezone.utc)
-

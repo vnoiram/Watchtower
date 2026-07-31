@@ -7,7 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = Field(default="postgresql+psycopg://watchtower:watchtower@localhost:5432/watchtower")
+    database_url: str = Field(
+        default="postgresql+psycopg://watchtower:watchtower@localhost:5432/watchtower"
+    )
     api_token: str = Field(default="change-me")
     api_default_role: str = Field(default="admin")
     api_tokens: str = Field(default="")

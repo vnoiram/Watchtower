@@ -79,8 +79,16 @@ def application_input_coverage_items(db: Session) -> list[dict]:
     for application, repository in rows:
         app_technologies = technologies.get(application.id, [])
         latest_scan = latest_scans.get(application.id)
-        haystack = _application_evidence_text(app_technologies, latest_scan.result_summary if latest_scan else None)
-        sources = sorted({technology.detection_source for technology in app_technologies if technology.detection_source})
+        haystack = _application_evidence_text(
+            app_technologies, latest_scan.result_summary if latest_scan else None
+        )
+        sources = sorted(
+            {
+                technology.detection_source
+                for technology in app_technologies
+                if technology.detection_source
+            }
+        )
         package_ecosystems = sorted(
             {
                 value
@@ -91,13 +99,36 @@ def application_input_coverage_items(db: Session) -> list[dict]:
         ecosystem = package_ecosystems[0] if package_ecosystems else None
         context = (application, repository, ecosystem, app_technologies, sources)
         if not _contains_any(haystack, _MANIFEST_TOKENS):
-            items.append(_input_coverage_item("missing_manifest", *context, "No manifest detection evidence recorded"))
+            items.append(
+                _input_coverage_item(
+                    "missing_manifest", *context, "No manifest detection evidence recorded"
+                )
+            )
         if ecosystem and not _contains_any(haystack, _LOCKFILE_TOKENS):
-            items.append(_input_coverage_item("missing_lockfile", *context, "No lockfile detection evidence recorded"))
+            items.append(
+                _input_coverage_item(
+                    "missing_lockfile", *context, "No lockfile detection evidence recorded"
+                )
+            )
         if not ecosystem:
-            items.append(_input_coverage_item("unknown_package_manager", *context, "No package manager or ecosystem detection evidence recorded"))
-        if _contains_any(haystack, {"monorepo", "workspace", "workspaces"}) and application.path == ".":
-            items.append(_input_coverage_item("monorepo_unclassified", *context, "Monorepo evidence exists but application path is repository root"))
+            items.append(
+                _input_coverage_item(
+                    "unknown_package_manager",
+                    *context,
+                    "No package manager or ecosystem detection evidence recorded",
+                )
+            )
+        if (
+            _contains_any(haystack, {"monorepo", "workspace", "workspaces"})
+            and application.path == "."
+        ):
+            items.append(
+                _input_coverage_item(
+                    "monorepo_unclassified",
+                    *context,
+                    "Monorepo evidence exists but application path is repository root",
+                )
+            )
     return items
 
 
@@ -114,14 +145,44 @@ def container_input_coverage_items(db: Session) -> list[dict]:
         haystack = _application_evidence_text(app_technologies, summary)
         artifact_types = _artifact_types(summary)
         has_container_input = _contains_any(haystack, _CONTAINER_INPUT_TOKENS)
-        has_container_artifact = any(_is_container_artifact(artifact_type) for artifact_type in artifact_types)
-        context = (application, repository, latest_scan, has_container_input, has_container_artifact, artifact_types)
+        has_container_artifact = any(
+            _is_container_artifact(artifact_type) for artifact_type in artifact_types
+        )
+        context = (
+            application,
+            repository,
+            latest_scan,
+            has_container_input,
+            has_container_artifact,
+            artifact_types,
+        )
         if has_container_input and application.application_type != models.ApplicationType.container:
-            items.append(_container_input_item("dockerfile_without_container_app", *context, "Container input detected on non-container application"))
-        if application.application_type == models.ApplicationType.container and not has_container_input:
-            items.append(_container_input_item("container_app_without_dockerfile", *context, "Container application has no Dockerfile or container manifest evidence"))
+            items.append(
+                _container_input_item(
+                    "dockerfile_without_container_app",
+                    *context,
+                    "Container input detected on non-container application",
+                )
+            )
+        if (
+            application.application_type == models.ApplicationType.container
+            and not has_container_input
+        ):
+            items.append(
+                _container_input_item(
+                    "container_app_without_dockerfile",
+                    *context,
+                    "Container application has no Dockerfile or container manifest evidence",
+                )
+            )
         if has_container_input and not has_container_artifact:
-            items.append(_container_input_item("container_input_without_container_scan", *context, "Container input has no stored container scan artifact"))
+            items.append(
+                _container_input_item(
+                    "container_input_without_container_scan",
+                    *context,
+                    "Container input has no stored container scan artifact",
+                )
+            )
     return items
 
 
@@ -158,16 +219,26 @@ def _application_issues(db: Session, issue_type: str | None) -> list[dict]:
         .join(models.Repository, models.Application.repository_id == models.Repository.id)
         .outerjoin(models.Technology, models.Technology.application_id == models.Application.id)
         .group_by(models.Application.id, models.Repository.id)
-        .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+        .order_by(
+            models.Repository.owner.asc(),
+            models.Repository.name.asc(),
+            models.Application.name.asc(),
+        )
     )
     items = []
     for application, repository, technology_count in db.execute(stmt):
         if issue_type in {None, "unknown_application_type"} and (
             application.application_type == models.ApplicationType.unknown
         ):
-            items.append(_application_issue("unknown_application_type", application, repository, technology_count))
+            items.append(
+                _application_issue(
+                    "unknown_application_type", application, repository, technology_count
+                )
+            )
         if issue_type in {None, "missing_technology"} and technology_count == 0:
-            items.append(_application_issue("missing_technology", application, repository, technology_count))
+            items.append(
+                _application_issue("missing_technology", application, repository, technology_count)
+            )
     return items
 
 
@@ -220,7 +291,13 @@ _LOCKFILE_TOKENS = {
     "composer.lock",
     "lockfile",
 }
-_CONTAINER_INPUT_TOKENS = {"dockerfile", "containerfile", "compose.yaml", "compose.yml", "container manifest"}
+_CONTAINER_INPUT_TOKENS = {
+    "dockerfile",
+    "containerfile",
+    "compose.yaml",
+    "compose.yml",
+    "container manifest",
+}
 _PACKAGE_MANAGER_TOKENS = {
     "npm",
     "yarn",
@@ -241,12 +318,18 @@ def _application_rows(db: Session) -> list[tuple[models.Application, models.Repo
         db.execute(
             select(models.Application, models.Repository)
             .join(models.Repository, models.Application.repository_id == models.Repository.id)
-            .order_by(models.Repository.owner.asc(), models.Repository.name.asc(), models.Application.name.asc())
+            .order_by(
+                models.Repository.owner.asc(),
+                models.Repository.name.asc(),
+                models.Application.name.asc(),
+            )
         )
     )
 
 
-def _technologies_by_application(db: Session, application_ids: list[UUID]) -> dict[UUID, list[models.Technology]]:
+def _technologies_by_application(
+    db: Session, application_ids: list[UUID]
+) -> dict[UUID, list[models.Technology]]:
     if not application_ids:
         return {}
     technologies = db.scalars(
@@ -260,13 +343,17 @@ def _technologies_by_application(db: Session, application_ids: list[UUID]) -> di
     return by_application
 
 
-def _latest_scans_by_application(db: Session, application_ids: list[UUID]) -> dict[UUID, models.Scan]:
+def _latest_scans_by_application(
+    db: Session, application_ids: list[UUID]
+) -> dict[UUID, models.Scan]:
     if not application_ids:
         return {}
     scans = db.scalars(
         select(models.Scan)
         .where(models.Scan.application_id.in_(application_ids))
-        .order_by(models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc())
+        .order_by(
+            models.Scan.application_id.asc(), models.Scan.created_at.desc(), models.Scan.id.desc()
+        )
     )
     by_application: dict[UUID, models.Scan] = {}
     for scan in scans:
@@ -274,7 +361,9 @@ def _latest_scans_by_application(db: Session, application_ids: list[UUID]) -> di
     return by_application
 
 
-def _application_evidence_text(technologies: list[models.Technology], summary: dict[str, Any] | None) -> str:
+def _application_evidence_text(
+    technologies: list[models.Technology], summary: dict[str, Any] | None
+) -> str:
     values: list[Any] = []
     for technology in technologies:
         values.extend([technology.category, technology.name, technology.detection_source])
@@ -284,7 +373,9 @@ def _application_evidence_text(technologies: list[models.Technology], summary: d
 
 def _flatten_text(value: Any) -> str:
     if isinstance(value, dict):
-        return " ".join([str(key).lower() for key in value] + [_flatten_text(item) for item in value.values()])
+        return " ".join(
+            [str(key).lower() for key in value] + [_flatten_text(item) for item in value.values()]
+        )
     if isinstance(value, list | tuple | set):
         return " ".join(_flatten_text(item) for item in value)
     return str(value or "").lower()
@@ -310,7 +401,11 @@ def _artifact_types(summary: dict[str, Any] | None) -> list[str]:
     if isinstance(artifacts, dict):
         return sorted(str(key) for key in artifacts)
     if isinstance(artifacts, list):
-        return sorted(str(item.get("type") or item.get("artifact_type")) for item in artifacts if isinstance(item, dict))
+        return sorted(
+            str(item.get("type") or item.get("artifact_type"))
+            for item in artifacts
+            if isinstance(item, dict)
+        )
     return []
 
 
